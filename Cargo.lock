@@ -79,6 +79,7 @@ name = "ade-db"
 version = "0.1.0"
 dependencies = [
  "ade-core",
+ "aegis",
  "chrono",
  "rusqlite",
  "serde",

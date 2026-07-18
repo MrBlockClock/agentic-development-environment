@@ -1,24 +1,17 @@
-# secrets + deps (mirror .gitignore)
+# secrets (mirror .gitignore)
 .env
 .env.*
 !.env.example
+**/target/**
 **/node_modules/**
 **/dist/**
 **/build/**
 **/coverage/**
-**/target/**
-**/.venv/**
 **/test-results/**
-**/playwright-report/**
-**/playwright/.auth/**
-**/storageState.json
 **/*.db
 **/*.sqlite*
-**/*.tursodb
 
-# bulky or sensitive even if tracked
+# bulky tracked (AI index extras)
 docs/**/archived/
 **/*.pdf
 **/*.min.js
-**/fixtures/large/
-**/screenshots/prod/

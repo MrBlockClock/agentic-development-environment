@@ -1,0 +1,3 @@
+[build]
+# Keep Rust build artifacts off OneDrive to avoid sync/BSOD issues.
+target-dir = "C:/Dev/ade-target"

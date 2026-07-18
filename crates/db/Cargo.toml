@@ -9,6 +9,8 @@ path = "src/lib.rs"
 [dependencies]
 ade-core = { path = "../core" }
 turso = { workspace = true }
+# Transitive dep of turso_core; `pure-rust` avoids needing clang-cl on Windows MSVC.
+aegis = { version = "0.9", features = ["pure-rust"] }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
