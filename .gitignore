@@ -39,3 +39,7 @@ apps/desktop/src-tauri/target/
 
 # OS
 .vs/
+
+# Tauri generated schemas (local)
+apps/desktop/src-tauri/gen/
+

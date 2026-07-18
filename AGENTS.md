@@ -15,7 +15,7 @@ This is the canonical agent contract for the ADE project itself (dogfooding).
 ## Golden Path
 
 - **Runtime:** Local (Windows) or WSL2
-- **Root:** `C:\Users\caleb\OneDrive - Enspire LLC\Business based ADE`
+- **Root:** `C:\Dev\ade`
 - **Rust:** stable (rust-toolchain.toml)
 - **Node:** v22.14.0
 - **Commands:**
