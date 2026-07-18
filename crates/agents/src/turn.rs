@@ -14,6 +14,7 @@ use ade_core::money::Money;
 use ade_db::repo::{AdeDatabase, DbConfig};
 use ade_db::secrets::{NativeProviderKeyVault, ProviderKeyVault};
 use ade_db::usage_ledger::UsageLedgerStore;
+use ade_workflow::parallel::LeaseManager;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -123,6 +124,7 @@ pub struct AgentTurnBuilder {
     usage: Option<Arc<dyn UsageSink>>,
     ledger: Option<UsageLedgerStore>,
     actor: Option<String>,
+    lease_agent_id: Option<Uuid>,
     key_vault: Arc<dyn ProviderKeyVault>,
     provider_transport: Option<Arc<dyn ChatProvider>>,
 }
@@ -138,6 +140,7 @@ impl AgentTurnBuilder {
             usage: None,
             ledger: None,
             actor: None,
+            lease_agent_id: None,
             key_vault: Arc::new(NativeProviderKeyVault),
             provider_transport: None,
         }
@@ -178,6 +181,12 @@ impl AgentTurnBuilder {
         self
     }
 
+    /// Bind write authority to this agent's active durable path leases.
+    pub fn lease_agent(mut self, agent_id: Uuid) -> Self {
+        self.lease_agent_id = Some(agent_id);
+        self
+    }
+
     pub fn key_vault(mut self, key_vault: Arc<dyn ProviderKeyVault>) -> Self {
         self.key_vault = key_vault;
         self
@@ -214,8 +223,13 @@ impl AgentTurnBuilder {
             }
         };
 
-        let authority =
-            AuthorityEnforcer::load(&self.spec.workspace_root, self.spec.owned_paths.clone())?;
+        let owned_paths = match self.lease_agent_id {
+            Some(agent_id) => LeaseManager::new(&self.spec.workspace_root)
+                .resolve_owned_paths(agent_id, &self.spec.owned_paths)?,
+            None => self.spec.owned_paths.clone(),
+        };
+        let authority = AuthorityEnforcer::load(&self.spec.workspace_root, owned_paths)?;
+        let effective_owned_paths = authority.owned_paths();
         let handoff_summary = match HandoffManager::new(&self.spec.workspace_root).load_latest() {
             Ok(handoff) => {
                 let summary = handoff.prompt_summary(self.spec.handoff_chars);
@@ -290,6 +304,7 @@ impl AgentTurnBuilder {
             usage,
             score_before,
             context_compaction,
+            effective_owned_paths,
         })
     }
 
@@ -320,11 +335,16 @@ pub struct AgentTurnService {
     usage: Arc<dyn UsageSink>,
     score_before: WorkspaceScore,
     context_compaction: HandoffContextCompaction,
+    effective_owned_paths: Vec<String>,
 }
 
 impl AgentTurnService {
     pub fn session_id(&self) -> Uuid {
         self.session.session_id()
+    }
+
+    pub fn effective_owned_paths(&self) -> &[String] {
+        &self.effective_owned_paths
     }
 
     pub fn cancel(&self) {
@@ -545,6 +565,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ade-turn-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("AGENTS.md"), "# Test agent contract\n").unwrap();
+        let lease_agent = Uuid::new_v4();
+        LeaseManager::new(&root)
+            .acquire(
+                lease_agent,
+                "src/feature",
+                ade_workflow::parallel::LeaseMode::Strong,
+                chrono::Duration::minutes(5),
+            )
+            .unwrap();
         let database = AdeDatabase::open_path(":memory:").await.unwrap();
         let ledger = UsageLedgerStore::new(database.connect().unwrap());
         let vault = InMemoryProviderKeyVault::default();
@@ -567,11 +596,16 @@ mod tests {
             handoff_chars: DEFAULT_HANDOFF_CHARS,
         })
         .ledger(ledger.clone())
+        .lease_agent(lease_agent)
         .key_vault(Arc::new(vault))
         .provider_transport(Arc::new(SmokeProvider))
         .prepare()
         .await
         .unwrap();
+        assert_eq!(
+            service.effective_owned_paths(),
+            &["src/feature".to_string()]
+        );
 
         let mut events = service.start();
         let result = loop {

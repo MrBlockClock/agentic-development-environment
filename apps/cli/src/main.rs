@@ -137,6 +137,9 @@ enum Commands {
         /// Credential-vault profile (defaults to the active ADE environment)
         #[arg(long)]
         profile: Option<String>,
+        /// Agent UUID whose active writable leases define tool write scope
+        #[arg(long)]
+        lease_agent: Option<String>,
     },
 }
 
@@ -970,6 +973,7 @@ async fn main() -> anyhow::Result<()> {
             context_limit,
             output_limit,
             profile,
+            lease_agent,
         } => {
             use std::io::Write;
 
@@ -980,7 +984,7 @@ async fn main() -> anyhow::Result<()> {
             let input_cost = ade_core::money::Money::try_from_usd_f64(*input_cost_per_mtok)?;
             let output_cost = ade_core::money::Money::try_from_usd_f64(*output_cost_per_mtok)?;
             let ledger = ade_db::usage_ledger::UsageLedgerStore::new(open_database(&config).await?);
-            let service =
+            let mut builder =
                 ade_agents::turn::AgentTurnBuilder::new(ade_agents::turn::AgentTurnSpec {
                     prompt: prompt.clone(),
                     provider: provider.clone(),
@@ -995,9 +999,19 @@ async fn main() -> anyhow::Result<()> {
                     owned_paths: vec![],
                     handoff_chars: 1_500,
                 })
-                .ledger(ledger)
-                .prepare()
-                .await?;
+                .ledger(ledger);
+            if let Some(agent) = lease_agent {
+                let agent_id = uuid::Uuid::parse_str(agent)
+                    .map_err(|error| anyhow::anyhow!("invalid --lease-agent uuid: {error}"))?;
+                builder = builder.lease_agent(agent_id);
+            }
+            let service = builder.prepare().await?;
+            if !service.effective_owned_paths().is_empty() {
+                eprintln!(
+                    "lease-bound write scope: {}",
+                    service.effective_owned_paths().join(", ")
+                );
+            }
             let mut events = service.start();
             let mut failure = None;
             let mut final_result = None;

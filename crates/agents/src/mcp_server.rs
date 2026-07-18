@@ -3,6 +3,7 @@ use ade_core::error::AdeError;
 use ade_core::handoff::HandoffCapsule;
 use ade_core::plan::PlanBuilder;
 use ade_core::verify::VerifyGate;
+use ade_workflow::parallel::LeaseManager;
 use ade_workflow::verify::VerifyRunner;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -97,6 +98,10 @@ impl AdeMcpServer {
                 "ade_handoff_latest",
                 "Return the budgeted latest ade.handoff/v1 summary",
             ),
+            tool_def(
+                "ade_lease_list",
+                "List active path leases without mutating ownership",
+            ),
         ]
     }
 
@@ -130,6 +135,10 @@ impl AdeMcpServer {
                 .load_latest()
                 .map(|capsule: HandoffCapsule| capsule.prompt_summary(1_500))
                 .unwrap_or_else(|_| "no handoff capsule yet".into()),
+            "ade_lease_list" => {
+                let leases = LeaseManager::new(&self.root).list()?;
+                serde_json::to_string_pretty(&leases)?
+            }
             other => {
                 return Ok(json!({
                     "content": [{ "type": "text", "text": format!("unknown tool '{other}'") }],
@@ -150,4 +159,34 @@ fn tool_def(name: &str, description: &str) -> Value {
         "description": description,
         "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ade_workflow::parallel::{LeaseManager, LeaseMode};
+    use chrono::Duration;
+    use uuid::Uuid;
+
+    #[test]
+    fn exposes_active_leases_as_read_only_tool() {
+        let root = std::env::temp_dir().join(format!("ade-mcp-leases-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        LeaseManager::new(&root)
+            .acquire(
+                Uuid::new_v4(),
+                "src/feature",
+                LeaseMode::Strong,
+                Duration::minutes(5),
+            )
+            .unwrap();
+        let server = AdeMcpServer::new(&root);
+        assert!(server
+            .tools()
+            .iter()
+            .any(|tool| tool["name"] == "ade_lease_list"));
+        let result = server.call_tool("ade_lease_list").unwrap();
+        assert!(result.to_string().contains("src/feature"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

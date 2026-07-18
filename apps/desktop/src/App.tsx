@@ -71,11 +71,22 @@ type HandoffMetrics = {
   recent: HandoffHistoryItem[];
 };
 
+type PathLease = {
+  id: string;
+  agent_id: string;
+  path: string;
+  mode: "observe" | "cooperative" | "strong" | "exclusive";
+  created_at: string;
+  expires_at: string;
+  protected: boolean;
+};
+
 type DashboardSnapshot = {
   workspace_root: string;
   audit: AuditReport;
   plan: PlanReport;
   handoff: HandoffMetrics;
+  leases: PathLease[];
 };
 
 type VerifyResult = {
@@ -351,6 +362,7 @@ function App() {
         outputCostPerMtok: input.outputCostPerMtok,
         sessionCapUsd: input.sessionCapUsd,
         dailyCapUsd: input.dailyCapUsd,
+        leaseAgentId: null,
         onEvent,
       });
     } catch (reason) {
@@ -602,7 +614,7 @@ function Overview({
   const passed = verifyResults.filter((result) => result.passed).length;
   return (
     <div className="space-y-5">
-      <section className="grid grid-cols-5 gap-4">
+      <section className="grid grid-cols-6 gap-4">
         <MetricCard label="Readiness score" value={`${scorePercent}%`} accent="blue" />
         <MetricCard
           label="Audit blockers"
@@ -623,6 +635,11 @@ function Overview({
           label="Handoff capsules"
           value={String(dashboard.handoff.capsule_count)}
           accent={dashboard.handoff.invalid_capsule_count ? "red" : "green"}
+        />
+        <MetricCard
+          label="Active leases"
+          value={String(dashboard.leases.length)}
+          accent={dashboard.leases.length ? "violet" : "slate"}
         />
       </section>
 
@@ -684,6 +701,45 @@ function Overview({
           )}
         </Panel>
       </section>
+
+      <Panel
+        title="Multi-agent ownership"
+        subtitle="Active durable leases; observe leases never grant write scope"
+      >
+        {dashboard.leases.length === 0 ? (
+          <p className="text-xs text-slate-500">
+            No active leases. Agent turns remain read-only unless explicit PLAN owned paths are
+            supplied.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {dashboard.leases.map((lease) => (
+              <div
+                key={lease.id}
+                className="grid grid-cols-[1fr_110px_1fr_130px] items-center gap-3 border-b border-white/5 py-2 text-[11px]"
+              >
+                <span className="font-mono text-slate-300">{lease.path}</span>
+                <span
+                  className={
+                    lease.mode === "exclusive" || lease.mode === "strong"
+                      ? "text-violet-300"
+                      : lease.mode === "cooperative"
+                        ? "text-blue-300"
+                        : "text-slate-500"
+                  }
+                >
+                  {lease.mode}
+                  {lease.protected ? " · protected" : ""}
+                </span>
+                <span className="truncate font-mono text-slate-600">{lease.agent_id}</span>
+                <span className="text-right text-slate-600">
+                  {new Date(lease.expires_at).toLocaleTimeString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
 
       <Panel title="Continuity health" subtitle="Aggregate metadata only; capsule text stays local">
         <div className="grid grid-cols-4 gap-6">

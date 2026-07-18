@@ -96,6 +96,46 @@ impl LeaseManager {
         Ok(registry.leases)
     }
 
+    /// Resolve the write scope for one agent from active leases.
+    ///
+    /// Observe leases never grant writes. If `requested` is non-empty, every
+    /// requested path must be contained by one of the agent's writable leases.
+    pub fn resolve_owned_paths(
+        &self,
+        agent_id: Uuid,
+        requested: &[String],
+    ) -> Result<Vec<String>, AdeError> {
+        let mut writable = self
+            .list()?
+            .into_iter()
+            .filter(|lease| lease.agent_id == agent_id && !matches!(lease.mode, LeaseMode::Observe))
+            .map(|lease| lease.path)
+            .collect::<Vec<_>>();
+        writable.sort();
+        writable.dedup();
+
+        if requested.is_empty() {
+            return Ok(writable);
+        }
+
+        let mut resolved = Vec::new();
+        for path in requested {
+            let normalized = normalize_lease_path(path)?;
+            if !writable
+                .iter()
+                .any(|leased| path_is_within(&normalized, leased))
+            {
+                return Err(AdeError::Authorization(format!(
+                    "requested owned_path '{normalized}' is not covered by an active writable lease for agent {agent_id}"
+                )));
+            }
+            resolved.push(normalized);
+        }
+        resolved.sort();
+        resolved.dedup();
+        Ok(resolved)
+    }
+
     pub fn acquire(
         &self,
         agent_id: Uuid,
@@ -342,6 +382,10 @@ fn paths_overlap(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
+fn path_is_within(candidate: &str, parent: &str) -> bool {
+    candidate == parent || candidate.starts_with(&format!("{parent}/"))
+}
+
 fn is_protected_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     matches!(
@@ -581,6 +625,44 @@ mod tests {
             message.contains("lease conflict") || message.contains("serialized"),
             "{message}"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_only_writable_leases_for_agent_scope() {
+        let root = fixture_repo();
+        let manager = LeaseManager::new(&root);
+        let agent = Uuid::new_v4();
+        manager
+            .acquire(
+                agent,
+                "src/read-only",
+                LeaseMode::Observe,
+                Duration::minutes(5),
+            )
+            .unwrap();
+        manager
+            .acquire(
+                agent,
+                "src/feature",
+                LeaseMode::Strong,
+                Duration::minutes(5),
+            )
+            .unwrap();
+
+        assert_eq!(
+            manager.resolve_owned_paths(agent, &[]).unwrap(),
+            vec!["src/feature"]
+        );
+        assert_eq!(
+            manager
+                .resolve_owned_paths(agent, &["src/feature/api.rs".into()])
+                .unwrap(),
+            vec!["src/feature/api.rs"]
+        );
+        assert!(manager
+            .resolve_owned_paths(agent, &["src/other.rs".into()])
+            .is_err());
         let _ = fs::remove_dir_all(root);
     }
 

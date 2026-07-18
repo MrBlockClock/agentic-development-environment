@@ -60,6 +60,15 @@ impl AuthorityEnforcer {
 
     pub fn prompt_context(&self) -> String {
         let mut context = format!("CANONICAL AGENTS.md:\n{}", self.contract);
+        if !self.owned_paths.is_empty() {
+            let owned = self
+                .owned_paths
+                .iter()
+                .map(|path| path_text(path))
+                .collect::<Vec<_>>()
+                .join(", ");
+            context.push_str(&format!("\n\nACTIVE WRITE SCOPE:\n{owned}"));
+        }
         for rule in &self.scoped_rules {
             context.push_str(&format!(
                 "\n\nSCOPED RULE {} (patterns: {}):\n{}",
@@ -69,6 +78,13 @@ impl AuthorityEnforcer {
             ));
         }
         context
+    }
+
+    pub fn owned_paths(&self) -> Vec<String> {
+        self.owned_paths
+            .iter()
+            .map(|path| path_text(path))
+            .collect()
     }
 
     pub fn check_conflict(&self, existing: &AuthorityLevel, incoming: &AuthorityLevel) -> bool {
@@ -435,6 +451,7 @@ fn tool_registry() -> &'static BTreeMap<String, ToolEffect> {
             ("ade", "ade_verify_status", ToolEffect::ReadOnly),
             ("ade", "ade_recipe_list", ToolEffect::ReadOnly),
             ("ade", "ade_key_status", ToolEffect::ReadOnly),
+            ("ade", "ade_lease_list", ToolEffect::ReadOnly),
             ("fs", "read_file", ToolEffect::ReadOnly),
             ("fs", "list_directory", ToolEffect::ReadOnly),
             ("fs", "write_file", ToolEffect::WorkspaceWrite),

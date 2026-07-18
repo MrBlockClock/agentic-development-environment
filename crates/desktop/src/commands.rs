@@ -72,6 +72,7 @@ pub struct DashboardSnapshot {
     pub audit: AuditReport,
     pub plan: PlanReport,
     pub handoff: ade_agents::handoff::HandoffMetrics,
+    pub leases: Vec<ade_workflow::parallel::PathLease>,
 }
 
 #[tauri::command]
@@ -81,11 +82,15 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
     let handoff = ade_agents::handoff::HandoffManager::new(&state.workspace_root)
         .metrics()
         .map_err(|error| error.to_string())?;
+    let leases = ade_workflow::parallel::LeaseManager::new(&state.workspace_root)
+        .list()
+        .map_err(|error| error.to_string())?;
     Ok(DashboardSnapshot {
         workspace_root: state.workspace_root.display().to_string(),
         audit,
         plan,
         handoff,
+        leases,
     })
 }
 
@@ -395,6 +400,7 @@ pub async fn run_agent_turn(
     session_cap_usd: Option<f64>,
     daily_cap_usd: Option<f64>,
     profile: Option<String>,
+    lease_agent_id: Option<String>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
@@ -441,7 +447,7 @@ pub async fn run_agent_turn(
     let ledger = ade_db::usage_ledger::UsageLedgerStore::new(
         db.connect().map_err(|error| error.to_string())?,
     );
-    let service = ade_agents::turn::AgentTurnBuilder::new(ade_agents::turn::AgentTurnSpec {
+    let mut builder = ade_agents::turn::AgentTurnBuilder::new(ade_agents::turn::AgentTurnSpec {
         prompt,
         provider,
         base_url,
@@ -458,10 +464,13 @@ pub async fn run_agent_turn(
     .mcp(state.mcp.clone())
     .ledger(ledger)
     .spend_caps(spend_caps)
-    .key_vault(Arc::clone(&state.key_vault))
-    .prepare()
-    .await
-    .map_err(|error| error.to_string())?;
+    .key_vault(Arc::clone(&state.key_vault));
+    if let Some(agent) = lease_agent_id {
+        let agent_id = uuid::Uuid::parse_str(&agent)
+            .map_err(|error| format!("invalid lease agent UUID: {error}"))?;
+        builder = builder.lease_agent(agent_id);
+    }
+    let service = builder.prepare().await.map_err(|error| error.to_string())?;
 
     let mut events = service.start();
     while let Some(event) = events.recv().await {
