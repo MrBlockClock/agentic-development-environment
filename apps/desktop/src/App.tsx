@@ -47,6 +47,10 @@ type McpToolInfo = {
   server: string;
   name: string;
   description: string;
+  input_schema: {
+    properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+    required?: string[];
+  };
 };
 
 type McpToolCallResult = {
@@ -650,7 +654,7 @@ function McpView({
   const selectTool = (tool: McpToolInfo) => {
     setSelectedTool(tool);
     setCallResult(null);
-    setArgsJson(JSON.stringify(defaultArgsForTool(tool.name, workspaceRoot), null, 2));
+    setArgsJson(JSON.stringify(prefillArgs(tool, workspaceRoot), null, 2));
   };
 
   const runSelectedTool = async () => {
@@ -795,6 +799,11 @@ function McpView({
                       <span className="text-[10px] uppercase tracking-wider text-slate-600">
                         {tool.server}
                       </span>
+                      {isWriteCapable(tool.name) && (
+                        <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300">
+                          writes
+                        </span>
+                      )}
                     </div>
                     <p className="mt-1.5 text-[11px] leading-5 text-slate-500">{tool.description}</p>
                   </button>
@@ -819,6 +828,36 @@ function McpView({
           </div>
         ) : (
           <div className="space-y-4">
+            {isWriteCapable(selectedTool.name) && (
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] text-amber-200">
+                This tool can modify files. Review the arguments before calling.
+              </div>
+            )}
+            {Object.keys(selectedTool.input_schema.properties ?? {}).length > 0 && (
+              <div className="rounded-lg border border-white/7 bg-white/2 px-3 py-2.5">
+                <div className="text-[10px] uppercase tracking-wider text-slate-600">
+                  Parameters
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {Object.entries(selectedTool.input_schema.properties ?? {}).map(
+                    ([key, spec]) => (
+                      <div key={key} className="flex items-baseline gap-2 text-[11px]">
+                        <span className="font-mono text-blue-200">{key}</span>
+                        <span className="text-slate-600">{spec.type ?? "any"}</span>
+                        {(selectedTool.input_schema.required ?? []).includes(key) && (
+                          <span className="text-[9px] font-semibold uppercase text-red-300/80">
+                            required
+                          </span>
+                        )}
+                        {spec.description && (
+                          <span className="truncate text-slate-500">{spec.description}</span>
+                        )}
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+            )}
             <label className="block text-xs text-slate-400">
               Arguments (JSON object)
               <textarea
@@ -863,14 +902,40 @@ function McpView({
   );
 }
 
-function defaultArgsForTool(toolName: string, workspaceRoot: string): Record<string, unknown> {
+function isWriteCapable(toolName: string): boolean {
+  return /write|edit|move|create|delete|remove|rename/i.test(toolName);
+}
+
+/// Builds an argument skeleton from the tool's JSON Schema, seeding known
+/// path-like fields with the workspace root so read-only calls work as-is.
+function prefillArgs(tool: McpToolInfo, workspaceRoot: string): Record<string, unknown> {
+  const known = knownArgsForTool(tool.name, workspaceRoot);
+  const properties = tool.input_schema.properties ?? {};
+  const required = tool.input_schema.required ?? [];
+  const result: Record<string, unknown> = {};
+  for (const [key, spec] of Object.entries(properties)) {
+    if (key in known) {
+      result[key] = known[key];
+      continue;
+    }
+    if (!required.includes(key)) continue;
+    if (spec.default !== undefined) {
+      result[key] = spec.default;
+    } else if (key === "path") {
+      result[key] = workspaceRoot;
+    } else {
+      result[key] = emptyValueForType(spec.type);
+    }
+  }
+  return result;
+}
+
+function knownArgsForTool(toolName: string, workspaceRoot: string): Record<string, unknown> {
   switch (toolName) {
     case "list_directory":
     case "list_directory_with_sizes":
     case "directory_tree":
       return { path: workspaceRoot };
-    case "list_allowed_directories":
-      return {};
     case "read_text_file":
     case "read_file":
     case "get_file_info":
@@ -879,6 +944,22 @@ function defaultArgsForTool(toolName: string, workspaceRoot: string): Record<str
       return { path: workspaceRoot, pattern: "*.rs" };
     default:
       return {};
+  }
+}
+
+function emptyValueForType(type: string | undefined): unknown {
+  switch (type) {
+    case "number":
+    case "integer":
+      return 0;
+    case "boolean":
+      return false;
+    case "array":
+      return [];
+    case "object":
+      return {};
+    default:
+      return "";
   }
 }
 

@@ -13,6 +13,7 @@ ade-agents = { path = "../../crates/agents" }
 ade-workflow = { path = "../../crates/workflow" }
 ade-db = { path = "../../crates/db" }
 clap = { workspace = true }
+turso = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

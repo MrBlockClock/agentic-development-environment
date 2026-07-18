@@ -70,8 +70,19 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum WorkspaceAction {
+    /// List registered workspaces
     List,
-    Create { name: String },
+    /// Register a workspace
+    Create {
+        name: String,
+        /// Filesystem root of the workspace (defaults to the current directory)
+        #[arg(long)]
+        root: Option<String>,
+        /// Stack recipe associated with this workspace
+        #[arg(long)]
+        recipe: Option<String>,
+    },
+    /// Remove a workspace by id or name
     Delete { id: String },
 }
 
@@ -88,6 +99,33 @@ enum McpAction {
         /// Argument passed to the executable (repeatable)
         #[arg(long = "arg", allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Confirm you reviewed this exact command and argument list
+        #[arg(long)]
+        approve: bool,
+        /// Seconds to wait for the server to initialize
+        #[arg(long, default_value_t = 15)]
+        timeout: u64,
+    },
+    /// Spawn a server, call one tool, print the result, then shut it down
+    Call {
+        /// Registry name for the server (1-64 letters, digits, '.', '-', '_')
+        #[arg(long)]
+        name: String,
+        /// Executable to spawn (no shell interpretation)
+        #[arg(long)]
+        command: String,
+        /// Argument passed to the executable (repeatable)
+        #[arg(long = "arg", allow_hyphen_values = true)]
+        args: Vec<String>,
+        /// Tool to invoke on the server
+        #[arg(long)]
+        tool: String,
+        /// Tool arguments as a JSON object (default: {})
+        #[arg(long = "args-json", default_value = "{}")]
+        args_json: String,
+        /// Print the raw content blocks as JSON instead of text
+        #[arg(long)]
+        json: bool,
         /// Confirm you reviewed this exact command and argument list
         #[arg(long)]
         approve: bool,
@@ -171,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
                 &report,
             )
             .await?;
+            record_event(&config, "audit_run", Some(&report.root), None).await;
             println!("Wrote {}", out.display());
         }
         Commands::Plan => {
@@ -215,6 +254,7 @@ async fn main() -> anyhow::Result<()> {
                 &plan,
             )
             .await?;
+            record_event(&config, "plan_run", Some(&plan.audit_root), None).await;
             println!("Wrote {}", out.display());
         }
         Commands::Execute {
@@ -268,6 +308,13 @@ async fn main() -> anyhow::Result<()> {
                 &report,
             )
             .await?;
+            record_event(
+                &config,
+                "execute_run",
+                Some(&root.display().to_string()),
+                Some(recipe),
+            )
+            .await;
             println!("Wrote {}", out.display());
         }
         Commands::Init {
@@ -345,6 +392,13 @@ async fn main() -> anyhow::Result<()> {
                 &results,
             )
             .await?;
+            record_event(
+                &config,
+                "verify_run",
+                Some(&root.display().to_string()),
+                Some(gate.id()),
+            )
+            .await;
             println!("Wrote {}", out.display());
 
             if results.iter().any(|result| !result.passed) {
@@ -429,23 +483,135 @@ async fn main() -> anyhow::Result<()> {
                 }
                 host.disconnect_server(name).await?;
             }
-        },
-        Commands::Workspace { action } => match action {
-            Some(WorkspaceAction::List) => println!("Workspaces: (none)"),
-            Some(WorkspaceAction::Create { name }) => {
-                println!("Creating workspace: {}", name);
+            McpAction::Call {
+                name,
+                command,
+                args,
+                tool,
+                args_json,
+                json,
+                approve,
+                timeout,
+            } => {
+                let arguments: serde_json::Value = serde_json::from_str(args_json)
+                    .map_err(|error| anyhow::anyhow!("--args-json is not valid JSON: {error}"))?;
+                let host = ade_agents::mcp::McpHost::with_timeout(std::time::Duration::from_secs(
+                    *timeout,
+                ));
+                host.connect_server(ade_agents::mcp::McpServerConfig {
+                    name: name.clone(),
+                    command: command.clone(),
+                    args: args.clone(),
+                    approved: *approve,
+                })
+                .await?;
+                let result = host.call_tool(name, tool, arguments).await;
+                host.disconnect_server(name).await?;
+                let result = result?;
+
+                if *json || result.text.is_empty() {
+                    println!("{}", serde_json::to_string_pretty(&result.content)?);
+                } else {
+                    println!("{}", result.text);
+                }
+                record_event(&config, "mcp_call", None, Some(&format!("{name}/{tool}"))).await;
+                if result.is_error {
+                    anyhow::bail!("tool '{tool}' reported an error");
+                }
             }
-            Some(WorkspaceAction::Delete { id }) => {
-                println!("Deleting workspace: {}", id);
-            }
-            None => println!("Workspace subcommand required"),
         },
+        Commands::Workspace { action } => {
+            let store = ade_db::workspace::WorkspaceStore::new(open_database(&config).await?);
+            match action {
+                Some(WorkspaceAction::List) | None => {
+                    let workspaces = store.list().await?;
+                    if workspaces.is_empty() {
+                        println!("No workspaces registered — use `ade workspace create <name>`");
+                    } else {
+                        println!("Workspaces:");
+                        for workspace in &workspaces {
+                            println!(
+                                "  {:<24} {}  root={}  recipe={}",
+                                workspace.name,
+                                workspace.id,
+                                workspace.root_path.as_deref().unwrap_or("-"),
+                                workspace.recipe_id.as_deref().unwrap_or("-"),
+                            );
+                        }
+                    }
+                }
+                Some(WorkspaceAction::Create { name, root, recipe }) => {
+                    let default_root = std::env::current_dir()?.display().to_string();
+                    let root = root.clone().unwrap_or(default_root);
+                    let workspace = store.create(name, Some(&root), recipe.as_deref()).await?;
+                    println!(
+                        "Created workspace '{}' ({}) at {}",
+                        workspace.name, workspace.id, root
+                    );
+                }
+                Some(WorkspaceAction::Delete { id }) => {
+                    if store.delete(id).await? {
+                        println!("Deleted workspace '{id}'");
+                    } else {
+                        anyhow::bail!("no workspace matches '{id}'");
+                    }
+                }
+            }
+        }
         Commands::Analytics => {
-            println!("Analytics dashboard — coming soon");
+            let store = ade_db::analytics::AnalyticsStore::new(open_database(&config).await?);
+            let summary = store.summary().await?;
+            if summary.is_empty() {
+                println!("No events recorded yet — run audit/plan/execute/verify first");
+            } else {
+                println!("{:<16} {:>8}  Last seen (UTC)", "Event", "Count");
+                for entry in &summary {
+                    println!(
+                        "{:<16} {:>8}  {}",
+                        entry.event_type,
+                        entry.count,
+                        entry.last_seen.format("%Y-%m-%d %H:%M:%S")
+                    );
+                }
+                println!();
+                println!("Recent events:");
+                for event in store.recent(5).await? {
+                    println!(
+                        "  {}  {:<16} {}",
+                        event.created_at.format("%H:%M:%S"),
+                        event.event_type,
+                        event.detail.unwrap_or_default()
+                    );
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+async fn open_database(config: &ade_core::config::AdeConfig) -> anyhow::Result<turso::Connection> {
+    let db_config = ade_db::repo::DbConfig::from_ade_config(config);
+    let database = ade_db::repo::AdeDatabase::open(&db_config).await?;
+    Ok(database.connect()?)
+}
+
+async fn record_event(
+    config: &ade_core::config::AdeConfig,
+    event_type: &str,
+    workspace_root: Option<&str>,
+    detail: Option<&str>,
+) {
+    // Analytics must never break a phase run; log and continue on failure.
+    let result: anyhow::Result<()> = async {
+        let store = ade_db::analytics::AnalyticsStore::new(open_database(config).await?);
+        store.record(event_type, workspace_root, detail).await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(%error, event_type, "failed to record analytics event");
+    }
 }
 
 async fn persist_report<T: serde::Serialize>(

@@ -25,6 +25,8 @@ pub struct McpToolInfo {
     pub server: String,
     pub name: String,
     pub description: String,
+    /// JSON Schema describing the tool's expected arguments.
+    pub input_schema: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +126,7 @@ impl McpHost {
             })?;
             result.extend(tools.into_iter().map(|tool| McpToolInfo {
                 server: server.clone(),
+                input_schema: tool.schema_as_json_value(),
                 name: tool.name.into_owned(),
                 description: tool.description.into_owned(),
             }));
