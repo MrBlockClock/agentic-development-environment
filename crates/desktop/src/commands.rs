@@ -71,16 +71,21 @@ pub struct DashboardSnapshot {
     pub workspace_root: String,
     pub audit: AuditReport,
     pub plan: PlanReport,
+    pub handoff: ade_agents::handoff::HandoffMetrics,
 }
 
 #[tauri::command]
 pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapshot, String> {
     let audit = AuditRunner::new(&state.workspace_root).run(AuditMode::EvaluateExisting);
     let plan = PlanBuilder::new().build(&audit);
+    let handoff = ade_agents::handoff::HandoffManager::new(&state.workspace_root)
+        .metrics()
+        .map_err(|error| error.to_string())?;
     Ok(DashboardSnapshot {
         workspace_root: state.workspace_root.display().to_string(),
         audit,
         plan,
+        handoff,
     })
 }
 

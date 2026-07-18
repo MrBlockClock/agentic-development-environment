@@ -6,8 +6,9 @@ use crate::provider::{ChatProvider, ModelConfig, OpenAiCompatibleProvider, Provi
 use crate::session::{AgentEvent, AgentSession, AgentTurnResult};
 use crate::spend::{SpendCaps, SpendGuard};
 use crate::start_prompt::StartPromptBuilder;
+use ade_core::audit::{AuditMode, AuditRunner};
 use ade_core::error::AdeError;
-use ade_core::handoff::HandoffCapsule;
+use ade_core::handoff::{HandoffCapsule, HandoffContextCompaction};
 use ade_core::ignore::SensitivePathPolicy;
 use ade_core::money::Money;
 use ade_db::repo::{AdeDatabase, DbConfig};
@@ -241,6 +242,7 @@ impl AgentTurnBuilder {
                 "assembled system prompt is over context budget"
             );
         }
+        let context_compaction = assembled.compaction_metrics();
         let system_prompt = assembled.text;
 
         let ledger = match self.ledger {
@@ -276,6 +278,7 @@ impl AgentTurnBuilder {
         let usage = self
             .usage
             .unwrap_or_else(|| Arc::new(LedgerUsageSink::new(ledger)));
+        let score_before = workspace_score(&self.spec.workspace_root);
 
         Ok(AgentTurnService {
             session,
@@ -285,6 +288,8 @@ impl AgentTurnBuilder {
             model: self.spec.model,
             cancel: self.cancel,
             usage,
+            score_before,
+            context_compaction,
         })
     }
 
@@ -313,6 +318,8 @@ pub struct AgentTurnService {
     model: String,
     cancel: Option<Arc<AtomicBool>>,
     usage: Arc<dyn UsageSink>,
+    score_before: WorkspaceScore,
+    context_compaction: HandoffContextCompaction,
 }
 
 impl AgentTurnService {
@@ -334,6 +341,8 @@ impl AgentTurnService {
         let provider = self.provider.clone();
         let model = self.model.clone();
         let usage = Arc::clone(&self.usage);
+        let score_before = self.score_before;
+        let context_compaction = self.context_compaction.clone();
         tokio::spawn(async move {
             match session.run_turn(prompt.clone(), events.clone()).await {
                 Ok(result) => {
@@ -348,8 +357,12 @@ impl AgentTurnService {
                                     result.session_id,
                                     &result.provider,
                                     &result.model,
-                                    "completed",
-                                    vec![],
+                                    TurnCapsuleOutcome {
+                                        status: "completed",
+                                        blockers: vec![],
+                                        score_before,
+                                        context_compaction: context_compaction.clone(),
+                                    },
                                 )
                             })
                     {
@@ -359,8 +372,12 @@ impl AgentTurnService {
                             result.session_id,
                             &result.provider,
                             &result.model,
-                            "failed",
-                            vec![error.to_string()],
+                            TurnCapsuleOutcome {
+                                status: "failed",
+                                blockers: vec![error.to_string()],
+                                score_before,
+                                context_compaction: context_compaction.clone(),
+                            },
                         );
                         let _ = events
                             .send(AgentEvent::Failed {
@@ -383,8 +400,12 @@ impl AgentTurnService {
                         session.session_id(),
                         &provider,
                         &model,
-                        turn_status,
-                        vec![error.to_string()],
+                        TurnCapsuleOutcome {
+                            status: turn_status,
+                            blockers: vec![error.to_string()],
+                            score_before,
+                            context_compaction,
+                        },
                     );
                     let event = if matches!(error, AdeError::Cancelled(_)) {
                         AgentEvent::Cancelled {
@@ -403,21 +424,51 @@ impl AgentTurnService {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WorkspaceScore {
+    score: u32,
+    score_max: u32,
+}
+
+struct TurnCapsuleOutcome<'a> {
+    status: &'a str,
+    blockers: Vec<String>,
+    score_before: WorkspaceScore,
+    context_compaction: HandoffContextCompaction,
+}
+
 fn save_turn_capsule(
     workspace_root: &Path,
     prompt: &str,
     session_id: Uuid,
     provider: &str,
     model: &str,
-    turn_status: &str,
-    blockers: Vec<String>,
+    outcome: TurnCapsuleOutcome<'_>,
 ) -> Result<(), AdeError> {
     let goal = prompt.chars().take(240).collect::<String>();
-    let capsule =
-        HandoffCapsule::from_agent_turn(goal, session_id, provider, model, turn_status, blockers);
+    let mut capsule = HandoffCapsule::from_agent_turn(
+        goal,
+        session_id,
+        provider,
+        model,
+        outcome.status,
+        outcome.blockers,
+    );
+    capsule.score_before = Some(outcome.score_before.score);
+    capsule.score_max = Some(outcome.score_before.score_max);
+    capsule.context_compaction = Some(outcome.context_compaction);
+    capsule.compact_summary = Some(capsule.prompt_summary(480));
     HandoffManager::new(workspace_root)
         .save_capsule(&capsule)
         .map(|_| ())
+}
+
+fn workspace_score(workspace_root: &Path) -> WorkspaceScore {
+    let report = AuditRunner::new(workspace_root).run(AuditMode::EvaluateExisting);
+    WorkspaceScore {
+        score: report.score,
+        score_max: report.score_max,
+    }
 }
 
 #[cfg(test)]
@@ -548,6 +599,10 @@ mod tests {
             capsule.next_safe_command.as_deref(),
             Some("ade verify --gate G0 --through")
         );
+        assert!(capsule.score_before.is_some());
+        assert!(capsule.score_after.is_none());
+        assert!(capsule.score_max.is_some_and(|value| value > 0));
+        assert!(capsule.context_compaction.is_some());
         assert!(!serde_json::to_string(&capsule)
             .unwrap()
             .contains("not-a-real-secret"));

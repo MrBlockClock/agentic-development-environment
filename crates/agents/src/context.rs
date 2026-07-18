@@ -1,3 +1,4 @@
+use ade_core::handoff::{HandoffContextCompaction, HandoffPromptSection};
 use serde::{Deserialize, Serialize};
 
 /// Soft token budgets for assembling the always-on system prompt.
@@ -66,6 +67,29 @@ pub struct AssembledPrompt {
     pub tokens_estimated: u32,
     pub status: ContextStatus,
     pub sections: Vec<PromptSection>,
+}
+
+impl AssembledPrompt {
+    /// Serializable compaction view without prompt text.
+    pub fn compaction_metrics(&self) -> HandoffContextCompaction {
+        HandoffContextCompaction {
+            tokens_estimated: self.tokens_estimated,
+            status: match self.status {
+                ContextStatus::Green => "green".into(),
+                ContextStatus::Warning => "warning".into(),
+                ContextStatus::Critical => "critical".into(),
+            },
+            sections: self
+                .sections
+                .iter()
+                .map(|section| HandoffPromptSection {
+                    name: section.name.clone(),
+                    tokens: section.tokens,
+                    truncated: section.truncated,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Builds the system prompt under measured context budgets.
@@ -211,5 +235,21 @@ mod tests {
         assert_eq!(budget.check_usage(5), ContextStatus::Green);
         assert_eq!(budget.check_usage(27), ContextStatus::Warning);
         assert_eq!(budget.check_usage(40), ContextStatus::Critical);
+    }
+
+    #[test]
+    fn compaction_metrics_omit_prompt_text() {
+        let assembled = PromptAssembler::daily(8_000).assemble(
+            "start prompt",
+            "authority rules",
+            Some("handoff body"),
+        );
+        let metrics = assembled.compaction_metrics();
+        let json = serde_json::to_string(&metrics).unwrap();
+        assert_eq!(metrics.status, "green");
+        assert!(metrics.tokens_estimated > 0);
+        assert!(!json.contains("start prompt"));
+        assert!(!json.contains("authority rules"));
+        assert!(!json.contains("handoff body"));
     }
 }

@@ -15,6 +15,8 @@ pub struct HandoffCapsule {
     pub verify_results: Vec<HandoffVerify>,
     pub score_before: Option<u32>,
     pub score_after: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score_max: Option<u32>,
     pub decisions_touched: Vec<String>,
     pub next_safe_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,12 +35,29 @@ pub struct HandoffCapsule {
     pub last_verified_gate: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_compaction: Option<HandoffContextCompaction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandoffVerify {
     pub gate: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandoffPromptSection {
+    pub name: String,
+    pub tokens: u32,
+    pub truncated: bool,
+}
+
+/// PromptAssembler metrics persisted on capsules without prompt text.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandoffContextCompaction {
+    pub tokens_estimated: u32,
+    pub status: String,
+    pub sections: Vec<HandoffPromptSection>,
 }
 
 impl HandoffCapsule {
@@ -53,6 +72,7 @@ impl HandoffCapsule {
             verify_results: vec![],
             score_before: None,
             score_after: None,
+            score_max: None,
             decisions_touched: vec![],
             next_safe_command: None,
             session_id: None,
@@ -63,6 +83,7 @@ impl HandoffCapsule {
             blockers: vec![],
             last_verified_gate: None,
             compact_summary: None,
+            context_compaction: None,
         }
     }
 
@@ -84,6 +105,7 @@ impl HandoffCapsule {
                 .collect(),
             score_before: report.score_before,
             score_after: report.score_after,
+            score_max: Some(report.score_max),
             decisions_touched: vec![],
             next_safe_command: report
                 .verify_evidence
@@ -104,6 +126,7 @@ impl HandoffCapsule {
                 .collect(),
             last_verified_gate: report.verify_evidence.last().map(|item| item.gate.clone()),
             compact_summary: None,
+            context_compaction: None,
         };
         capsule.compact_summary = Some(capsule.prompt_summary(480));
         capsule
@@ -133,6 +156,7 @@ impl HandoffCapsule {
             verify_results: vec![],
             score_before: None,
             score_after: None,
+            score_max: None,
             decisions_touched: vec![],
             next_safe_command: Some(next.into()),
             session_id: Some(session_id.to_string()),
@@ -143,6 +167,7 @@ impl HandoffCapsule {
             blockers,
             last_verified_gate: None,
             compact_summary: None,
+            context_compaction: None,
         };
         capsule.compact_summary = Some(capsule.prompt_summary(480));
         capsule
@@ -219,7 +244,8 @@ impl HandoffCapsule {
              - session: {session}\n\
              - provider/model: {provider}/{model}\n\
              - branch: {branch}\n\
-             - score: {before:?} → {after:?}\n\
+             - score: {before:?} → {after:?} / {score_max:?}\n\
+             - context: {context}\n\
              - verify: {verify}\n\
              - blockers: {blockers}\n\
              - changed_paths: {paths}\n\
@@ -233,6 +259,12 @@ impl HandoffCapsule {
             branch = self.branch.as_deref().unwrap_or("-"),
             before = self.score_before,
             after = self.score_after,
+            score_max = self.score_max,
+            context = self
+                .context_compaction
+                .as_ref()
+                .map(|item| format!("{} ({} tokens)", item.status, item.tokens_estimated))
+                .unwrap_or_else(|| "-".into()),
             verify = if verify.is_empty() {
                 "-".into()
             } else {

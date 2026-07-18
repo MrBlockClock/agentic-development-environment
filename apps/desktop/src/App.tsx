@@ -28,10 +28,48 @@ type PlanReport = {
   requires_human: string[];
 };
 
+type HandoffPromptSection = {
+  name: string;
+  tokens: number;
+  truncated: boolean;
+};
+
+type HandoffHistoryItem = {
+  id: string;
+  created_at: string | null;
+  turn_status: string | null;
+  score_before: number | null;
+  score_after: number | null;
+  score_max: number | null;
+  score_delta: number | null;
+  context_status: string | null;
+  context_tokens: number | null;
+};
+
+type HandoffMetrics = {
+  capsule_count: number;
+  invalid_capsule_count: number;
+  total_bytes: number;
+  latest_bytes: number;
+  latest_summary_chars: number;
+  latest_compaction_percent: number;
+  latest_score_before: number | null;
+  latest_score_after: number | null;
+  latest_score_max: number | null;
+  latest_score_delta: number | null;
+  latest_status: string | null;
+  latest_created_at: string | null;
+  latest_context_status: string | null;
+  latest_context_tokens: number | null;
+  latest_context_sections: HandoffPromptSection[];
+  recent: HandoffHistoryItem[];
+};
+
 type DashboardSnapshot = {
   workspace_root: string;
   audit: AuditReport;
   plan: PlanReport;
+  handoff: HandoffMetrics;
 };
 
 type VerifyResult = {
@@ -543,7 +581,7 @@ function Overview({
   const passed = verifyResults.filter((result) => result.passed).length;
   return (
     <div className="space-y-5">
-      <section className="grid grid-cols-4 gap-4">
+      <section className="grid grid-cols-5 gap-4">
         <MetricCard label="Readiness score" value={`${scorePercent}%`} accent="blue" />
         <MetricCard
           label="Audit blockers"
@@ -559,6 +597,11 @@ function Overview({
           label="Verify gates"
           value={verifyResults.length ? `${passed}/${verifyResults.length}` : "Not run"}
           accent={verifyResults.length && passed === verifyResults.length ? "green" : "slate"}
+        />
+        <MetricCard
+          label="Handoff capsules"
+          value={String(dashboard.handoff.capsule_count)}
+          accent={dashboard.handoff.invalid_capsule_count ? "red" : "green"}
         />
       </section>
 
@@ -620,6 +663,151 @@ function Overview({
           )}
         </Panel>
       </section>
+
+      <Panel title="Continuity health" subtitle="Aggregate metadata only; capsule text stays local">
+        <div className="grid grid-cols-4 gap-6">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-600">
+              Latest score snapshot
+            </div>
+            <div className="mt-2 text-lg font-semibold text-slate-200">
+              {dashboard.handoff.latest_score_before !== null
+                ? dashboard.handoff.latest_score_after !== null
+                  ? `${dashboard.handoff.latest_score_before} → ${dashboard.handoff.latest_score_after}`
+                  : String(dashboard.handoff.latest_score_before)
+                : "Not measured"}
+              {dashboard.handoff.latest_score_max !== null
+                ? ` / ${dashboard.handoff.latest_score_max}`
+                : ""}
+            </div>
+            {dashboard.handoff.latest_score_delta !== null && (
+              <div
+                className={`mt-1 text-[10px] ${
+                  dashboard.handoff.latest_score_delta >= 0
+                    ? "text-emerald-400"
+                    : "text-red-400"
+                }`}
+              >
+                {dashboard.handoff.latest_score_delta >= 0 ? "+" : ""}
+                {dashboard.handoff.latest_score_delta} points
+              </div>
+            )}
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-600">
+              Prompt compaction
+            </div>
+            <div className="mt-2 text-lg font-semibold text-slate-200">
+              {dashboard.handoff.latest_context_status
+                ? dashboard.handoff.latest_context_status
+                : dashboard.handoff.latest_bytes
+                  ? `${dashboard.handoff.latest_compaction_percent}%`
+                  : "Not measured"}
+            </div>
+            <div className="mt-1 text-[10px] text-slate-600">
+              {dashboard.handoff.latest_context_tokens !== null
+                ? `${dashboard.handoff.latest_context_tokens} assembled tokens · `
+                : ""}
+              {dashboard.handoff.latest_summary_chars} summary chars /{" "}
+              {dashboard.handoff.latest_bytes} capsule bytes
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-600">
+              Latest state
+            </div>
+            <div className="mt-2 text-lg font-semibold capitalize text-slate-200">
+              {dashboard.handoff.latest_status?.replaceAll("_", " ") ?? "No handoff"}
+            </div>
+            <div className="mt-1 truncate text-[10px] text-slate-600">
+              {dashboard.handoff.latest_created_at ?? "No timestamp"}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-600">
+              Archive health
+            </div>
+            <div className="mt-2 text-lg font-semibold text-slate-200">
+              {dashboard.handoff.invalid_capsule_count === 0 ? "Valid" : "Attention"}
+            </div>
+            <div className="mt-1 text-[10px] text-slate-600">
+              {dashboard.handoff.invalid_capsule_count} invalid ·{" "}
+              {dashboard.handoff.total_bytes.toLocaleString()} bytes stored
+            </div>
+          </div>
+        </div>
+
+        {dashboard.handoff.latest_context_sections.length > 0 && (
+          <div className="mt-5 space-y-2">
+            <div className="text-[10px] uppercase tracking-wider text-slate-600">
+              Assembled prompt sections
+            </div>
+            {dashboard.handoff.latest_context_sections.map((section) => {
+              const maxTokens = Math.max(
+                ...dashboard.handoff.latest_context_sections.map((item) => item.tokens),
+                1,
+              );
+              const width = Math.round((section.tokens / maxTokens) * 100);
+              return (
+                <div key={section.name} className="space-y-1">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span className="capitalize">{section.name}</span>
+                    <span>
+                      {section.tokens} tok
+                      {section.truncated ? " · truncated" : ""}
+                    </span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/5">
+                    <div
+                      className={`h-full rounded-full ${
+                        section.truncated ? "bg-amber-400/70" : "bg-blue-400/70"
+                      }`}
+                      style={{ width: `${width}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {dashboard.handoff.recent.length > 0 && (
+          <div className="mt-5 space-y-2">
+            <div className="text-[10px] uppercase tracking-wider text-slate-600">
+              Recent score deltas
+            </div>
+            {dashboard.handoff.recent.slice(0, 5).map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between border-b border-white/5 py-2 text-[11px]"
+              >
+                <div className="min-w-0 text-slate-400">
+                  <span className="capitalize text-slate-300">
+                    {item.turn_status?.replaceAll("_", " ") ?? "unknown"}
+                  </span>
+                  <span className="ml-2 text-slate-600">
+                    {item.score_before ?? "-"} → {item.score_after ?? "-"}
+                    {item.score_max !== null ? ` / ${item.score_max}` : ""}
+                  </span>
+                </div>
+                <div
+                  className={
+                    item.score_delta === null
+                      ? "text-slate-600"
+                      : item.score_delta >= 0
+                        ? "text-emerald-400"
+                        : "text-red-400"
+                  }
+                >
+                  {item.score_delta === null
+                    ? "n/a"
+                    : `${item.score_delta >= 0 ? "+" : ""}${item.score_delta}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
 
       <Panel title="Audit findings" subtitle="All architecture layers, ordered by contract">
         <div className="grid grid-cols-2 gap-x-6 gap-y-1">
