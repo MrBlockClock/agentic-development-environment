@@ -1,0 +1,87 @@
+# --- secrets ---
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+*credentials*.json
+*service-account*.json
+.vault-token
+.netrc
+*.tfstate
+*.tfstate.*
+
+# --- deps / build ---
+node_modules/
+.pnpm-store/
+.yarn/cache/
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+.next/
+.nuxt/
+.svelte-kit/
+.astro/
+storybook-static/
+target/
+apps/desktop/src-tauri/target/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.turbo/
+.cache/
+.parcel-cache/
+.eslintcache
+.godot/
+**/*.rs.bk
+
+# --- test / e2e artifacts ---
+test-results/
+playwright-report/
+playwright/.auth/
+**/storageState.json
+cypress/videos/
+*.har
+
+# --- local db / dumps ---
+*.db
+*.sqlite
+*.sqlite3
+*.tursodb
+*.dump
+*.sql.gz
+
+# --- logs / temp ---
+*.log
+npm-debug.log*
+tmp/
+temp/
+.tmp-*
+
+# --- os / ide ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vs/
+
+# --- local ADE / agent overrides ---
+AGENTS.override.md
+.ade/handoff/
+.ade/brain/local/
+.ade/**/*.local.*
+**/agent-transcripts/

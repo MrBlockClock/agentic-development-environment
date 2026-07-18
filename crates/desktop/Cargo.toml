@@ -1,0 +1,20 @@
+[package]
+name = "ade-desktop-crate"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ade-core = { path = "../core" }
+ade-agents = { path = "../agents" }
+ade-api = { path = "../api" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tauri = { workspace = true }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

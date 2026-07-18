@@ -1,0 +1,18 @@
+[package]
+name = "ade-db"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ade-core = { path = "../core" }
+turso = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,24 @@
+# secrets + deps (mirror .gitignore)
+.env
+.env.*
+!.env.example
+**/node_modules/**
+**/dist/**
+**/build/**
+**/coverage/**
+**/target/**
+**/.venv/**
+**/test-results/**
+**/playwright-report/**
+**/playwright/.auth/**
+**/storageState.json
+**/*.db
+**/*.sqlite*
+**/*.tursodb
+
+# bulky or sensitive even if tracked
+docs/**/archived/
+**/*.pdf
+**/*.min.js
+**/fixtures/large/
+**/screenshots/prod/
