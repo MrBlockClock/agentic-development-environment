@@ -5,5 +5,6 @@ pub mod reports;
 pub mod schema;
 pub mod secrets;
 pub mod team;
+pub mod usage_ledger;
 pub mod user;
 pub mod workspace;

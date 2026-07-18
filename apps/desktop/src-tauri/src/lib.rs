@@ -6,6 +6,11 @@ pub fn run() {
         .manage(ade_desktop_crate::commands::AppState::discover())
         .invoke_handler(tauri::generate_handler![
             ade_desktop_crate::commands::get_dashboard,
+            ade_desktop_crate::commands::key_status,
+            ade_desktop_crate::commands::key_set,
+            ade_desktop_crate::commands::key_delete,
+            ade_desktop_crate::commands::key_smoke,
+            ade_desktop_crate::commands::key_live_smoke,
             ade_desktop_crate::commands::run_audit,
             ade_desktop_crate::commands::run_plan,
             ade_desktop_crate::commands::run_execute,
@@ -15,6 +20,9 @@ pub fn run() {
             ade_desktop_crate::commands::mcp_list_tools,
             ade_desktop_crate::commands::mcp_disconnect,
             ade_desktop_crate::commands::mcp_call_tool,
+            ade_desktop_crate::commands::run_agent_turn,
+            ade_desktop_crate::commands::list_recipes,
+            ade_desktop_crate::commands::initialize_recipe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

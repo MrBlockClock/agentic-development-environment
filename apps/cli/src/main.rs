@@ -59,6 +59,39 @@ enum Commands {
         #[command(subcommand)]
         action: McpAction,
     },
+    /// Validate foundation wiring; optionally run one explicitly capped live LLM turn
+    Smoke {
+        /// Credential-vault profile to probe for BYOK keys
+        #[arg(long)]
+        profile: Option<String>,
+        /// Make one provider request after the offline foundation checks pass
+        #[arg(long)]
+        live: bool,
+        /// Provider id used to locate the key in the OS credential vault
+        #[arg(long, default_value = "openai")]
+        provider: String,
+        /// OpenAI-compatible API base URL
+        #[arg(long, default_value = "https://api.openai.com/v1")]
+        base_url: String,
+        /// Exact model id (required with --live)
+        #[arg(long, requires = "live")]
+        model: Option<String>,
+        /// Provider price per million input tokens in USD (required for cost enforcement)
+        #[arg(long, default_value_t = 0.0)]
+        input_cost_per_mtok: f64,
+        /// Provider price per million output tokens in USD (required for cost enforcement)
+        #[arg(long, default_value_t = 0.0)]
+        output_cost_per_mtok: f64,
+        /// Maximum input/context tokens permitted for the smoke request
+        #[arg(long, default_value_t = 8_192)]
+        context_limit: u64,
+        /// Maximum output tokens sent to the provider
+        #[arg(long, default_value_t = 16)]
+        output_limit: u64,
+        /// Hard maximum estimated cost for the live smoke request in USD
+        #[arg(long, default_value_t = 0.05)]
+        max_cost_usd: f64,
+    },
     /// Manage workspaces
     Workspace {
         #[command(subcommand)]
@@ -66,6 +99,35 @@ enum Commands {
     },
     /// Show usage and analytics
     Analytics,
+    /// Run one streamed BYOK agent turn
+    Agent {
+        /// User prompt for this turn
+        prompt: String,
+        /// Provider id used to locate the key in the OS credential vault
+        #[arg(long, default_value = "openai")]
+        provider: String,
+        /// OpenAI-compatible API base URL
+        #[arg(long, default_value = "https://api.openai.com/v1")]
+        base_url: String,
+        /// Exact model id; ADE never silently substitutes another model
+        #[arg(long)]
+        model: String,
+        /// Provider price per million input tokens (USD)
+        #[arg(long, default_value_t = 0.0)]
+        input_cost_per_mtok: f64,
+        /// Provider price per million output tokens (USD)
+        #[arg(long, default_value_t = 0.0)]
+        output_cost_per_mtok: f64,
+        /// Model context window; required non-zero when prices are set
+        #[arg(long, default_value_t = 128_000)]
+        context_limit: u64,
+        /// Model max output tokens; required non-zero when prices are set
+        #[arg(long, default_value_t = 16_384)]
+        output_limit: u64,
+        /// Credential-vault profile (defaults to the active ADE environment)
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -88,6 +150,8 @@ enum WorkspaceAction {
 
 #[derive(Subcommand)]
 enum McpAction {
+    /// Expose ADE phase state over MCP stdio (audit/plan/verify/handoff tools)
+    Serve,
     /// Spawn a server, list its tools, then shut it down
     Tools {
         /// Registry name for the server (1-64 letters, digits, '.', '-', '_')
@@ -316,6 +380,14 @@ async fn main() -> anyhow::Result<()> {
             )
             .await;
             println!("Wrote {}", out.display());
+            let mut capsule = ade_core::handoff::HandoffCapsule::from_execute(
+                "Continue approved ADE plan",
+                &report,
+            );
+            capsule.branch = current_branch(&root);
+            let handoff_id =
+                ade_agents::handoff::HandoffManager::new(&root).save_capsule(&capsule)?;
+            println!("Wrote handoff capsule {handoff_id}");
         }
         Commands::Init {
             recipe,
@@ -362,12 +434,16 @@ async fn main() -> anyhow::Result<()> {
             };
 
             for result in &results {
-                println!(
-                    "{} {} — {}",
-                    if result.passed { "PASS" } else { "FAIL" },
-                    result.gate,
-                    result.command
-                );
+                let label = if result.passed {
+                    "PASS"
+                } else {
+                    match result.status {
+                        ade_core::verify::VerifyStatus::Unavailable => "UNAVAILABLE",
+                        ade_core::verify::VerifyStatus::Skipped => "SKIPPED",
+                        _ => "FAIL",
+                    }
+                };
+                println!("{} {} — {}", label, result.gate, result.command);
                 if let Some(stdout) = &result.stdout {
                     if !stdout.trim().is_empty() {
                         println!("{stdout}");
@@ -400,6 +476,17 @@ async fn main() -> anyhow::Result<()> {
             )
             .await;
             println!("Wrote {}", out.display());
+            let manager = ade_agents::handoff::HandoffManager::new(&root);
+            let mut capsule = manager.load_latest().unwrap_or_else(|_| {
+                ade_core::handoff::HandoffCapsule::new(
+                    "Continue after workspace verification",
+                    "evaluate_existing",
+                )
+            });
+            capsule.branch = current_branch(&root);
+            capsule.apply_verify_results(&results);
+            let handoff_id = manager.save_capsule(&capsule)?;
+            println!("Wrote handoff capsule {handoff_id}");
 
             if results.iter().any(|result| !result.passed) {
                 anyhow::bail!("verification failed");
@@ -455,6 +542,10 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Mcp { action } => match action {
+            McpAction::Serve => {
+                let root = std::env::current_dir()?;
+                ade_agents::mcp_server::AdeMcpServer::new(root).serve_stdio()?;
+            }
             McpAction::Tools {
                 name,
                 command,
@@ -505,6 +596,9 @@ async fn main() -> anyhow::Result<()> {
                     approved: *approve,
                 })
                 .await?;
+                let root = std::env::current_dir()?;
+                ade_agents::authority::AuthorityEnforcer::load(&root, Vec::<String>::new())?
+                    .authorize_human_tool(name, tool, &arguments)?;
                 let result = host.call_tool(name, tool, arguments).await;
                 host.disconnect_server(name).await?;
                 let result = result?;
@@ -585,6 +679,169 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Smoke {
+            profile,
+            live,
+            provider,
+            base_url,
+            model,
+            input_cost_per_mtok,
+            output_cost_per_mtok,
+            context_limit,
+            output_limit,
+            max_cost_usd,
+        } => {
+            let profile = profile
+                .clone()
+                .unwrap_or_else(|| config.environment.to_string());
+            let root = std::env::current_dir()?;
+            let report = ade_agents::smoke::run_foundation_smoke(&root, &profile).await?;
+            for check in &report.checks {
+                println!(
+                    "{} {:<24} {}",
+                    if check.ok { "ok" } else { "FAIL" },
+                    check.name,
+                    check.detail
+                );
+            }
+            if !report.ok {
+                anyhow::bail!("foundation smoke failed");
+            }
+            println!("foundation smoke passed");
+            if *live {
+                let model = model
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("--model is required with --live"))?;
+                let live_report =
+                    ade_agents::smoke::run_live_agent_smoke(ade_agents::smoke::LiveSmokeSpec {
+                        workspace_root: root,
+                        profile,
+                        provider: provider.clone(),
+                        base_url: base_url.clone(),
+                        model,
+                        input_cost_per_mtok: ade_core::money::Money::try_from_usd_f64(
+                            *input_cost_per_mtok,
+                        )?,
+                        output_cost_per_mtok: ade_core::money::Money::try_from_usd_f64(
+                            *output_cost_per_mtok,
+                        )?,
+                        context_limit: *context_limit,
+                        output_limit: *output_limit,
+                        max_cost: ade_core::money::Money::try_from_usd_f64(*max_cost_usd)?,
+                    })
+                    .await?;
+                let cost =
+                    ade_core::money::Money::from_micros(live_report.cost_micros).format_usd();
+                println!(
+                    "live smoke {:?}: {} ({} input + {} output tokens, ${cost})",
+                    live_report.status,
+                    live_report.detail,
+                    live_report.input_tokens,
+                    live_report.output_tokens,
+                );
+                if live_report.status == ade_agents::smoke::LiveSmokeStatus::Failed {
+                    anyhow::bail!("live provider smoke failed");
+                }
+            }
+        }
+        Commands::Agent {
+            prompt,
+            provider,
+            base_url,
+            model,
+            input_cost_per_mtok,
+            output_cost_per_mtok,
+            context_limit,
+            output_limit,
+            profile,
+        } => {
+            use std::io::Write;
+
+            let profile = profile
+                .clone()
+                .unwrap_or_else(|| config.environment.to_string());
+            let root = std::env::current_dir()?;
+            let input_cost = ade_core::money::Money::try_from_usd_f64(*input_cost_per_mtok)?;
+            let output_cost = ade_core::money::Money::try_from_usd_f64(*output_cost_per_mtok)?;
+            let ledger = ade_db::usage_ledger::UsageLedgerStore::new(open_database(&config).await?);
+            let service =
+                ade_agents::turn::AgentTurnBuilder::new(ade_agents::turn::AgentTurnSpec {
+                    prompt: prompt.clone(),
+                    provider: provider.clone(),
+                    base_url: base_url.clone(),
+                    model: model.clone(),
+                    input_cost_per_mtok: input_cost,
+                    output_cost_per_mtok: output_cost,
+                    context_limit: *context_limit,
+                    output_limit: *output_limit,
+                    profile,
+                    workspace_root: root.clone(),
+                    owned_paths: vec![],
+                    handoff_chars: 1_500,
+                })
+                .ledger(ledger)
+                .prepare()
+                .await?;
+            let mut events = service.start();
+            let mut failure = None;
+            let mut final_result = None;
+            while let Some(event) = events.recv().await {
+                match event {
+                    ade_agents::session::AgentEvent::TextDelta { text } => {
+                        print!("{text}");
+                        std::io::stdout().flush()?;
+                    }
+                    ade_agents::session::AgentEvent::ToolCall { server, tool, .. } => {
+                        eprintln!("\n→ tool {server}/{tool}");
+                    }
+                    ade_agents::session::AgentEvent::ToolResult {
+                        server,
+                        tool,
+                        is_error,
+                        ..
+                    } => {
+                        eprintln!(
+                            "← {} {server}/{tool}",
+                            if is_error { "error" } else { "ok" }
+                        );
+                    }
+                    ade_agents::session::AgentEvent::SpendWarning {
+                        scope,
+                        period_key,
+                        projected_micros,
+                        soft_cap_micros,
+                    } => {
+                        eprintln!(
+                            "\n! spend soft warning {scope}/{period_key}: ${} > soft ${}",
+                            ade_core::money::Money::from_micros(projected_micros).format_usd(),
+                            ade_core::money::Money::from_micros(soft_cap_micros).format_usd()
+                        );
+                    }
+                    ade_agents::session::AgentEvent::Completed { result } => {
+                        final_result = Some(result);
+                    }
+                    ade_agents::session::AgentEvent::Failed { error }
+                    | ade_agents::session::AgentEvent::Cancelled { reason: error } => {
+                        failure = Some(error);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(error) = failure {
+                anyhow::bail!("{error}");
+            }
+            let result = final_result
+                .ok_or_else(|| anyhow::anyhow!("provider stream ended without a result"))?;
+            let cost = ade_core::money::Money::from_micros(result.cost_micros);
+            println!(
+                "\n\n{} / {} · {} input + {} output tokens · ${}",
+                result.provider,
+                result.model,
+                result.usage.input_tokens,
+                result.usage.output_tokens,
+                cost.format_usd()
+            );
+        }
     }
 
     Ok(())
@@ -626,4 +883,16 @@ async fn persist_report<T: serde::Serialize>(
     let store = ade_db::reports::ReportStore::new(database.connect()?);
     store.save(kind, schema, workspace_root, report).await?;
     Ok(())
+}
+
+fn current_branch(root: &std::path::Path) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|branch| branch.trim().to_string())
+        .filter(|branch| !branch.is_empty())
 }

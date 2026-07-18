@@ -1,7 +1,77 @@
 use ade_core::error::AdeError;
 use keyring::{Entry, Error as KeyringError};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 const SERVICE: &str = "dev.ade.provider-keys";
+
+/// Injectable provider-key source. Frontends may query status and mutate keys,
+/// but must never expose `get` over IPC.
+pub trait ProviderKeyVault: Send + Sync {
+    fn get(&self, profile: &str, provider: &str) -> Result<Option<String>, AdeError>;
+    fn contains(&self, profile: &str, provider: &str) -> Result<bool, AdeError> {
+        self.get(profile, provider).map(|secret| secret.is_some())
+    }
+    fn set(&self, profile: &str, provider: &str, value: &str) -> Result<(), AdeError>;
+    fn delete(&self, profile: &str, provider: &str) -> Result<bool, AdeError>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NativeProviderKeyVault;
+
+impl ProviderKeyVault for NativeProviderKeyVault {
+    fn get(&self, profile: &str, provider: &str) -> Result<Option<String>, AdeError> {
+        SecretsVault::for_profile(profile)?.get(provider)
+    }
+
+    fn set(&self, profile: &str, provider: &str, value: &str) -> Result<(), AdeError> {
+        SecretsVault::for_profile(profile)?.set(provider, value)
+    }
+
+    fn delete(&self, profile: &str, provider: &str) -> Result<bool, AdeError> {
+        SecretsVault::for_profile(profile)?.delete(provider)
+    }
+}
+
+/// Process-local fake for deterministic tests. Never used by production setup.
+#[derive(Debug, Default, Clone)]
+pub struct InMemoryProviderKeyVault {
+    values: Arc<Mutex<BTreeMap<String, String>>>,
+}
+
+impl ProviderKeyVault for InMemoryProviderKeyVault {
+    fn get(&self, profile: &str, provider: &str) -> Result<Option<String>, AdeError> {
+        let account = account_id(profile, provider)?;
+        Ok(self
+            .values
+            .lock()
+            .map_err(|_| AdeError::Provider("in-memory vault lock poisoned".into()))?
+            .get(&account)
+            .cloned())
+    }
+
+    fn set(&self, profile: &str, provider: &str, value: &str) -> Result<(), AdeError> {
+        if value.trim().is_empty() {
+            return Err(AdeError::Provider("provider key cannot be empty".into()));
+        }
+        let account = account_id(profile, provider)?;
+        self.values
+            .lock()
+            .map_err(|_| AdeError::Provider("in-memory vault lock poisoned".into()))?
+            .insert(account, value.to_string());
+        Ok(())
+    }
+
+    fn delete(&self, profile: &str, provider: &str) -> Result<bool, AdeError> {
+        let account = account_id(profile, provider)?;
+        Ok(self
+            .values
+            .lock()
+            .map_err(|_| AdeError::Provider("in-memory vault lock poisoned".into()))?
+            .remove(&account)
+            .is_some())
+    }
+}
 
 /// OS-native credential vault for BYOK provider keys.
 ///
@@ -80,6 +150,14 @@ fn normalize_id(value: &str, label: &str) -> Result<String, AdeError> {
     Ok(normalized)
 }
 
+fn account_id(profile: &str, provider: &str) -> Result<String, AdeError> {
+    Ok(format!(
+        "{}:{}",
+        normalize_id(profile, "profile")?,
+        normalize_id(provider, "provider")?
+    ))
+}
+
 fn vault_error(error: KeyringError) -> AdeError {
     AdeError::Provider(format!("OS credential vault error: {error}"))
 }
@@ -108,5 +186,19 @@ mod tests {
     fn rejects_empty_secret_before_keychain_access() {
         let vault = SecretsVault::new();
         assert!(vault.set("openai", "   ").is_err());
+    }
+
+    #[test]
+    fn in_memory_vault_supports_profile_isolation() {
+        let vault = InMemoryProviderKeyVault::default();
+        vault.set("local", "openai", "secret-a").unwrap();
+        assert!(vault.contains("local", "openai").unwrap());
+        assert!(!vault.contains("staging", "openai").unwrap());
+        assert_eq!(
+            vault.get("local", "openai").unwrap().as_deref(),
+            Some("secret-a")
+        );
+        assert!(vault.delete("local", "openai").unwrap());
+        assert!(!vault.contains("local", "openai").unwrap());
     }
 }

@@ -1,4 +1,4 @@
-use ade_core::verify::{VerifyGate, VerifyResult};
+use ade_core::verify::{VerifyGate, VerifyResult, VerifyStatus};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -24,16 +24,17 @@ impl VerifyRunner {
     }
 
     pub async fn run_gate(&self, gate: VerifyGate) -> VerifyResult {
+        self.run_gate_sync(gate)
+    }
+
+    pub fn run_gate_sync(&self, gate: VerifyGate) -> VerifyResult {
         match gate {
             VerifyGate::G0 => self.run_g0(),
             VerifyGate::G1 => self.run_g1(),
             VerifyGate::G2 => self.run_g2(),
             VerifyGate::G3 => self.run_g3(),
             VerifyGate::G4 => self.run_g4(),
-            VerifyGate::G5 => unavailable(
-                gate,
-                "manual browser or hardware evidence is required for this project",
-            ),
+            VerifyGate::G5 => self.run_g5(),
         }
     }
 
@@ -44,9 +45,9 @@ impl VerifyRunner {
                 break;
             }
             let result = self.run_gate(gate).await;
-            let passed = result.passed;
+            let stop = !result.passed && result.status != VerifyStatus::Unavailable;
             results.push(result);
-            if !passed {
+            if stop {
                 break;
             }
         }
@@ -99,6 +100,11 @@ impl VerifyRunner {
                 .then(|| "AGENTS.md contract present".into()),
             stderr: (!missing.is_empty()).then(|| format!("missing: {}", missing.join(", "))),
             passed: missing.is_empty(),
+            status: if missing.is_empty() {
+                VerifyStatus::Pass
+            } else {
+                VerifyStatus::Fail
+            },
         }
     }
 
@@ -170,6 +176,67 @@ impl VerifyRunner {
         )
     }
 
+    fn run_g5(&self) -> VerifyResult {
+        let evidence_dir = self.root.join(".ade").join("verify");
+        let _ = std::fs::create_dir_all(&evidence_dir);
+
+        let powershell = self.root.join("scripts").join("g5-evidence.ps1");
+        let shell = self.root.join("scripts").join("g5-evidence.sh");
+        if powershell.is_file() {
+            let result = self.run_commands(
+                VerifyGate::G5,
+                vec![CommandSpec::new(
+                    powershell_command(),
+                    &["-NoProfile", "-File", &powershell.display().to_string()],
+                )],
+            );
+            return persist_g5_evidence(&evidence_dir, result);
+        }
+        if shell.is_file() {
+            let result = self.run_commands(
+                VerifyGate::G5,
+                vec![CommandSpec::new(
+                    "bash",
+                    &[shell.display().to_string().as_str()],
+                )],
+            );
+            return persist_g5_evidence(&evidence_dir, result);
+        }
+
+        let has_playwright = self.root.join("playwright.config.ts").is_file()
+            || self.root.join("playwright.config.js").is_file()
+            || self.root.join("playwright.config.mjs").is_file()
+            || package_json_mentions_playwright(&self.root);
+        if has_playwright {
+            let result = self.run_commands(
+                VerifyGate::G5,
+                vec![CommandSpec::new(
+                    npx_command(),
+                    &["playwright", "test", "--reporter=line"],
+                )],
+            );
+            return persist_g5_evidence(&evidence_dir, result);
+        }
+
+        if self.root.join("Cargo.toml").is_file() {
+            let result = self.run_commands(
+                VerifyGate::G5,
+                vec![CommandSpec::new(
+                    "cargo",
+                    &["test", "--workspace", "--", "--nocapture"],
+                )],
+            );
+            // Binary/HTTP contract projects can use cargo tests as provisional G5
+            // when no Playwright suite exists; still persist evidence.
+            return persist_g5_evidence(&evidence_dir, result);
+        }
+
+        unavailable(
+            VerifyGate::G5,
+            "no Playwright config, scripts/g5-evidence.*, or Cargo tests found — add browser/hardware evidence",
+        )
+    }
+
     fn run_commands(&self, gate: VerifyGate, commands: Vec<CommandSpec>) -> VerifyResult {
         let command_label = commands
             .iter()
@@ -194,6 +261,7 @@ impl VerifyRunner {
                             stdout: output_text(stdout),
                             stderr: output_text(stderr),
                             passed: false,
+                            status: VerifyStatus::Fail,
                         };
                     }
                 }
@@ -206,6 +274,7 @@ impl VerifyRunner {
                         stdout: output_text(stdout),
                         stderr: output_text(stderr),
                         passed: false,
+                        status: VerifyStatus::Fail,
                     };
                 }
             }
@@ -218,6 +287,7 @@ impl VerifyRunner {
             stdout: output_text(stdout),
             stderr: output_text(stderr),
             passed: true,
+            status: VerifyStatus::Pass,
         }
     }
 }
@@ -273,6 +343,7 @@ fn failure(gate: VerifyGate, command: &str, message: &str) -> VerifyResult {
         stdout: None,
         stderr: Some(message.into()),
         passed: false,
+        status: VerifyStatus::Fail,
     }
 }
 
@@ -284,7 +355,38 @@ fn unavailable(gate: VerifyGate, message: &str) -> VerifyResult {
         stdout: None,
         stderr: Some(message.into()),
         passed: false,
+        status: VerifyStatus::Unavailable,
     }
+}
+
+fn persist_g5_evidence(evidence_dir: &Path, result: VerifyResult) -> VerifyResult {
+    let payload = serde_json::json!({
+        "gate": result.gate,
+        "command": result.command,
+        "passed": result.passed,
+        "status": result.status,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "artifacts": {
+            "report": evidence_dir.join("g5-evidence.json").display().to_string(),
+            "playwright_report": "playwright-report",
+            "test_results": "test-results",
+        }
+    });
+    let path = evidence_dir.join("g5-evidence.json");
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+    );
+    result
+}
+
+fn package_json_mentions_playwright(root: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
+        return false;
+    };
+    text.contains("playwright")
 }
 
 fn gate_number(gate: VerifyGate) -> u8 {
@@ -326,6 +428,16 @@ fn python_command() -> &'static str {
 #[cfg(not(windows))]
 fn python_command() -> &'static str {
     "python3"
+}
+
+#[cfg(windows)]
+fn npx_command() -> &'static str {
+    "npx.cmd"
+}
+
+#[cfg(not(windows))]
+fn npx_command() -> &'static str {
+    "npx"
 }
 
 #[cfg(windows)]
@@ -378,6 +490,59 @@ mod tests {
             .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].gate, "G0");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn g5_unavailable_without_evidence_sources() {
+        let root = fixture();
+        fs::write(root.join("AGENTS.md"), "# Contract\n").unwrap();
+        let result = VerifyRunner::with_root(&root)
+            .run_gate(VerifyGate::G5)
+            .await;
+        assert!(!result.passed);
+        assert_eq!(result.status, VerifyStatus::Unavailable);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unavailable_status_is_not_a_hard_stop() {
+        let result = unavailable(VerifyGate::G4, "missing integration script");
+        assert!(!result.passed);
+        assert_eq!(result.status, VerifyStatus::Unavailable);
+        let stop = !result.passed && result.status != VerifyStatus::Unavailable;
+        assert!(!stop);
+    }
+
+    #[tokio::test]
+    async fn g5_persists_evidence_json_on_script_path() {
+        let root = fixture();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        #[cfg(windows)]
+        {
+            fs::write(
+                root.join("scripts/g5-evidence.ps1"),
+                "Write-Output 'g5-ok'; exit 0\n",
+            )
+            .unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            fs::write(
+                root.join("scripts/g5-evidence.sh"),
+                "#!/bin/sh\necho g5-ok\n",
+            )
+            .unwrap();
+            let _ = std::process::Command::new("chmod")
+                .args(["+x", root.join("scripts/g5-evidence.sh").to_str().unwrap()])
+                .status();
+        }
+        let result = VerifyRunner::with_root(&root)
+            .run_gate(VerifyGate::G5)
+            .await;
+        assert!(root.join(".ade/verify/g5-evidence.json").is_file());
+        // Script may fail if pwsh/bash missing; evidence file must still exist.
+        let _ = result;
         let _ = fs::remove_dir_all(root);
     }
 }

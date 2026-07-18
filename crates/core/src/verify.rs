@@ -59,6 +59,27 @@ impl FromStr for VerifyGate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyStatus {
+    Pass,
+    #[default]
+    Fail,
+    Unavailable,
+    Skipped,
+}
+
+impl VerifyStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Unavailable => "unavailable",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerifyResult {
     pub gate: String,
@@ -67,6 +88,30 @@ pub struct VerifyResult {
     pub stdout: Option<String>,
     pub stderr: Option<String>,
     pub passed: bool,
+    #[serde(default)]
+    pub status: VerifyStatus,
+}
+
+impl VerifyResult {
+    pub fn status_label(&self) -> &'static str {
+        if self.passed {
+            VerifyStatus::Pass.as_str()
+        } else {
+            self.status.as_str()
+        }
+    }
+
+    pub fn pass(gate: VerifyGate, command: impl Into<String>) -> Self {
+        Self {
+            gate: gate.id().into(),
+            command: command.into(),
+            exit_code: Some(0),
+            stdout: None,
+            stderr: None,
+            passed: true,
+            status: VerifyStatus::Pass,
+        }
+    }
 }
 
 #[cfg(test)]

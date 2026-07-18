@@ -1,3 +1,4 @@
+use crate::money::Money;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -14,7 +15,7 @@ pub struct AnalyticsEvent {
     pub provider: Option<String>,
     pub tokens_in: Option<u64>,
     pub tokens_out: Option<u64>,
-    pub cost_estimate: Option<f64>,
+    pub cost_estimate: Option<Money>,
     pub latency_ms: Option<u64>,
     pub accept_rate: Option<f32>,
     pub gate: Option<String>,
@@ -38,7 +39,7 @@ pub struct ModelQualityMetrics {
     pub model_name: String,
     pub provider: String,
     pub total_sessions: u64,
-    pub total_cost: f64,
+    pub total_cost: Money,
     pub avg_latency_ms: f64,
     pub accept_rate: f32,
     pub reversion_rate: f32,

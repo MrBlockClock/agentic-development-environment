@@ -1,4 +1,4 @@
-use crate::ignore::{IgnoreAlignment, IgnoreStatus, IgnoreSurface};
+use crate::ignore::{IgnoreAlignment, IgnoreStatus};
 use crate::layer::AdLayer;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -241,69 +241,7 @@ impl AuditRunner {
     }
 
     fn check_ignore_surfaces(&self) -> Vec<IgnoreAlignment> {
-        IgnoreSurface::all()
-            .into_iter()
-            .map(|surface| {
-                let (path, status, missing) = match surface {
-                    IgnoreSurface::Git => {
-                        if self.exists(".gitignore") {
-                            (surface.name(), IgnoreStatus::Synced, vec![])
-                        } else {
-                            (
-                                surface.name(),
-                                IgnoreStatus::Missing,
-                                vec![".gitignore".into()],
-                            )
-                        }
-                    }
-                    IgnoreSurface::AiIndex => {
-                        if self.exists(".cursorignore") {
-                            (surface.name(), IgnoreStatus::Synced, vec![])
-                        } else {
-                            (
-                                surface.name(),
-                                IgnoreStatus::Missing,
-                                vec![".cursorignore".into()],
-                            )
-                        }
-                    }
-                    IgnoreSurface::Docker => {
-                        if self.exists("Dockerfile") || self.exists("docker") {
-                            if self.exists(".dockerignore") {
-                                (surface.name(), IgnoreStatus::Synced, vec![])
-                            } else {
-                                (
-                                    surface.name(),
-                                    IgnoreStatus::Drifted,
-                                    vec![".dockerignore".into()],
-                                )
-                            }
-                        } else {
-                            (surface.name(), IgnoreStatus::NotApplicable, vec![])
-                        }
-                    }
-                    IgnoreSurface::AgentPolicy => {
-                        if self.exists("AGENTS.md") {
-                            (surface.name(), IgnoreStatus::Synced, vec![])
-                        } else {
-                            (
-                                surface.name(),
-                                IgnoreStatus::Missing,
-                                vec!["AGENTS.md".into()],
-                            )
-                        }
-                    }
-                    IgnoreSurface::BackupSync | IgnoreSurface::CiPublish => {
-                        (surface.name(), IgnoreStatus::NotApplicable, vec![])
-                    }
-                };
-                IgnoreAlignment {
-                    surface: path.into(),
-                    status,
-                    missing_patterns: missing,
-                }
-            })
-            .collect()
+        crate::ignore::check_alignment(&self.root)
     }
 
     fn exists(&self, rel: &str) -> bool {

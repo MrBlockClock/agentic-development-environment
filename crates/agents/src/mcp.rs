@@ -27,6 +27,9 @@ pub struct McpToolInfo {
     pub description: String,
     /// JSON Schema describing the tool's expected arguments.
     pub input_schema: serde_json::Value,
+    /// Optional ADE/MCP annotations extracted from schema extensions.
+    #[serde(default)]
+    pub annotations: crate::authority::ToolAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,11 +127,16 @@ impl McpHost {
             let tools = peer.list_all_tools().await.map_err(|error| {
                 AdeError::Mcp(format!("failed to list tools from '{server}': {error}"))
             })?;
-            result.extend(tools.into_iter().map(|tool| McpToolInfo {
-                server: server.clone(),
-                input_schema: tool.schema_as_json_value(),
-                name: tool.name.into_owned(),
-                description: tool.description.into_owned(),
+            result.extend(tools.into_iter().map(|tool| {
+                let input_schema = tool.schema_as_json_value();
+                let annotations = annotations_from_schema(&input_schema);
+                McpToolInfo {
+                    server: server.clone(),
+                    input_schema,
+                    name: tool.name.into_owned(),
+                    description: tool.description.into_owned(),
+                    annotations,
+                }
             }));
         }
         Ok(result)
@@ -244,6 +252,53 @@ fn validate_id(value: &str, label: &str) -> Result<(), AdeError> {
         )));
     }
     Ok(())
+}
+
+fn annotations_from_schema(schema: &serde_json::Value) -> crate::authority::ToolAnnotations {
+    use crate::authority::{ToolAnnotations, ToolEffect};
+    let mut annotations = ToolAnnotations::default();
+    let Some(map) = schema.as_object() else {
+        return annotations;
+    };
+    if let Some(value) = map
+        .get("x-ade-effect")
+        .or_else(|| map.get("x_ade_effect"))
+        .or_else(|| map.get("ade_effect"))
+        .and_then(|value| value.as_str())
+    {
+        annotations.ade_effect = match value.trim().to_ascii_lowercase().as_str() {
+            "read" | "readonly" | "read_only" => Some(ToolEffect::ReadOnly),
+            "write" | "workspace_write" | "mutate" => Some(ToolEffect::WorkspaceWrite),
+            "external_write" | "network" | "upload" => Some(ToolEffect::ExternalWrite),
+            "process" | "process_execution" | "execute" | "shell" => {
+                Some(ToolEffect::ProcessExecution)
+            }
+            "unknown" => Some(ToolEffect::Unknown),
+            _ => None,
+        };
+    }
+    if let Some(value) = map
+        .get("readOnlyHint")
+        .or_else(|| map.get("read_only_hint"))
+        .and_then(|value| value.as_bool())
+    {
+        annotations.read_only_hint = Some(value);
+    }
+    if let Some(value) = map
+        .get("destructiveHint")
+        .or_else(|| map.get("destructive_hint"))
+        .and_then(|value| value.as_bool())
+    {
+        annotations.destructive_hint = Some(value);
+    }
+    if let Some(value) = map
+        .get("openWorldHint")
+        .or_else(|| map.get("open_world_hint"))
+        .and_then(|value| value.as_bool())
+    {
+        annotations.open_world_hint = Some(value);
+    }
+    annotations
 }
 
 #[cfg(test)]

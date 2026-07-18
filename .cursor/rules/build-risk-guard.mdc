@@ -1,0 +1,46 @@
+---
+description: Build & merge risk guard for the ADE Rust + Tauri workspace
+alwaysApply: true
+---
+
+# Build Risk Guard
+
+Pre-flight checks to avoid the recurring build hazards in this repo. Apply before running builds/tests and before declaring work done.
+
+## Shell: PowerShell has no `&&`
+
+The default shell is PowerShell. Chaining with `&&` fails ("not a valid statement separator").
+
+```powershell
+# ❌ BAD
+cargo fmt --check && cargo clippy -- -D warnings
+
+# ✅ GOOD — sequence with ; and gate on $LASTEXITCODE
+cargo fmt --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+cargo clippy -- -D warnings; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+## Locked desktop binary (`os error 5: Access is denied`)
+
+A running `ade-desktop-app.exe` locks its target file and breaks `cargo build/test --workspace`.
+
+- Before a workspace build/test, confirm the desktop app is not running (check for the process), or
+- Scope commands to avoid it: `cargo build --workspace --exclude ade-desktop-app`.
+- `os error 5` on `ade-desktop-app.exe` is an environment lock, not a compile error — do not "fix" code for it.
+
+## Money: never reintroduce `f64`
+
+All monetary values use `ade_core::Money` (i64 micro-dollars). Convert `f64`/USD strings only at the UI/CLI boundary; never do financial arithmetic in `f64`.
+
+## const fn: no non-const trait methods
+
+Avoid `Ord::max`/`min` etc. in `const fn` (not const-stable). Use explicit branches: `if x < 0 { 0 } else { x }`.
+
+## Definition of done (verify ladder)
+
+Before claiming completion, run and pass:
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `tsc --noEmit` in `apps/desktop`. Never disable a lint/security tool to make a build pass.
+
+## Safety invariants
+
+Never commit two write-capable agents on one checkout. Never read/quote secrets (`.env`, `*.pem`, `*.key`, `*credentials*.json`). Never merge/deploy without human approval.

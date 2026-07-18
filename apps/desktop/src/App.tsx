@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Finding = {
@@ -41,6 +41,7 @@ type VerifyResult = {
   stdout: string | null;
   stderr: string | null;
   passed: boolean;
+  status?: "pass" | "fail" | "unavailable" | "skipped";
 };
 
 type McpToolInfo = {
@@ -61,12 +62,80 @@ type McpToolCallResult = {
   content: unknown;
 };
 
+type AgentTurnResult = {
+  session_id: string;
+  provider: string;
+  model: string;
+  text: string;
+  tool_calls: number;
+  usage: { input_tokens: number; output_tokens: number };
+  cost_micros: number;
+};
+
+type AgentEvent =
+  | { type: "started"; session_id: string; provider: string; model: string }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_call"; server: string; tool: string; arguments: unknown }
+  | { type: "tool_result"; server: string; tool: string; is_error: boolean; text: string }
+  | {
+      type: "usage";
+      input_tokens: number;
+      output_tokens: number;
+      cost_micros: number;
+    }
+  | {
+      type: "spend_warning";
+      scope: string;
+      period_key: string;
+      projected_micros: number;
+      soft_cap_micros: number;
+    }
+  | { type: "completed"; result: AgentTurnResult }
+  | { type: "failed"; error: string }
+  | { type: "cancelled"; reason: string };
+
+type StackRecipe = {
+  id: string;
+  name: string;
+  description: string;
+  runtimes: string[];
+  toolchain: Record<string, string>;
+  commands: {
+    build: string | string[] | null;
+    lint: string | string[] | null;
+    format: string | string[] | null;
+    test: string | string[] | null;
+  };
+};
+
+type ProviderKeyStatus = {
+  profile: string;
+  provider: string;
+  configured: boolean;
+};
+
+type ProviderKeyDeleteResult = {
+  profile: string;
+  provider: string;
+  deleted: boolean;
+};
+
+type ProviderKeySmokeResult = {
+  profile: string;
+  provider: string;
+  status: "ready" | "passed" | "failed" | "skipped";
+  detail: string;
+};
+
 const navItems = [
   ["Overview", "⌂"],
+  ["Agent", "✦"],
+  ["Keys", "◈"],
   ["Audit", "◎"],
   ["Plan", "◇"],
   ["Verify", "✓"],
   ["MCP", "⬡"],
+  ["Recipes", "▦"],
 ] as const;
 
 function App() {
@@ -81,6 +150,10 @@ function App() {
   const [mcpServers, setMcpServers] = useState<string[]>([]);
   const [mcpTools, setMcpTools] = useState<McpToolInfo[]>([]);
   const [mcpBusy, setMcpBusy] = useState(false);
+  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [recipes, setRecipes] = useState<StackRecipe[]>([]);
+  const [recipeBusy, setRecipeBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -116,6 +189,14 @@ function App() {
       void refreshMcp();
     }
   }, [activeView, refreshMcp]);
+
+  useEffect(() => {
+    if (activeView === "Recipes" && recipes.length === 0) {
+      void invoke<StackRecipe[]>("list_recipes")
+        .then(setRecipes)
+        .catch((reason) => setError(String(reason)));
+    }
+  }, [activeView, recipes.length]);
 
   const scorePercent = useMemo(() => {
     if (!dashboard || dashboard.audit.score_max === 0) return 0;
@@ -207,6 +288,63 @@ function App() {
       return null;
     } finally {
       setMcpBusy(false);
+    }
+  };
+
+  const runAgentTurn = async (input: {
+    prompt: string;
+    provider: string;
+    baseUrl: string;
+    model: string;
+    inputCostPerMtok: number;
+    outputCostPerMtok: number;
+    sessionCapUsd: number;
+    dailyCapUsd: number;
+  }) => {
+    setAgentBusy(true);
+    setAgentEvents([]);
+    setError(null);
+    const onEvent = new Channel<AgentEvent>();
+    onEvent.onmessage = (event) => {
+      setAgentEvents((current) => [...current, event]);
+    };
+    try {
+      await invoke("run_agent_turn", {
+        prompt: input.prompt,
+        provider: input.provider,
+        baseUrl: input.baseUrl,
+        model: input.model,
+        inputCostPerMtok: input.inputCostPerMtok,
+        outputCostPerMtok: input.outputCostPerMtok,
+        sessionCapUsd: input.sessionCapUsd,
+        dailyCapUsd: input.dailyCapUsd,
+        onEvent,
+      });
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
+  const initializeRecipe = async (input: {
+    recipe: string;
+    projectName: string;
+    force: boolean;
+  }) => {
+    setRecipeBusy(true);
+    setError(null);
+    try {
+      await invoke("initialize_recipe", {
+        recipe: input.recipe,
+        projectName: input.projectName || null,
+        force: input.force,
+      });
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setRecipeBusy(false);
     }
   };
 
@@ -342,6 +480,15 @@ function App() {
                   onExecute={() => void executePlan()}
                 />
               )}
+              {activeView === "Agent" && (
+                <AgentView
+                  events={agentEvents}
+                  busy={agentBusy}
+                  connectedTools={mcpTools.length}
+                  onRun={(input) => void runAgentTurn(input)}
+                />
+              )}
+              {activeView === "Keys" && <KeysView />}
               {activeView === "Audit" && <AuditView audit={dashboard.audit} />}
               {activeView === "Plan" && (
                 <PlanView
@@ -363,6 +510,13 @@ function App() {
                   onDisconnect={(name) => void disconnectMcp(name)}
                   onRefresh={() => void refreshMcp()}
                   onCallTool={callMcpTool}
+                />
+              )}
+              {activeView === "Recipes" && (
+                <RecipeView
+                  recipes={recipes}
+                  busy={recipeBusy}
+                  onInitialize={(input) => void initializeRecipe(input)}
                 />
               )}
             </>
@@ -489,6 +643,581 @@ function Overview({
   );
 }
 
+function AgentView({
+  events,
+  busy,
+  connectedTools,
+  onRun,
+}: {
+  events: AgentEvent[];
+  busy: boolean;
+  connectedTools: number;
+  onRun: (input: {
+    prompt: string;
+    provider: string;
+    baseUrl: string;
+    model: string;
+    inputCostPerMtok: number;
+    outputCostPerMtok: number;
+    sessionCapUsd: number;
+    dailyCapUsd: number;
+  }) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [provider, setProvider] = useState("openai");
+  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
+  const [model, setModel] = useState("");
+  const [inputCost, setInputCost] = useState("0");
+  const [outputCost, setOutputCost] = useState("0");
+  const [sessionCap, setSessionCap] = useState("1");
+  const [dailyCap, setDailyCap] = useState("10");
+  const text = events
+    .filter((event): event is Extract<AgentEvent, { type: "text_delta" }> =>
+      event.type === "text_delta",
+    )
+    .map((event) => event.text)
+    .join("");
+  const completed = [...events].reverse().find(
+    (event): event is Extract<AgentEvent, { type: "completed" }> =>
+      event.type === "completed",
+  );
+  const activity = events.filter(
+    (event) => event.type === "tool_call" || event.type === "tool_result",
+  );
+
+  const submit = () => {
+    onRun({
+      prompt: prompt.trim(),
+      provider: provider.trim(),
+      baseUrl: baseUrl.trim(),
+      model: model.trim(),
+      inputCostPerMtok: Number(inputCost) || 0,
+      outputCostPerMtok: Number(outputCost) || 0,
+      sessionCapUsd: Number(sessionCap),
+      dailyCapUsd: Number(dailyCap),
+    });
+  };
+
+  return (
+    <div className="grid grid-cols-[1fr_310px] gap-5">
+      <Panel
+        title="Agent session"
+        subtitle="BYOK streaming · exact model lock · runtime authority · read-only until PLAN approval"
+      >
+        <div className="min-h-72 rounded-xl border border-white/7 bg-black/20 p-4">
+          {!text && !busy ? (
+            <div className="grid min-h-64 place-items-center text-center">
+              <div>
+                <div className="text-sm text-slate-300">Start a trustworthy agent turn</div>
+                <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
+                  The selected model can use connected read tools. Write-capable tools remain
+                  blocked until an approved PLAN grants owned paths.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
+              {text}
+              {busy && <span className="ml-1 inline-block size-1.5 animate-pulse bg-blue-300" />}
+            </div>
+          )}
+        </div>
+
+        {activity.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {activity.map((event, index) => (
+              <div
+                key={`${event.type}-${index}`}
+                className="rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px]"
+              >
+                {event.type === "tool_call" ? (
+                  <span className="text-amber-200">
+                    → {event.server}/{event.tool}
+                  </span>
+                ) : (
+                  <span className={event.is_error ? "text-red-300" : "text-emerald-300"}>
+                    ← {event.is_error ? "error" : "ok"} {event.server}/{event.tool}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {completed && (
+          <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
+            <span>{completed.result.provider}</span>
+            <span>{completed.result.model}</span>
+            <span>
+              {completed.result.usage.input_tokens} in /{" "}
+              {completed.result.usage.output_tokens} out
+            </span>
+            <span>${(completed.result.cost_micros / 1_000_000).toFixed(6)}</span>
+          </div>
+        )}
+
+        <textarea
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          rows={4}
+          className="thin-scrollbar mt-4 w-full rounded-xl border border-white/10 bg-[#101620] px-3 py-3 text-sm leading-6 text-slate-200"
+          placeholder="What should ADE help you accomplish?"
+        />
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-[10px] text-slate-600">
+            {connectedTools} MCP tool{connectedTools === 1 ? "" : "s"} available
+          </span>
+          <button
+            onClick={submit}
+            disabled={busy || !prompt.trim() || !provider.trim() || !model.trim()}
+            className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
+          >
+            {busy ? "Running…" : "Run agent turn"}
+          </button>
+        </div>
+      </Panel>
+
+      <Panel title="Provider" subtitle="Key loaded from the local OS vault">
+        <div className="space-y-3">
+          <Field label="Provider id" value={provider} onChange={setProvider} />
+          <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
+          <Field label="Exact model id" value={model} onChange={setModel} mono />
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
+            <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
+            <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
+          </div>
+          <div className="rounded-lg border border-blue-400/15 bg-blue-400/5 p-3 text-[10px] leading-5 text-blue-200/70">
+            Manage this provider in the Keys view or run{" "}
+            <span className="font-mono">ade keys set {provider}</span>. Keys never enter prompts,
+            events, or handoff capsules. Spend caps are reserved before every provider round.
+          </div>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function KeysView() {
+  const [provider, setProvider] = useState("openai");
+  const [profile, setProfile] = useState("local");
+  const [secret, setSecret] = useState("");
+  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
+  const [model, setModel] = useState("");
+  const [inputCostPerMtok, setInputCostPerMtok] = useState("");
+  const [outputCostPerMtok, setOutputCostPerMtok] = useState("");
+  const [maxCostUsd, setMaxCostUsd] = useState("0.05");
+  const [approveLiveCost, setApproveLiveCost] = useState(false);
+  const [status, setStatus] = useState<ProviderKeyStatus | null>(null);
+  const [smoke, setSmoke] = useState<ProviderKeySmokeResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const refreshStatus = useCallback(async () => {
+    if (!provider.trim() || !profile.trim()) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<ProviderKeyStatus>("key_status", {
+        provider: provider.trim(),
+        profile: profile.trim(),
+      });
+      setStatus(result);
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [profile, provider]);
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+
+  const save = async () => {
+    if (!secret.trim()) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<ProviderKeyStatus>("key_set", {
+        provider: provider.trim(),
+        profile: profile.trim(),
+        secret,
+      });
+      setSecret("");
+      setStatus(result);
+      setSmoke(null);
+      setMessage(`${result.provider} credential saved to the OS vault.`);
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (
+      !window.confirm(
+        `Delete the ${provider.trim()} credential from profile ${profile.trim()}?`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<ProviderKeyDeleteResult>("key_delete", {
+        provider: provider.trim(),
+        profile: profile.trim(),
+      });
+      setStatus({
+        profile: result.profile,
+        provider: result.provider,
+        configured: false,
+      });
+      setSmoke(null);
+      setMessage(result.deleted ? "Credential deleted." : "No credential was configured.");
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runSmoke = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<ProviderKeySmokeResult>("key_smoke", {
+        provider: provider.trim(),
+        profile: profile.trim(),
+      });
+      setSmoke(result);
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runLiveSmoke = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<ProviderKeySmokeResult>("key_live_smoke", {
+        provider: provider.trim(),
+        profile: profile.trim(),
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+        inputCostPerMtok: Number(inputCostPerMtok),
+        outputCostPerMtok: Number(outputCostPerMtok),
+        maxCostUsd: Number(maxCostUsd),
+        approveCost: approveLiveCost,
+      });
+      setSmoke(result);
+      setApproveLiveCost(false);
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-[1fr_340px] gap-5">
+      <Panel
+        title="Provider credentials"
+        subtitle="Stored only in the native OS credential vault"
+      >
+        <div className="grid max-w-2xl grid-cols-2 gap-3">
+          <label className="block">
+            <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+              Provider
+            </span>
+            <input
+              value={provider}
+              onChange={(event) => {
+                setProvider(event.target.value);
+                setStatus(null);
+                setSmoke(null);
+              }}
+              list="provider-key-options"
+              autoComplete="off"
+              className="w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200"
+            />
+            <datalist id="provider-key-options">
+              <option value="openai" />
+              <option value="anthropic" />
+              <option value="azure-openai" />
+              <option value="openrouter" />
+            </datalist>
+          </label>
+          <Field
+            label="Profile"
+            value={profile}
+            onChange={(value) => {
+              setProfile(value);
+              setStatus(null);
+              setSmoke(null);
+            }}
+          />
+        </div>
+
+        <label className="mt-4 block max-w-2xl">
+          <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+            API key
+          </span>
+          <input
+            type="password"
+            value={secret}
+            onChange={(event) => setSecret(event.target.value)}
+            autoComplete="new-password"
+            spellCheck={false}
+            placeholder={status?.configured ? "Enter a replacement key" : "Enter provider key"}
+            className="w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 font-mono text-xs text-slate-200"
+          />
+        </label>
+
+        <div className="mt-5 max-w-2xl rounded-xl border border-white/10 p-4">
+          <div className="text-xs font-semibold text-slate-300">Live credential validation</div>
+          <p className="mt-1 text-[10px] leading-5 text-slate-500">
+            Sends one 16-token-max agent turn. Current pricing is required so ADE can reject the
+            request before network access if its worst-case estimate exceeds your cap.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <Field label="Exact model id" value={model} onChange={setModel} />
+            <Field label="API base URL" value={baseUrl} onChange={setBaseUrl} />
+            <Field
+              label="Input USD / MTok"
+              value={inputCostPerMtok}
+              onChange={setInputCostPerMtok}
+            />
+            <Field
+              label="Output USD / MTok"
+              value={outputCostPerMtok}
+              onChange={setOutputCostPerMtok}
+            />
+            <Field label="Maximum cost (USD)" value={maxCostUsd} onChange={setMaxCostUsd} />
+          </div>
+          <label className="mt-3 flex items-start gap-2 text-[10px] leading-5 text-slate-400">
+            <input
+              type="checkbox"
+              checked={approveLiveCost}
+              onChange={(event) => setApproveLiveCost(event.target.checked)}
+              className="mt-1"
+            />
+            I approve one potentially billable provider request, bounded by the maximum above.
+          </label>
+          <button
+            onClick={() => void runLiveSmoke()}
+            disabled={
+              busy ||
+              !status?.configured ||
+              !model.trim() ||
+              !baseUrl.trim() ||
+              !inputCostPerMtok.trim() ||
+              !outputCostPerMtok.trim() ||
+              !maxCostUsd.trim() ||
+              !approveLiveCost
+            }
+            className="mt-3 rounded-lg border border-blue-400/30 px-4 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-400/5 disabled:opacity-40"
+          >
+            Run capped live smoke
+          </button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            onClick={() => void save()}
+            disabled={busy || !provider.trim() || !profile.trim() || !secret.trim()}
+            className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
+          >
+            {status?.configured ? "Replace key" : "Save key"}
+          </button>
+          <button
+            onClick={() => void refreshStatus()}
+            disabled={busy || !provider.trim() || !profile.trim()}
+            className="rounded-lg border border-white/10 px-4 py-2 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50"
+          >
+            Check status
+          </button>
+          <button
+            onClick={() => void runSmoke()}
+            disabled={busy || !provider.trim() || !profile.trim()}
+            className="rounded-lg border border-white/10 px-4 py-2 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50"
+          >
+            Safe smoke preflight
+          </button>
+          <button
+            onClick={() => void remove()}
+            disabled={busy || !status?.configured}
+            className="rounded-lg border border-red-400/20 px-4 py-2 text-xs text-red-300 hover:bg-red-400/5 disabled:opacity-40"
+          >
+            Delete key
+          </button>
+        </div>
+
+        {message && (
+          <div className="mt-4 rounded-lg border border-white/7 bg-white/2 p-3 text-xs text-slate-400">
+            {message}
+          </div>
+        )}
+      </Panel>
+
+      <div className="space-y-5">
+        <Panel title="Vault status" subtitle={`${profile || "—"} / ${provider || "—"}`}>
+          <div
+            className={`rounded-xl border p-4 ${
+              status?.configured
+                ? "border-emerald-400/20 bg-emerald-400/5"
+                : "border-amber-400/20 bg-amber-400/5"
+            }`}
+          >
+            <div
+              className={`text-sm font-semibold ${
+                status?.configured ? "text-emerald-300" : "text-amber-300"
+              }`}
+            >
+              {busy
+                ? "Checking…"
+                : status?.configured
+                  ? "Configured"
+                  : status
+                    ? "Not configured"
+                    : "Status pending"}
+            </div>
+            <p className="mt-2 text-[10px] leading-5 text-slate-500">
+              ADE reports presence only. The credential value is never returned to the frontend.
+            </p>
+          </div>
+        </Panel>
+
+        {smoke && (
+          <Panel title="Smoke result" subtitle={smoke.status.toUpperCase()}>
+            <p className="text-xs leading-5 text-slate-400">{smoke.detail}</p>
+            {smoke.status === "ready" || smoke.status === "skipped" ? (
+              <p className="mt-3 text-[10px] leading-5 text-slate-600">
+                The safe preflight makes no network request and incurs no provider cost.
+              </p>
+            ) : null}
+          </Panel>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecipeView({
+  recipes,
+  busy,
+  onInitialize,
+}: {
+  recipes: StackRecipe[];
+  busy: boolean;
+  onInitialize: (input: { recipe: string; projectName: string; force: boolean }) => void;
+}) {
+  const [selected, setSelected] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [force, setForce] = useState(false);
+
+  useEffect(() => {
+    if (!selected && recipes[0]) setSelected(recipes[0].id);
+  }, [recipes, selected]);
+
+  const recipe = recipes.find((item) => item.id === selected);
+  return (
+    <div className="grid grid-cols-[1fr_360px] gap-5">
+      <Panel title="Stack recipes" subtitle="Choose a safe starting contract for this workspace">
+        <div className="grid grid-cols-2 gap-3">
+          {recipes.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setSelected(item.id)}
+              className={`rounded-xl border p-4 text-left transition ${
+                selected === item.id
+                  ? "border-blue-400/40 bg-blue-500/10"
+                  : "border-white/7 bg-white/2 hover:border-white/15"
+              }`}
+            >
+              <div className="text-sm font-medium text-slate-200">{item.name}</div>
+              <div className="mt-1 font-mono text-[10px] text-blue-300/70">{item.id}</div>
+              <p className="mt-3 text-[11px] leading-5 text-slate-500">{item.description}</p>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel
+        title={recipe?.name ?? "Recipe setup"}
+        subtitle="Generate the canonical AGENTS.md bootstrap"
+      >
+        {recipe ? (
+          <div className="space-y-4">
+            <Field label="Project name (optional)" value={projectName} onChange={setProjectName} />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-600">Toolchain</div>
+              <div className="mt-2 space-y-1 text-xs text-slate-400">
+                {Object.entries(recipe.toolchain).map(([name, version]) => (
+                  <div key={name} className="flex justify-between gap-3">
+                    <span>{name}</span>
+                    <span className="font-mono text-slate-500">{version}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <label className="flex items-start gap-2 text-[11px] leading-5 text-slate-500">
+              <input
+                type="checkbox"
+                checked={force}
+                onChange={(event) => setForce(event.target.checked)}
+                className="mt-1 size-3.5 accent-red-400"
+              />
+              Replace an existing AGENTS.md. Leave off to preserve repository authority.
+            </label>
+            <button
+              onClick={() => onInitialize({ recipe: recipe.id, projectName, force })}
+              disabled={busy}
+              className="w-full rounded-lg bg-violet-500 px-4 py-2.5 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
+            >
+              {busy ? "Initializing…" : `Initialize ${recipe.name}`}
+            </button>
+          </div>
+        ) : (
+          <div className="py-16 text-center text-xs text-slate-500">Loading recipes…</div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  mono?: boolean;
+}) {
+  return (
+    <label className="block text-[11px] text-slate-500">
+      {label}
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={`mt-1.5 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200 ${
+          mono ? "font-mono" : ""
+        }`}
+      />
+    </label>
+  );
+}
+
 function AuditView({ audit }: { audit: AuditReport }) {
   return (
     <Panel title="AUDIT report" subtitle={`${audit.score}/${audit.score_max} total points`}>
@@ -588,8 +1317,20 @@ function VerifyView({ results, onRun }: { results: VerifyResult[]; onRun: () => 
                   <span className="text-sm font-semibold">{result.gate}</span>
                   <span className="ml-3 font-mono text-[11px] text-slate-500">{result.command}</span>
                 </div>
-                <span className={result.passed ? "text-xs text-emerald-300" : "text-xs text-red-300"}>
-                  {result.passed ? "● PASS" : "● FAIL"}
+                <span
+                  className={
+                    result.passed
+                      ? "text-xs text-emerald-300"
+                      : result.status === "unavailable"
+                        ? "text-xs text-amber-300"
+                        : "text-xs text-red-300"
+                  }
+                >
+                  {result.passed
+                    ? "● PASS"
+                    : result.status === "unavailable"
+                      ? "● UNAVAILABLE"
+                      : "● FAIL"}
                 </span>
               </div>
               {(result.stderr || result.stdout) && (
@@ -780,7 +1521,7 @@ function McpView({
               Connect an approved server to inspect its tools.
             </div>
           ) : (
-            <div className="thin-scrollbar max-h-[28rem] space-y-2 overflow-y-auto">
+            <div className="thin-scrollbar max-h-112 space-y-2 overflow-y-auto">
               {tools.map((tool) => {
                 const selected =
                   selectedTool?.server === tool.server && selectedTool?.name === tool.name;

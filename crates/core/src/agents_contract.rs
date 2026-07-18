@@ -1,5 +1,5 @@
 use crate::error::AdeError;
-use crate::recipe::StackRecipe;
+use crate::recipe::{RecipeCommand, StackRecipe};
 use std::path::{Path, PathBuf};
 
 /// Context used when rendering an `AGENTS.md` contract from a stack recipe.
@@ -116,13 +116,15 @@ The ADE follows AUDIT → PLAN → EXECUTE routing.
     }
 
     /// Write `AGENTS.md` under `root`. Refuses to overwrite unless `force`.
+    /// Also merges ADE always-ignore patterns into `.gitignore` / `.cursorignore`.
     pub fn write(
         root: impl AsRef<Path>,
         recipe: &StackRecipe,
         ctx: &AgentsContractContext,
         force: bool,
     ) -> Result<PathBuf, AdeError> {
-        let path = root.as_ref().join("AGENTS.md");
+        let root = root.as_ref();
+        let path = root.join("AGENTS.md");
         if path.exists() && !force {
             return Err(AdeError::Other(format!(
                 "AGENTS.md already exists at {} (pass --force to overwrite)",
@@ -130,6 +132,22 @@ The ADE follows AUDIT → PLAN → EXECUTE routing.
             )));
         }
         std::fs::write(&path, Self::render(recipe, ctx))?;
+        crate::ignore::ensure_bootstrap_ignores(root)?;
+        if recipe.toolchain.contains_key("Rust") {
+            let pin = root.join("rust-toolchain.toml");
+            if !pin.exists() {
+                std::fs::write(
+                    &pin,
+                    "[toolchain]\nchannel = \"stable\"\ncomponents = [\"rustfmt\", \"clippy\"]\n",
+                )?;
+            }
+        }
+        if recipe.toolchain.contains_key("Node") {
+            let nvmrc = root.join(".nvmrc");
+            if !nvmrc.exists() {
+                std::fs::write(&nvmrc, "22\n")?;
+            }
+        }
         Ok(path)
     }
 }
@@ -137,16 +155,16 @@ The ADE follows AUDIT → PLAN → EXECUTE routing.
 fn format_commands(recipe: &StackRecipe) -> String {
     let mut lines = Vec::new();
     if let Some(c) = &recipe.commands.build {
-        lines.push(format!("  - Build: `{c}`"));
+        push_command_lines(&mut lines, "Build", c);
     }
     if let Some(c) = &recipe.commands.lint {
-        lines.push(format!("  - Lint: `{c}`"));
+        push_command_lines(&mut lines, "Lint", c);
     }
     if let Some(c) = &recipe.commands.format {
-        lines.push(format!("  - Format: `{c}`"));
+        push_command_lines(&mut lines, "Format", c);
     }
     if let Some(c) = &recipe.commands.test {
-        lines.push(format!("  - Test: `{c}`"));
+        push_command_lines(&mut lines, "Test", c);
     }
     if lines.is_empty() {
         "  - (none defined by recipe)".into()
@@ -155,19 +173,44 @@ fn format_commands(recipe: &StackRecipe) -> String {
     }
 }
 
+fn push_command_lines(lines: &mut Vec<String>, label: &str, command: &RecipeCommand) {
+    let steps = command.steps();
+    if steps.len() == 1 {
+        lines.push(format!("  - {label}: `{}`", steps[0]));
+    } else {
+        for (index, step) in steps.iter().enumerate() {
+            lines.push(format!("  - {label} step {}: `{step}`", index + 1));
+        }
+    }
+}
+
+fn inline_command(command: &RecipeCommand) -> String {
+    command
+        .steps()
+        .iter()
+        .enumerate()
+        .map(|(index, step)| format!("step {}: `{step}`", index + 1))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn format_verify_ladder(recipe: &StackRecipe) -> String {
     let mut rows = vec!["| G0 | project root present |".to_string()];
     if let Some(c) = &recipe.commands.format {
         if let Some(lint) = &recipe.commands.lint {
-            rows.push(format!("| G2 | `{c}` + `{lint}` |"));
+            rows.push(format!(
+                "| G2 | format {}; lint {} |",
+                inline_command(c),
+                inline_command(lint)
+            ));
         } else {
-            rows.push(format!("| G2 | `{c}` |"));
+            rows.push(format!("| G2 | {} |", inline_command(c)));
         }
     } else if let Some(lint) = &recipe.commands.lint {
-        rows.push(format!("| G2 | `{lint}` |"));
+        rows.push(format!("| G2 | {} |", inline_command(lint)));
     }
     if let Some(c) = &recipe.commands.test {
-        rows.push(format!("| G3 | `{c}` |"));
+        rows.push(format!("| G3 | {} |", inline_command(c)));
     }
     rows.join("\n")
 }
@@ -191,6 +234,16 @@ mod tests {
         assert!(md.contains(r"C:\Dev\demo"));
         assert!(md.contains("NEVER read/quote `.env`"));
         assert!(md.contains("| G3 |"));
+    }
+
+    #[test]
+    fn renders_multi_runtime_commands_as_ordered_steps() {
+        let recipe = builtin_recipe("business-saas").expect("recipe");
+        let md = AgentsContractGenerator::render(&recipe, &AgentsContractContext::new("demo-saas"));
+
+        assert!(md.contains("Build step 1: `cargo build`"));
+        assert!(md.contains("Build step 2: `npm run build`"));
+        assert!(!md.contains("&&"));
     }
 
     #[test]

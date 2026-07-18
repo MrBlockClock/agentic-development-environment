@@ -17,6 +17,12 @@ pub enum AdeError {
     #[error("Provider error: {0}")]
     Provider(String),
 
+    #[error("Spend cap error: {0}")]
+    Spend(String),
+
+    #[error("Cancelled: {0}")]
+    Cancelled(String),
+
     #[error("Database error: {0}")]
     Database(String),
 

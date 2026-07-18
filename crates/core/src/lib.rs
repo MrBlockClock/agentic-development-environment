@@ -8,6 +8,7 @@ pub mod execute;
 pub mod handoff;
 pub mod ignore;
 pub mod layer;
+pub mod money;
 pub mod plan;
 pub mod profile;
 pub mod recipe;
