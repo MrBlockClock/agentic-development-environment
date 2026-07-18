@@ -16,8 +16,18 @@ enum Commands {
     },
     /// Run PLAN phase — create a phased plan with gates
     Plan,
-    /// Run EXECUTE phase — apply approved plan phases
-    Execute,
+    /// Run EXECUTE phase — apply approved plan phases (requires --approve)
+    Execute {
+        /// Explicit human approval to mutate owned_paths from the plan
+        #[arg(long)]
+        approve: bool,
+        /// Recipe used when writing a missing AGENTS.md
+        #[arg(long, default_value = "rust-api-turso")]
+        recipe: String,
+        /// Limit EXECUTE to these plan phase ids (repeatable)
+        #[arg(long = "phase")]
+        phases: Vec<String>,
+    },
     /// Initialize a project with a stack recipe (writes AGENTS.md)
     Init {
         #[arg(short, long)]
@@ -131,8 +141,50 @@ async fn main() -> anyhow::Result<()> {
             std::fs::write(&out, serde_json::to_string_pretty(&plan)?)?;
             println!("Wrote {}", out.display());
         }
-        Commands::Execute => {
-            println!("EXECUTE phase — coming soon");
+        Commands::Execute {
+            approve,
+            recipe,
+            phases,
+        } => {
+            let root = std::env::current_dir()?;
+            let last_plan_path = config.data_dir.join("last-plan.json");
+            let plan: ade_core::plan::PlanReport = match std::fs::read_to_string(&last_plan_path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<ade_core::plan::PlanReport>(&s).ok())
+                .filter(|p| p.audit_root == root.display().to_string())
+            {
+                Some(plan) => {
+                    println!("Using last plan from {}", last_plan_path.display());
+                    plan
+                }
+                None => {
+                    anyhow::bail!(
+                        "No matching plan at {} — run `ade plan` first for this root",
+                        last_plan_path.display()
+                    );
+                }
+            };
+
+            let opts = ade_core::execute::ExecuteOptions {
+                approved: *approve,
+                recipe_id: recipe.clone(),
+                phase_ids: phases.clone(),
+            };
+            let report = ade_core::execute::ExecuteRunner::new(&root).run(&plan, &opts)?;
+            println!(
+                "EXECUTE complete — score {:?} → {:?} / {} (changed {} path(s))",
+                report.score_before,
+                report.score_after,
+                report.score_max,
+                report.changed_paths.len()
+            );
+            if let Some(summary) = &report.human_summary_markdown {
+                println!("\n{summary}");
+            }
+            let out = config.data_dir.join("last-execute.json");
+            std::fs::create_dir_all(&config.data_dir)?;
+            std::fs::write(&out, serde_json::to_string_pretty(&report)?)?;
+            println!("Wrote {}", out.display());
         }
         Commands::Init {
             recipe,

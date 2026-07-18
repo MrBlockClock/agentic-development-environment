@@ -1,7 +1,11 @@
-use ade_core::execute::ExecuteReport;
-use ade_core::plan::Phase;
+use ade_core::error::AdeError;
+use ade_core::execute::{ExecuteOptions, ExecuteReport, ExecuteRunner};
+use ade_core::plan::PlanReport;
+use std::path::PathBuf;
 
-pub struct PhaseExecutor;
+pub struct PhaseExecutor {
+    root: PathBuf,
+}
 
 impl Default for PhaseExecutor {
     fn default() -> Self {
@@ -11,11 +15,21 @@ impl Default for PhaseExecutor {
 
 impl PhaseExecutor {
     pub fn new() -> Self {
-        Self
+        Self {
+            root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
     }
 
-    pub fn execute(&self, _phase: &Phase) -> Result<ExecuteReport, String> {
-        // TODO: execute approved phase, track changes, run verify
-        Err("Not implemented".to_string())
+    pub fn with_root(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// Apply an approved plan via the core EXECUTE runner.
+    pub fn execute(
+        &self,
+        plan: &PlanReport,
+        opts: &ExecuteOptions,
+    ) -> Result<ExecuteReport, AdeError> {
+        ExecuteRunner::new(&self.root).run(plan, opts)
     }
 }

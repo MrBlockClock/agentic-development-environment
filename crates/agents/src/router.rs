@@ -1,5 +1,6 @@
 use ade_core::audit::{AuditMode, AuditReport};
-use ade_core::execute::ExecuteReport;
+use ade_core::error::AdeError;
+use ade_core::execute::{ExecuteOptions, ExecuteReport, ExecuteRunner};
 use ade_core::plan::PlanReport;
 
 pub enum Phase {
@@ -40,7 +41,12 @@ impl PhaseRouter {
         ade_core::plan::PlanBuilder::new().build(audit)
     }
 
-    pub async fn run_execute(&self, _plan: &PlanReport) -> ExecuteReport {
-        unimplemented!("EXECUTE phase implementation")
+    pub async fn run_execute(
+        &self,
+        plan: &PlanReport,
+        opts: &ExecuteOptions,
+    ) -> Result<ExecuteReport, AdeError> {
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        ExecuteRunner::new(root).run(plan, opts)
     }
 }
