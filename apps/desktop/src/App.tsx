@@ -1,5 +1,6 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke, isTauri } from "./ipc";
 import {
   RecipeWizard,
   type ScaffoldResult,
@@ -345,6 +346,12 @@ function App() {
     sessionCapUsd: number;
     dailyCapUsd: number;
   }) => {
+    if (!isTauri) {
+      setError(
+        "Agent turns require the ADE desktop app; the browser preview is read-only.",
+      );
+      return;
+    }
     setAgentBusy(true);
     setAgentEvents([]);
     setError(null);

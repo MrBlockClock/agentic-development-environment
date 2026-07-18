@@ -2,10 +2,11 @@ use crate::middleware::{audit_middleware, auth_middleware};
 use crate::sse::SseManager;
 use ade_core::audit::{AuditMode, AuditReport, AuditRunner};
 use ade_core::plan::{PlanBuilder, PlanReport};
+use ade_core::recipe::StackRecipe;
 use ade_workflow::parallel::{LeaseManager, PathLease, WorktreeInfo, WorktreeManager};
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, Method, StatusCode},
     middleware,
     response::{
         sse::{Event, KeepAlive},
@@ -24,6 +25,7 @@ use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -131,6 +133,7 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/audit", get(audit_status))
         .route("/plan", get(plan_status))
         .route("/state", get(state_snapshot))
+        .route("/recipes", get(list_recipes))
         .route("/leases", get(list_leases))
         .route("/worktrees", get(list_worktrees))
         .route("/handoff", get(handoff_status))
@@ -146,7 +149,25 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/health/live", get(live_health))
         .route("/health/ready", get(ready_health))
         .nest("/api", api)
+        .layer(local_cors())
         .with_state(state)
+}
+
+/// CORS for browser previews of the desktop UI. Only local-origin pages may
+/// call this API; the bearer-token gate still applies to every /api route.
+fn local_cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _| {
+            origin.to_str().is_ok_and(|value| {
+                let localhost = value
+                    .strip_prefix("http://localhost")
+                    .or_else(|| value.strip_prefix("http://127.0.0.1"));
+                localhost.is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+                    || value == "tauri://localhost"
+            })
+        }))
+        .allow_methods([Method::GET])
+        .allow_headers([header::AUTHORIZATION])
 }
 
 pub async fn serve<F>(
@@ -210,6 +231,10 @@ async fn plan_status(State(state): State<ApiState>) -> ApiResult<PlanReport> {
             .data(plan.phases.len().to_string()),
     );
     Ok(Json(plan))
+}
+
+async fn list_recipes() -> Json<Vec<StackRecipe>> {
+    Json(ade_core::recipe::builtin_recipes())
 }
 
 async fn list_leases(State(state): State<ApiState>) -> ApiResult<Vec<PathLease>> {
