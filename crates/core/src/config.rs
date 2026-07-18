@@ -40,6 +40,19 @@ impl Default for Environment {
     }
 }
 
+impl Environment {
+    /// Select the active environment from the `ADE_ENV` process variable,
+    /// defaulting to [`Environment::Local`]. `ADE_ENV` is read from the real
+    /// process environment (not from `.env` files) so it can pick which
+    /// `.env.<env>` file to load.
+    pub fn from_env() -> Result<Self, AdeError> {
+        match env::var("ADE_ENV") {
+            Ok(v) if !v.trim().is_empty() => v.parse().map_err(AdeError::Config),
+            _ => Ok(Self::default()),
+        }
+    }
+}
+
 impl std::str::FromStr for Environment {
     type Err = String;
 
@@ -73,16 +86,26 @@ pub struct AdeConfig {
 }
 
 impl AdeConfig {
-    /// Load configuration from the process environment.
+    /// Load configuration, auto-loading `.env` files into the process
+    /// environment first.
     ///
-    /// `ADE_ENV` selects the profile (default [`Environment::Local`]). Provider
-    /// API keys are intentionally NOT read here — those live in the OS keychain
-    /// (BYOK) and are resolved separately.
+    /// `ADE_ENV` (read from the real environment) selects the profile
+    /// (default [`Environment::Local`]). Env files are then loaded with the
+    /// following precedence (highest first):
+    ///
+    /// 1. Real process/shell environment variables (never overridden)
+    /// 2. `.env.<env>` — environment-specific overrides
+    /// 3. `.env` — shared base defaults
+    ///
+    /// Provider API keys are intentionally NOT read here — those live in the
+    /// OS keychain (BYOK) and are resolved separately.
     pub fn load() -> Result<Self, AdeError> {
-        let environment = match env::var("ADE_ENV") {
-            Ok(v) if !v.trim().is_empty() => v.parse().map_err(AdeError::Config)?,
-            _ => Environment::default(),
-        };
+        let environment = Environment::from_env()?;
+        // dotenvy does not override variables already present in the
+        // environment, so loading the specific file before the base file
+        // makes `.env.<env>` win over `.env`, and both lose to real env vars.
+        let _ = dotenvy::from_filename(format!(".env.{}", environment.as_str()));
+        let _ = dotenvy::dotenv();
         Self::for_environment(environment)
     }
 
