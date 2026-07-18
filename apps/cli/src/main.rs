@@ -46,7 +46,18 @@ enum WorkspaceAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let config = ade_core::config::AdeConfig::load()?;
+    // Respect an explicit RUST_LOG, otherwise fall back to the profile default.
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", &config.log_level);
+    }
     tracing_subscriber::fmt::init();
+    tracing::info!(
+        environment = %config.environment,
+        data_dir = %config.data_dir.display(),
+        "ADE starting"
+    );
+
     let cli = Cli::parse();
 
     match &cli.command {
@@ -71,18 +82,16 @@ async fn main() -> anyhow::Result<()> {
             println!("Running verify gate: {}", g);
             println!("Coming soon: G0-G5 verify runner");
         }
-        Commands::Workspace { action } => {
-            match action {
-                Some(WorkspaceAction::List) => println!("Workspaces: (none)"),
-                Some(WorkspaceAction::Create { name }) => {
-                    println!("Creating workspace: {}", name);
-                }
-                Some(WorkspaceAction::Delete { id }) => {
-                    println!("Deleting workspace: {}", id);
-                }
-                None => println!("Workspace subcommand required"),
+        Commands::Workspace { action } => match action {
+            Some(WorkspaceAction::List) => println!("Workspaces: (none)"),
+            Some(WorkspaceAction::Create { name }) => {
+                println!("Creating workspace: {}", name);
             }
-        }
+            Some(WorkspaceAction::Delete { id }) => {
+                println!("Deleting workspace: {}", id);
+            }
+            None => println!("Workspace subcommand required"),
+        },
         Commands::Analytics => {
             println!("Analytics dashboard — coming soon");
         }

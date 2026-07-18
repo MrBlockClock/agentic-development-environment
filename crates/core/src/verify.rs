@@ -23,9 +23,7 @@ impl VerifyGate {
     }
 
     pub fn all() -> Vec<VerifyGate> {
-        vec![
-            Self::G0, Self::G1, Self::G2, Self::G3, Self::G4, Self::G5,
-        ]
+        vec![Self::G0, Self::G1, Self::G2, Self::G3, Self::G4, Self::G5]
     }
 }
 
