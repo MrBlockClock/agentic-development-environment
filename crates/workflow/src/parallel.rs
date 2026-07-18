@@ -315,7 +315,7 @@ impl WorktreeManager {
         git_output(&self.root, &arg_refs)?;
         self.list()?
             .into_iter()
-            .find(|item| Path::new(&item.path) == absolute)
+            .find(|item| same_worktree_path(Path::new(&item.path), &absolute))
             .ok_or_else(|| AdeError::Other("worktree created but not listed by git".into()))
     }
 
@@ -368,7 +368,7 @@ fn normalize_lease_path(path: &str) -> Result<String, AdeError> {
     if trimmed.is_empty()
         || trimmed.contains('\0')
         || trimmed.split('/').any(|part| part == "..")
-        || Path::new(&trimmed).is_absolute()
+        || looks_host_absolute(path)
         || trimmed.starts_with("~/")
     {
         return Err(AdeError::Authorization(format!(
@@ -376,6 +376,19 @@ fn normalize_lease_path(path: &str) -> Result<String, AdeError> {
         )));
     }
     Ok(trimmed)
+}
+
+fn looks_host_absolute(value: &str) -> bool {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return true;
+    }
+    let normalized = value.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.starts_with("~/") {
+        return true;
+    }
+    let bytes = normalized.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn paths_overlap(a: &str, b: &str) -> bool {
@@ -477,6 +490,28 @@ fn canonicalize_worktree_path(root: &Path, path: &Path) -> Result<PathBuf, AdeEr
         ));
     }
     Ok(normalized)
+}
+
+fn same_worktree_path(left: &Path, right: &Path) -> bool {
+    if normalize_path_key(left) == normalize_path_key(right) {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(a), Ok(b)) => normalize_path_key(&a) == normalize_path_key(&b),
+        _ => false,
+    }
+}
+
+fn normalize_path_key(path: &Path) -> String {
+    let mut key = path.to_string_lossy().replace('\\', "/");
+    while key.ends_with('/') && key.len() > 1 {
+        key.pop();
+    }
+    // Git on Windows may emit different drive-letter casing than PathBuf.
+    if cfg!(windows) {
+        key.make_ascii_lowercase();
+    }
+    key
 }
 
 fn worktree_is_dirty(path: &Path) -> Result<bool, AdeError> {

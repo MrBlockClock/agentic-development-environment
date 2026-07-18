@@ -270,7 +270,7 @@ dist/
 
 fn ensure_safe_owned_path(rel: &str) -> Result<(), AdeError> {
     let path = Path::new(rel);
-    if path.is_absolute() {
+    if looks_absolute(rel) {
         return Err(AdeError::Execution(format!(
             "owned_path '{rel}' must be relative — refusing absolute path"
         )));
@@ -284,6 +284,21 @@ fn ensure_safe_owned_path(rel: &str) -> Result<(), AdeError> {
         return Err(AdeError::Execution("owned_path is empty or invalid".into()));
     }
     Ok(())
+}
+
+/// Reject host-absolute paths on every OS, including Windows drive/UNC forms on Unix
+/// and Unix-rooted paths on Windows.
+fn looks_absolute(value: &str) -> bool {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return true;
+    }
+    let normalized = value.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.starts_with("~/") {
+        return true;
+    }
+    let bytes = normalized.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn roots_match(plan_root: &str, current: &str) -> bool {
@@ -405,6 +420,9 @@ mod tests {
     fn rejects_path_escape() {
         assert!(ensure_safe_owned_path("../secrets").is_err());
         assert!(ensure_safe_owned_path(r"C:\Windows").is_err());
+        assert!(ensure_safe_owned_path("C:/Windows").is_err());
+        assert!(ensure_safe_owned_path("//server/share").is_err());
+        assert!(ensure_safe_owned_path("/etc/passwd").is_err());
         assert!(ensure_safe_owned_path("AGENTS.md").is_ok());
     }
 
