@@ -45,6 +45,19 @@ enum Commands {
     Verify {
         #[arg(short, long)]
         gate: Option<String>,
+        /// Run every gate from G0 through the selected gate, stopping on failure
+        #[arg(long)]
+        through: bool,
+    },
+    /// Manage BYOK provider keys in the OS credential vault
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
+    },
+    /// Inspect MCP (Model Context Protocol) servers
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
     },
     /// Manage workspaces
     Workspace {
@@ -60,6 +73,53 @@ enum WorkspaceAction {
     List,
     Create { name: String },
     Delete { id: String },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Spawn a server, list its tools, then shut it down
+    Tools {
+        /// Registry name for the server (1-64 letters, digits, '.', '-', '_')
+        #[arg(long)]
+        name: String,
+        /// Executable to spawn (no shell interpretation)
+        #[arg(long)]
+        command: String,
+        /// Argument passed to the executable (repeatable)
+        #[arg(long = "arg", allow_hyphen_values = true)]
+        args: Vec<String>,
+        /// Confirm you reviewed this exact command and argument list
+        #[arg(long)]
+        approve: bool,
+        /// Seconds to wait for the server to initialize
+        #[arg(long, default_value_t = 15)]
+        timeout: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeysAction {
+    /// Store or replace a provider key (prompted with hidden input)
+    Set {
+        provider: String,
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Check whether a provider key is configured (never prints the key)
+    Status {
+        provider: String,
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Permanently remove a provider key from the OS credential vault
+    Delete {
+        provider: String,
+        #[arg(long)]
+        profile: Option<String>,
+        /// Confirm permanent credential deletion
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[tokio::main]
@@ -103,6 +163,14 @@ async fn main() -> anyhow::Result<()> {
             let out = config.data_dir.join("last-audit.json");
             std::fs::create_dir_all(&config.data_dir)?;
             std::fs::write(&out, serde_json::to_string_pretty(&report)?)?;
+            persist_report(
+                &config,
+                ade_db::reports::ReportKind::Audit,
+                ade_core::audit::AUDIT_SCHEMA,
+                &report.root,
+                &report,
+            )
+            .await?;
             println!("Wrote {}", out.display());
         }
         Commands::Plan => {
@@ -139,6 +207,14 @@ async fn main() -> anyhow::Result<()> {
             let out = config.data_dir.join("last-plan.json");
             std::fs::create_dir_all(&config.data_dir)?;
             std::fs::write(&out, serde_json::to_string_pretty(&plan)?)?;
+            persist_report(
+                &config,
+                ade_db::reports::ReportKind::Plan,
+                ade_core::plan::PLAN_SCHEMA,
+                &plan.audit_root,
+                &plan,
+            )
+            .await?;
             println!("Wrote {}", out.display());
         }
         Commands::Execute {
@@ -184,6 +260,14 @@ async fn main() -> anyhow::Result<()> {
             let out = config.data_dir.join("last-execute.json");
             std::fs::create_dir_all(&config.data_dir)?;
             std::fs::write(&out, serde_json::to_string_pretty(&report)?)?;
+            persist_report(
+                &config,
+                ade_db::reports::ReportKind::Execute,
+                ade_core::execute::EXECUTE_SCHEMA,
+                &root.display().to_string(),
+                &report,
+            )
+            .await?;
             println!("Wrote {}", out.display());
         }
         Commands::Init {
@@ -217,11 +301,135 @@ async fn main() -> anyhow::Result<()> {
                 println!("  {:<18} {} — {}", r.id, r.name, r.description);
             }
         }
-        Commands::Verify { gate } => {
-            let g = gate.as_deref().unwrap_or("G0");
-            println!("Running verify gate: {}", g);
-            println!("Coming soon: G0-G5 verify runner");
+        Commands::Verify { gate, through } => {
+            let gate: ade_core::verify::VerifyGate = gate
+                .as_deref()
+                .unwrap_or("G0")
+                .parse()
+                .map_err(anyhow::Error::msg)?;
+            let runner = ade_workflow::verify::VerifyRunner::new();
+            let results = if *through {
+                runner.run_through(gate).await
+            } else {
+                vec![runner.run_gate(gate).await]
+            };
+
+            for result in &results {
+                println!(
+                    "{} {} — {}",
+                    if result.passed { "PASS" } else { "FAIL" },
+                    result.gate,
+                    result.command
+                );
+                if let Some(stdout) = &result.stdout {
+                    if !stdout.trim().is_empty() {
+                        println!("{stdout}");
+                    }
+                }
+                if let Some(stderr) = &result.stderr {
+                    if !stderr.trim().is_empty() {
+                        eprintln!("{stderr}");
+                    }
+                }
+            }
+
+            let out = config.data_dir.join("last-verify.json");
+            std::fs::create_dir_all(&config.data_dir)?;
+            std::fs::write(&out, serde_json::to_string_pretty(&results)?)?;
+            let root = std::env::current_dir()?;
+            persist_report(
+                &config,
+                ade_db::reports::ReportKind::Verify,
+                ade_core::verify::VERIFY_SCHEMA,
+                &root.display().to_string(),
+                &results,
+            )
+            .await?;
+            println!("Wrote {}", out.display());
+
+            if results.iter().any(|result| !result.passed) {
+                anyhow::bail!("verification failed");
+            }
         }
+        Commands::Keys { action } => match action {
+            KeysAction::Set { provider, profile } => {
+                let profile = profile
+                    .clone()
+                    .unwrap_or_else(|| config.environment.to_string());
+                let vault = ade_db::secrets::SecretsVault::for_profile(&profile)?;
+                let secret = rpassword::prompt_password(format!(
+                    "Enter API key for {provider} ({profile}; input hidden): "
+                ))?;
+                vault.set(provider, &secret)?;
+                println!("Stored {provider} key in the OS credential vault ({profile})");
+            }
+            KeysAction::Status { provider, profile } => {
+                let profile = profile
+                    .clone()
+                    .unwrap_or_else(|| config.environment.to_string());
+                let vault = ade_db::secrets::SecretsVault::for_profile(&profile)?;
+                println!(
+                    "{} key is {} for profile {}",
+                    provider,
+                    if vault.contains(provider)? {
+                        "configured"
+                    } else {
+                        "not configured"
+                    },
+                    profile
+                );
+            }
+            KeysAction::Delete {
+                provider,
+                profile,
+                confirm,
+            } => {
+                if !confirm {
+                    anyhow::bail!(
+                        "credential deletion is permanent; rerun with --confirm to proceed"
+                    );
+                }
+                let profile = profile
+                    .clone()
+                    .unwrap_or_else(|| config.environment.to_string());
+                let vault = ade_db::secrets::SecretsVault::for_profile(&profile)?;
+                if vault.delete(provider)? {
+                    println!("Deleted {provider} key from profile {profile}");
+                } else {
+                    println!("No {provider} key was configured for profile {profile}");
+                }
+            }
+        },
+        Commands::Mcp { action } => match action {
+            McpAction::Tools {
+                name,
+                command,
+                args,
+                approve,
+                timeout,
+            } => {
+                let host = ade_agents::mcp::McpHost::with_timeout(std::time::Duration::from_secs(
+                    *timeout,
+                ));
+                host.connect_server(ade_agents::mcp::McpServerConfig {
+                    name: name.clone(),
+                    command: command.clone(),
+                    args: args.clone(),
+                    approved: *approve,
+                })
+                .await?;
+                let tools = host.list_tools().await?;
+                if tools.is_empty() {
+                    println!("{name} exposes no tools");
+                } else {
+                    println!("Tools exposed by {name}:");
+                    for tool in &tools {
+                        println!("  {:<28} {}", tool.name, tool.description);
+                    }
+                }
+                host.disconnect_server(name).await?;
+            }
+        },
         Commands::Workspace { action } => match action {
             Some(WorkspaceAction::List) => println!("Workspaces: (none)"),
             Some(WorkspaceAction::Create { name }) => {
@@ -237,5 +445,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn persist_report<T: serde::Serialize>(
+    config: &ade_core::config::AdeConfig,
+    kind: ade_db::reports::ReportKind,
+    schema: &str,
+    workspace_root: &str,
+    report: &T,
+) -> anyhow::Result<()> {
+    let db_config = ade_db::repo::DbConfig::from_ade_config(config);
+    let database = ade_db::repo::AdeDatabase::open(&db_config).await?;
+    let store = ade_db::reports::ReportStore::new(database.connect()?);
+    store.save(kind, schema, workspace_root, report).await?;
     Ok(())
 }
