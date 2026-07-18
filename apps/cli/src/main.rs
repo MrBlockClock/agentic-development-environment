@@ -212,6 +212,19 @@ enum LeaseAction {
         #[arg(long)]
         approve: bool,
     },
+    /// Renew (heartbeat) an active lease held by an agent
+    Renew {
+        id: String,
+        /// Agent id (UUID) that holds the lease
+        #[arg(long)]
+        agent: String,
+        /// New lease lifetime in seconds, measured from now
+        #[arg(long, default_value_t = 28_800)]
+        ttl_secs: i64,
+        /// Confirm this mutating ownership change
+        #[arg(long)]
+        approve: bool,
+    },
     /// Release a lease by id
     Release {
         id: String,
@@ -881,6 +894,27 @@ async fn main() -> anyhow::Result<()> {
                     let lease = manager.acquire(agent_id, path, mode, ttl)?;
                     println!(
                         "Acquired {} lease {} on {} until {}",
+                        lease.mode.as_str(),
+                        lease.id,
+                        lease.path,
+                        lease.expires_at.to_rfc3339()
+                    );
+                }
+                LeaseAction::Renew {
+                    id,
+                    agent,
+                    ttl_secs,
+                    approve,
+                } => {
+                    if !approve {
+                        anyhow::bail!("lease renew mutates ownership; rerun with --approve");
+                    }
+                    let agent_id = uuid::Uuid::parse_str(agent)
+                        .map_err(|error| anyhow::anyhow!("invalid --agent uuid: {error}"))?;
+                    let ttl = chrono::Duration::seconds(*ttl_secs);
+                    let lease = manager.renew(agent_id, id, ttl)?;
+                    println!(
+                        "Renewed {} lease {} on {} until {}",
                         lease.mode.as_str(),
                         lease.id,
                         lease.path,

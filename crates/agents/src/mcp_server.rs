@@ -3,7 +3,7 @@ use ade_core::error::AdeError;
 use ade_core::handoff::HandoffCapsule;
 use ade_core::plan::PlanBuilder;
 use ade_core::verify::VerifyGate;
-use ade_workflow::parallel::LeaseManager;
+use ade_workflow::parallel::{LeaseManager, LeaseMode};
 use ade_workflow::verify::VerifyRunner;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -82,7 +82,11 @@ impl AdeMcpServer {
                     .pointer("/params/name")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                self.call_tool(name)?
+                let arguments = request
+                    .pointer("/params/arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                self.call_tool(name, &arguments)?
             }
             "ping" => json!({}),
             _ => {
@@ -138,10 +142,61 @@ impl AdeMcpServer {
                 "ade_lease_list",
                 "List active path leases without mutating ownership",
             ),
+            tool_def_with_schema(
+                "ade_lease_acquire",
+                "Acquire a durable path lease for an agent (mutating; requires approve=true)",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "agent_id": { "type": "string", "description": "UUID of the requesting agent" },
+                        "path": { "type": "string", "description": "Relative workspace path to lease" },
+                        "mode": { "type": "string", "enum": ["observe", "cooperative", "strong", "exclusive"] },
+                        "ttl_secs": { "type": "integer", "minimum": 1 },
+                        "approve": { "type": "boolean", "description": "Explicit human approval for this ownership change" }
+                    },
+                    "required": ["agent_id", "path", "approve"],
+                    "additionalProperties": false
+                }),
+            ),
+            tool_def_with_schema(
+                "ade_lease_renew",
+                "Renew (heartbeat) an active lease held by the same agent (mutating; requires approve=true)",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "agent_id": { "type": "string", "description": "UUID of the lease holder" },
+                        "lease_id": { "type": "string" },
+                        "ttl_secs": { "type": "integer", "minimum": 1 },
+                        "approve": { "type": "boolean", "description": "Explicit human approval for this ownership change" }
+                    },
+                    "required": ["agent_id", "lease_id", "approve"],
+                    "additionalProperties": false
+                }),
+            ),
+            tool_def_with_schema(
+                "ade_lease_release",
+                "Release a lease held by the same agent (mutating; requires approve=true)",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "agent_id": { "type": "string", "description": "UUID of the lease holder" },
+                        "lease_id": { "type": "string" },
+                        "approve": { "type": "boolean", "description": "Explicit human approval for this ownership change" }
+                    },
+                    "required": ["agent_id", "lease_id", "approve"],
+                    "additionalProperties": false
+                }),
+            ),
         ]
     }
 
-    fn call_tool(&self, name: &str) -> Result<Value, AdeError> {
+    fn call_tool(&self, name: &str, arguments: &Value) -> Result<Value, AdeError> {
+        if matches!(
+            name,
+            "ade_lease_acquire" | "ade_lease_renew" | "ade_lease_release"
+        ) {
+            return self.call_mutating_tool(name, arguments);
+        }
         let text = match name {
             "ade_audit_status" => {
                 let report = AuditRunner::new(&self.root).run(AuditMode::EvaluateExisting);
@@ -187,6 +242,88 @@ impl AdeMcpServer {
             "isError": false
         }))
     }
+
+    /// Lease mutations require an explicit `approve: true` argument and are
+    /// always bound to the supplied agent identity, mirroring the CLI gates.
+    fn call_mutating_tool(&self, name: &str, arguments: &Value) -> Result<Value, AdeError> {
+        if arguments.get("approve").and_then(Value::as_bool) != Some(true) {
+            return Ok(tool_error(format!(
+                "'{name}' mutates ownership; call again with approve=true"
+            )));
+        }
+        let Some(agent_id) = arguments
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+        else {
+            return Ok(tool_error("'agent_id' must be a valid UUID".into()));
+        };
+        let ttl_secs = arguments
+            .get("ttl_secs")
+            .and_then(Value::as_i64)
+            .unwrap_or(28_800);
+        let manager = LeaseManager::new(&self.root);
+
+        let outcome = match name {
+            "ade_lease_acquire" => {
+                let Some(path) = arguments.get("path").and_then(Value::as_str) else {
+                    return Ok(tool_error("'path' is required".into()));
+                };
+                let mode = arguments
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or("strong");
+                LeaseMode::parse(mode).and_then(|mode| {
+                    manager.acquire(agent_id, path, mode, chrono::Duration::seconds(ttl_secs))
+                })
+            }
+            "ade_lease_renew" => {
+                let Some(lease_id) = arguments.get("lease_id").and_then(Value::as_str) else {
+                    return Ok(tool_error("'lease_id' is required".into()));
+                };
+                manager.renew(agent_id, lease_id, chrono::Duration::seconds(ttl_secs))
+            }
+            "ade_lease_release" => {
+                let Some(lease_id) = arguments.get("lease_id").and_then(Value::as_str) else {
+                    return Ok(tool_error("'lease_id' is required".into()));
+                };
+                let held = manager
+                    .list()?
+                    .into_iter()
+                    .find(|lease| lease.id == lease_id);
+                match held {
+                    Some(lease) if lease.agent_id == agent_id => {
+                        manager.release(lease_id)?;
+                        return Ok(json!({
+                            "content": [{ "type": "text", "text": format!("released lease {lease_id}") }],
+                            "isError": false
+                        }));
+                    }
+                    Some(lease) => Err(AdeError::Authorization(format!(
+                        "lease '{lease_id}' is held by {}, not {agent_id}",
+                        lease.agent_id
+                    ))),
+                    None => Err(AdeError::Other(format!("lease '{lease_id}' is not active"))),
+                }
+            }
+            _ => unreachable!("guarded by caller"),
+        };
+
+        match outcome {
+            Ok(lease) => Ok(json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&lease)? }],
+                "isError": false
+            })),
+            Err(error) => Ok(tool_error(error.to_string())),
+        }
+    }
+}
+
+fn tool_error(message: String) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": message }],
+        "isError": true
+    })
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -201,10 +338,18 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn tool_def(name: &str, description: &str) -> Value {
+    tool_def_with_schema(
+        name,
+        description,
+        json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+    )
+}
+
+fn tool_def_with_schema(name: &str, description: &str, schema: Value) -> Value {
     json!({
         "name": name,
         "description": description,
-        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        "inputSchema": schema
     })
 }
 
@@ -232,8 +377,81 @@ mod tests {
             .tools()
             .iter()
             .any(|tool| tool["name"] == "ade_lease_list"));
-        let result = server.call_tool("ade_lease_list").unwrap();
+        let result = server.call_tool("ade_lease_list", &json!({})).unwrap();
         assert!(result.to_string().contains("src/feature"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lease_mutations_require_approval_and_holder_identity() {
+        let root = std::env::temp_dir().join(format!("ade-mcp-mutate-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let server = AdeMcpServer::new(&root);
+        let holder = Uuid::new_v4();
+
+        // Refused without approve=true.
+        let refused = server
+            .call_tool(
+                "ade_lease_acquire",
+                &json!({ "agent_id": holder.to_string(), "path": "src/api" }),
+            )
+            .unwrap();
+        assert_eq!(refused["isError"], true);
+
+        // Acquire with approval succeeds.
+        let acquired = server
+            .call_tool(
+                "ade_lease_acquire",
+                &json!({
+                    "agent_id": holder.to_string(),
+                    "path": "src/api",
+                    "mode": "strong",
+                    "ttl_secs": 300,
+                    "approve": true
+                }),
+            )
+            .unwrap();
+        assert_eq!(acquired["isError"], false);
+        let lease: ade_workflow::parallel::PathLease =
+            serde_json::from_str(acquired["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        // Renew works for the holder, fails for a stranger.
+        let renewed = server
+            .call_tool(
+                "ade_lease_renew",
+                &json!({
+                    "agent_id": holder.to_string(),
+                    "lease_id": lease.id,
+                    "ttl_secs": 600,
+                    "approve": true
+                }),
+            )
+            .unwrap();
+        assert_eq!(renewed["isError"], false);
+        let stranger_release = server
+            .call_tool(
+                "ade_lease_release",
+                &json!({
+                    "agent_id": Uuid::new_v4().to_string(),
+                    "lease_id": lease.id,
+                    "approve": true
+                }),
+            )
+            .unwrap();
+        assert_eq!(stranger_release["isError"], true);
+
+        // Holder can release.
+        let released = server
+            .call_tool(
+                "ade_lease_release",
+                &json!({
+                    "agent_id": holder.to_string(),
+                    "lease_id": lease.id,
+                    "approve": true
+                }),
+            )
+            .unwrap();
+        assert_eq!(released["isError"], false);
         let _ = std::fs::remove_dir_all(root);
     }
 

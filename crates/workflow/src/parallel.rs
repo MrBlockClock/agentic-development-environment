@@ -214,6 +214,42 @@ impl LeaseManager {
         Ok(removed)
     }
 
+    /// Extend an active lease's expiry (heartbeat). Only the holding agent may
+    /// renew, and expired leases cannot be revived — they must be re-acquired
+    /// so conflict checks run again.
+    pub fn renew(
+        &self,
+        agent_id: Uuid,
+        lease_id: &str,
+        ttl: Duration,
+    ) -> Result<PathLease, AdeError> {
+        validate_lease_id(lease_id)?;
+        if ttl <= Duration::zero() {
+            return Err(AdeError::Other("lease ttl must be positive".into()));
+        }
+        let mut registry = self.load()?;
+        purge_expired(&mut registry);
+        let lease = registry
+            .leases
+            .iter_mut()
+            .find(|lease| lease.id == lease_id)
+            .ok_or_else(|| {
+                AdeError::Other(format!(
+                    "lease '{lease_id}' is not active (expired or released)"
+                ))
+            })?;
+        if lease.agent_id != agent_id {
+            return Err(AdeError::Authorization(format!(
+                "lease '{lease_id}' is held by {}, not {agent_id}",
+                lease.agent_id
+            )));
+        }
+        lease.expires_at = Utc::now() + ttl;
+        let renewed = lease.clone();
+        self.save(&registry)?;
+        Ok(renewed)
+    }
+
     pub fn release_stale(&self) -> Result<usize, AdeError> {
         let mut registry = self.load()?;
         let before = registry.leases.len();
@@ -660,6 +696,45 @@ mod tests {
             message.contains("lease conflict") || message.contains("serialized"),
             "{message}"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renews_only_active_leases_held_by_the_same_agent() {
+        let root = fixture_repo();
+        let manager = LeaseManager::new(&root);
+        let holder = Uuid::new_v4();
+        let lease = manager
+            .acquire(holder, "src/api", LeaseMode::Strong, Duration::minutes(5))
+            .unwrap();
+
+        let renewed = manager
+            .renew(holder, &lease.id, Duration::minutes(30))
+            .unwrap();
+        assert!(renewed.expires_at > lease.expires_at);
+
+        let stranger = Uuid::new_v4();
+        assert!(manager
+            .renew(stranger, &lease.id, Duration::minutes(30))
+            .is_err());
+
+        // Expired leases cannot be revived via renew.
+        let registry = LeaseRegistry {
+            schema: LEASE_REGISTRY_SCHEMA.into(),
+            leases: vec![PathLease {
+                id: lease.id.clone(),
+                agent_id: holder,
+                path: "src/api".into(),
+                mode: LeaseMode::Strong,
+                created_at: Utc::now() - Duration::hours(2),
+                expires_at: Utc::now() - Duration::minutes(1),
+                protected: false,
+            }],
+        };
+        manager.save(&registry).unwrap();
+        assert!(manager
+            .renew(holder, &lease.id, Duration::minutes(30))
+            .is_err());
         let _ = fs::remove_dir_all(root);
     }
 
