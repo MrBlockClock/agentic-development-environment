@@ -7,9 +7,10 @@ use std::path::PathBuf;
 ///
 /// Selected at launch via the `ADE_ENV` variable. Each environment keeps its
 /// own isolated data directory so state never bleeds between profiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Environment {
+    #[default]
     Local,
     Staging,
     Production,
@@ -31,12 +32,6 @@ impl Environment {
             Self::Staging => "info",
             Self::Production => "warn",
         }
-    }
-}
-
-impl Default for Environment {
-    fn default() -> Self {
-        Self::Local
     }
 }
 

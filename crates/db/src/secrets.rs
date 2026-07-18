@@ -1,5 +1,11 @@
 pub struct SecretsVault;
 
+impl Default for SecretsVault {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SecretsVault {
     pub fn new() -> Self {
         Self

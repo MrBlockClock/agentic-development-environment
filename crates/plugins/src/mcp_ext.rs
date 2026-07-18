@@ -1,5 +1,11 @@
 pub struct McpPluginLoader;
 
+impl Default for McpPluginLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl McpPluginLoader {
     pub fn new() -> Self {
         Self

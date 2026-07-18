@@ -1,18 +1,37 @@
-use daemon_kit::Daemon;
+use daemon_kit::{Daemon, DaemonConfig, Result};
 
-pub struct AdeDaemon;
+pub struct AdeDaemon {
+    inner: Daemon,
+}
 
-impl Daemon for AdeDaemon {
-    fn name(&self) -> &str {
+impl AdeDaemon {
+    pub fn new() -> Self {
+        let config = DaemonConfig::new("ade-daemon")
+            .description("ADE background service")
+            .service_args(vec!["daemon".to_string(), "--foreground".to_string()]);
+        Self {
+            inner: Daemon::new(config),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
         "ade-daemon"
     }
 
-    fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // TODO: start HTTP API, agent worker, scheduler
-        Ok(())
+    pub fn start(&self, foreground: bool) -> Result<()> {
+        self.inner.start(foreground, || {
+            // TODO: start HTTP API, agent worker, scheduler
+            Ok(())
+        })
     }
 
-    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(())
+    pub fn stop(&self) -> Result<()> {
+        self.inner.stop()
+    }
+}
+
+impl Default for AdeDaemon {
+    fn default() -> Self {
+        Self::new()
     }
 }

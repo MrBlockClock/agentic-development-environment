@@ -1,5 +1,11 @@
 pub struct PluginSandbox;
 
+impl Default for PluginSandbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginSandbox {
     pub fn new() -> Self {
         Self

@@ -3,6 +3,12 @@ use ade_core::plan::Phase;
 
 pub struct PhaseExecutor;
 
+impl Default for PhaseExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhaseExecutor {
     pub fn new() -> Self {
         Self

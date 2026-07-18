@@ -10,6 +10,12 @@ pub enum Phase {
 
 pub struct PhaseRouter;
 
+impl Default for PhaseRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhaseRouter {
     pub fn new() -> Self {
         Self
@@ -33,10 +39,7 @@ impl PhaseRouter {
         unimplemented!("PLAN phase implementation")
     }
 
-    pub async fn run_execute(
-        &self,
-        _plan: &PlanReport,
-    ) -> ExecuteReport {
+    pub async fn run_execute(&self, _plan: &PlanReport) -> ExecuteReport {
         unimplemented!("EXECUTE phase implementation")
     }
 }

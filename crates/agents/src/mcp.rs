@@ -1,5 +1,11 @@
 pub struct McpHost;
 
+impl Default for McpHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl McpHost {
     pub fn new() -> Self {
         Self

@@ -4,6 +4,12 @@ pub struct PluginRegistry {
     pub dirs: Vec<PathBuf>,
 }
 
+impl Default for PluginRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginRegistry {
     pub fn new() -> Self {
         Self { dirs: vec![] }

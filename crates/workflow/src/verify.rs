@@ -1,7 +1,12 @@
-use std::process::Command;
 use ade_core::verify::{VerifyGate, VerifyResult};
 
 pub struct VerifyRunner;
+
+impl Default for VerifyRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl VerifyRunner {
     pub fn new() -> Self {

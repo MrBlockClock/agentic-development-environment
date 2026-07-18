@@ -2,6 +2,12 @@ use ade_core::handoff::HandoffCapsule;
 
 pub struct HandoffManager;
 
+impl Default for HandoffManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HandoffManager {
     pub fn new() -> Self {
         Self

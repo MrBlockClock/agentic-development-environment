@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 pub struct ProviderConfig {
     pub name: String,
     pub base_url: String,
@@ -18,6 +16,12 @@ pub struct ModelConfig {
 
 pub struct ProviderManager;
 
+impl Default for ProviderManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProviderManager {
     pub fn new() -> Self {
         Self
@@ -27,11 +31,7 @@ impl ProviderManager {
         vec![]
     }
 
-    pub fn select_model(
-        &self,
-        _task_type: &str,
-        _budget: Option<f64>,
-    ) -> Option<String> {
+    pub fn select_model(&self, _task_type: &str, _budget: Option<f64>) -> Option<String> {
         None
     }
 }

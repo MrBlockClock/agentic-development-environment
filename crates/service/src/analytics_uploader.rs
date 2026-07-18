@@ -1,5 +1,11 @@
 pub struct AnalyticsUploader;
 
+impl Default for AnalyticsUploader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnalyticsUploader {
     pub fn new() -> Self {
         Self

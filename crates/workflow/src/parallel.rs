@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use uuid::Uuid;
 
 pub enum LeaseMode {
@@ -16,17 +15,18 @@ pub struct PathLease {
 
 pub struct WorktreeManager;
 
+impl Default for WorktreeManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WorktreeManager {
     pub fn new() -> Self {
         Self
     }
 
-    pub fn lease_path(
-        &self,
-        _agent_id: Uuid,
-        _path: &str,
-        _mode: LeaseMode,
-    ) -> Result<(), String> {
+    pub fn lease_path(&self, _agent_id: Uuid, _path: &str, _mode: LeaseMode) -> Result<(), String> {
         // TODO: check for conflicts, register lease
         Ok(())
     }

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 pub struct TaskModelInsight {
     pub model: String,
     pub accept_rate: f32,
@@ -9,6 +7,12 @@ pub struct TaskModelInsight {
 }
 
 pub struct ModelSelector;
+
+impl Default for ModelSelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ModelSelector {
     pub fn new() -> Self {

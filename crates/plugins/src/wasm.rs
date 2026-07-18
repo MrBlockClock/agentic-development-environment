@@ -1,5 +1,11 @@
 pub struct WasmPluginHost;
 
+impl Default for WasmPluginHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WasmPluginHost {
     pub fn new() -> Self {
         Self

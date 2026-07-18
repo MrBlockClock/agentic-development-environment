@@ -3,10 +3,11 @@ use serde::{Deserialize, Serialize};
 pub const AUDIT_SCHEMA: &str = "ade.audit.report/v1";
 
 /// How the AUDIT phase was invoked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditMode {
     /// Score an existing project/environment.
+    #[default]
     EvaluateExisting,
     /// Assess a greenfield/bootstrap setup.
     Bootstrap,
@@ -18,12 +19,6 @@ impl AuditMode {
             Self::EvaluateExisting => "evaluate_existing",
             Self::Bootstrap => "bootstrap",
         }
-    }
-}
-
-impl Default for AuditMode {
-    fn default() -> Self {
-        Self::EvaluateExisting
     }
 }
 

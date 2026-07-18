@@ -5,6 +5,12 @@ pub struct SseManager {
     tx: broadcast::Sender<Event>,
 }
 
+impl Default for SseManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SseManager {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(100);

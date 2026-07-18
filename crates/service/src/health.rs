@@ -11,6 +11,12 @@ pub struct HealthReport {
 
 pub struct HealthChecker;
 
+impl Default for HealthChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HealthChecker {
     pub fn new() -> Self {
         Self

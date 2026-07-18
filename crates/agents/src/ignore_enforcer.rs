@@ -2,6 +2,12 @@ use ade_core::ignore::{IgnoreAlignment, IgnoreStatus, IgnoreSurface};
 
 pub struct IgnoreEnforcer;
 
+impl Default for IgnoreEnforcer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IgnoreEnforcer {
     pub fn new() -> Self {
         Self

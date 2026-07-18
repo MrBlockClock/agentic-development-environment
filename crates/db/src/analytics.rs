@@ -2,6 +2,12 @@ use ade_core::analytics::{AnalyticsEvent, ModelQualityMetrics};
 
 pub struct AnalyticsStore;
 
+impl Default for AnalyticsStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnalyticsStore {
     pub fn new() -> Self {
         Self

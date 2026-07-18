@@ -1,5 +1,11 @@
 pub struct StartPromptBuilder;
 
+impl Default for StartPromptBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StartPromptBuilder {
     pub fn new() -> Self {
         Self

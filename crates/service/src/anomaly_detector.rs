@@ -1,5 +1,11 @@
 pub struct AnomalyDetector;
 
+impl Default for AnomalyDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnomalyDetector {
     pub fn new() -> Self {
         Self
