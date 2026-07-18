@@ -16,6 +16,7 @@ This is the canonical agent contract for the ADE project itself (dogfooding).
 
 - **Runtime:** Local (Windows) or WSL2
 - **Root:** `C:\Users\caleb\OneDrive - Enspire LLC\Business based ADE`
+- **Remote:** `https://github.com/MrBlockClock/agentic-development-environment.git`
 - **Rust:** stable (rust-toolchain.toml)
 - **Node:** v22.14.0
 - **Commands:**
