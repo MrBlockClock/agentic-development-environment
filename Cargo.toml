@@ -20,9 +20,9 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 daemon-kit = "0.1"
 dotenvy = "0.15"
-keyring = "3"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 reqwest = "0.12"
-rmcp = "0.1"
+rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
 rusqlite = "0.32"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,7 +30,7 @@ tauri = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time"] }
 tower-http = "0.6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
