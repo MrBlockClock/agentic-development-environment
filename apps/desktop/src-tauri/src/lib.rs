@@ -22,6 +22,7 @@ pub fn run() {
             ade_desktop_crate::commands::mcp_call_tool,
             ade_desktop_crate::commands::run_agent_turn,
             ade_desktop_crate::commands::list_recipes,
+            ade_desktop_crate::commands::preview_recipe_scaffold,
             ade_desktop_crate::commands::initialize_recipe,
         ])
         .run(tauri::generate_context!())

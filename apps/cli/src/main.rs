@@ -405,14 +405,22 @@ async fn main() -> anyhow::Result<()> {
             });
             let ctx = ade_core::agents_contract::AgentsContractContext::new(project_name)
                 .with_root(root.display().to_string());
-            let path = ade_core::agents_contract::AgentsContractGenerator::write(
-                &root, &recipe, &ctx, *force,
-            )?;
+            let result = ade_core::scaffold::RecipeScaffold::apply(&root, &recipe, &ctx, *force)?;
             println!(
-                "Initialized recipe '{}' — wrote {}",
-                recipe.id,
-                path.display()
+                "Initialized recipe '{}' — agents={}",
+                result.recipe_id, result.agents_path
             );
+            if result.recovered_interrupted {
+                println!("Recovered an interrupted scaffold transaction before apply");
+            }
+            for file in &result.files {
+                let action = match file.action {
+                    ade_core::scaffold::ScaffoldAction::Create => "create",
+                    ade_core::scaffold::ScaffoldAction::Update => "update",
+                    ade_core::scaffold::ScaffoldAction::Preserve => "preserve",
+                };
+                println!("  {action:<8} {}", file.relative);
+            }
         }
         Commands::Recipes => {
             println!("Built-in stack recipes:");

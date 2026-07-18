@@ -116,39 +116,15 @@ The ADE follows AUDIT → PLAN → EXECUTE routing.
     }
 
     /// Write `AGENTS.md` under `root`. Refuses to overwrite unless `force`.
-    /// Also merges ADE always-ignore patterns into `.gitignore` / `.cursorignore`.
+    /// Uses a transactional scaffold with rollback for ignores and toolchain pins.
     pub fn write(
         root: impl AsRef<Path>,
         recipe: &StackRecipe,
         ctx: &AgentsContractContext,
         force: bool,
     ) -> Result<PathBuf, AdeError> {
-        let root = root.as_ref();
-        let path = root.join("AGENTS.md");
-        if path.exists() && !force {
-            return Err(AdeError::Other(format!(
-                "AGENTS.md already exists at {} (pass --force to overwrite)",
-                path.display()
-            )));
-        }
-        std::fs::write(&path, Self::render(recipe, ctx))?;
-        crate::ignore::ensure_bootstrap_ignores(root)?;
-        if recipe.toolchain.contains_key("Rust") {
-            let pin = root.join("rust-toolchain.toml");
-            if !pin.exists() {
-                std::fs::write(
-                    &pin,
-                    "[toolchain]\nchannel = \"stable\"\ncomponents = [\"rustfmt\", \"clippy\"]\n",
-                )?;
-            }
-        }
-        if recipe.toolchain.contains_key("Node") {
-            let nvmrc = root.join(".nvmrc");
-            if !nvmrc.exists() {
-                std::fs::write(&nvmrc, "22\n")?;
-            }
-        }
-        Ok(path)
+        let result = crate::scaffold::RecipeScaffold::apply(root.as_ref(), recipe, ctx, force)?;
+        Ok(PathBuf::from(result.agents_path))
     }
 }
 

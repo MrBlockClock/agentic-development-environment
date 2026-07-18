@@ -12,4 +12,5 @@ pub mod money;
 pub mod plan;
 pub mod profile;
 pub mod recipe;
+pub mod scaffold;
 pub mod verify;

@@ -483,12 +483,12 @@ pub fn list_recipes() -> Vec<StackRecipe> {
 }
 
 #[tauri::command]
-pub fn initialize_recipe(
+pub fn preview_recipe_scaffold(
     state: State<'_, AppState>,
     recipe: String,
     project_name: Option<String>,
     force: bool,
-) -> Result<String, String> {
+) -> Result<Vec<ade_core::scaffold::ScaffoldFilePlan>, String> {
     let recipe = ade_core::recipe::builtin_recipe(&recipe).map_err(|error| error.to_string())?;
     let name = project_name.unwrap_or_else(|| {
         state
@@ -500,14 +500,30 @@ pub fn initialize_recipe(
     });
     let context = ade_core::agents_contract::AgentsContractContext::new(name)
         .with_root(state.workspace_root.display().to_string());
-    ade_core::agents_contract::AgentsContractGenerator::write(
-        &state.workspace_root,
-        &recipe,
-        &context,
-        force,
-    )
-    .map(|path| path.display().to_string())
-    .map_err(|error| error.to_string())
+    ade_core::scaffold::RecipeScaffold::plan(&state.workspace_root, &recipe, &context, force)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn initialize_recipe(
+    state: State<'_, AppState>,
+    recipe: String,
+    project_name: Option<String>,
+    force: bool,
+) -> Result<ade_core::scaffold::ScaffoldResult, String> {
+    let recipe = ade_core::recipe::builtin_recipe(&recipe).map_err(|error| error.to_string())?;
+    let name = project_name.unwrap_or_else(|| {
+        state
+            .workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project")
+            .to_string()
+    });
+    let context = ade_core::agents_contract::AgentsContractContext::new(name)
+        .with_root(state.workspace_root.display().to_string());
+    ade_core::scaffold::RecipeScaffold::apply(&state.workspace_root, &recipe, &context, force)
+        .map_err(|error| error.to_string())
 }
 
 fn current_branch(root: &std::path::Path) -> Option<String> {

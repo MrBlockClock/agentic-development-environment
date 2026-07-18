@@ -133,6 +133,34 @@ pub fn ensure_bootstrap_ignores(root: &Path) -> Result<(), AdeError> {
     Ok(())
 }
 
+/// Compute the merged ignore-file body without writing to disk.
+pub fn merge_ignore_content(existing: &str) -> (String, bool) {
+    let mut lines = existing.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut changed = false;
+    if !existing.contains("ADE always-ignore") {
+        if !lines.is_empty() && !lines.last().map(|line| line.is_empty()).unwrap_or(false) {
+            lines.push(String::new());
+        }
+        lines.push("# ADE always-ignore (do not remove)".into());
+        changed = true;
+    }
+    for pattern in always_ignore_patterns() {
+        if !lines.iter().any(|line| line.trim() == *pattern) {
+            lines.push((*pattern).into());
+            changed = true;
+        }
+    }
+    let mut body = lines.join("\n");
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    // Creating a missing file always counts as a change.
+    if existing.is_empty() {
+        changed = true;
+    }
+    (body, changed)
+}
+
 /// Score ignore-surface alignment for a workspace root.
 pub fn check_alignment(root: &Path) -> Vec<IgnoreAlignment> {
     IgnoreSurface::all()
@@ -260,26 +288,8 @@ fn ensure_ignore_file(root: &Path, relative: &str) -> Result<(), AdeError> {
     } else {
         String::new()
     };
-    let mut lines = existing.lines().map(str::to_string).collect::<Vec<_>>();
-    let mut changed = false;
-    if !existing.contains("ADE always-ignore") {
-        if !lines.is_empty() && !lines.last().map(|line| line.is_empty()).unwrap_or(false) {
-            lines.push(String::new());
-        }
-        lines.push("# ADE always-ignore (do not remove)".into());
-        changed = true;
-    }
-    for pattern in always_ignore_patterns() {
-        if !lines.iter().any(|line| line.trim() == *pattern) {
-            lines.push((*pattern).into());
-            changed = true;
-        }
-    }
+    let (body, changed) = merge_ignore_content(&existing);
     if changed || !path.exists() {
-        let mut body = lines.join("\n");
-        if !body.ends_with('\n') {
-            body.push('\n');
-        }
         std::fs::write(&path, body)?;
     }
     Ok(())

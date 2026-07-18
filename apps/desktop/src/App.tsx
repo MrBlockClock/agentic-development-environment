@@ -1,5 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  RecipeWizard,
+  type ScaffoldResult,
+  type ScaffoldFilePlan,
+  type StackRecipe,
+} from "./components/RecipeWizard";
 
 type Finding = {
   layer: string;
@@ -132,20 +138,6 @@ type AgentEvent =
   | { type: "failed"; error: string }
   | { type: "cancelled"; reason: string };
 
-type StackRecipe = {
-  id: string;
-  name: string;
-  description: string;
-  runtimes: string[];
-  toolchain: Record<string, string>;
-  commands: {
-    build: string | string[] | null;
-    lint: string | string[] | null;
-    format: string | string[] | null;
-    test: string | string[] | null;
-  };
-};
-
 type ProviderKeyStatus = {
   profile: string;
   provider: string;
@@ -192,6 +184,9 @@ function App() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [recipes, setRecipes] = useState<StackRecipe[]>([]);
   const [recipeBusy, setRecipeBusy] = useState(false);
+  const [recipePlan, setRecipePlan] = useState<ScaffoldFilePlan[] | null>(null);
+  const [recipePlanError, setRecipePlanError] = useState<string | null>(null);
+  const [recipeResult, setRecipeResult] = useState<ScaffoldResult | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -365,6 +360,25 @@ function App() {
     }
   };
 
+  const previewRecipe = useCallback(
+    (input: { recipe: string; projectName: string; force: boolean }) => {
+      void invoke<ScaffoldFilePlan[]>("preview_recipe_scaffold", {
+        recipe: input.recipe,
+        projectName: input.projectName || null,
+        force: input.force,
+      })
+        .then((plan) => {
+          setRecipePlan(plan);
+          setRecipePlanError(null);
+        })
+        .catch((reason) => {
+          setRecipePlan(null);
+          setRecipePlanError(String(reason));
+        });
+    },
+    [],
+  );
+
   const initializeRecipe = async (input: {
     recipe: string;
     projectName: string;
@@ -373,11 +387,14 @@ function App() {
     setRecipeBusy(true);
     setError(null);
     try {
-      await invoke("initialize_recipe", {
+      const result = await invoke<ScaffoldResult>("initialize_recipe", {
         recipe: input.recipe,
         projectName: input.projectName || null,
         force: input.force,
       });
+      setRecipeResult(result);
+      setRecipePlan(result.files);
+      setRecipePlanError(null);
       await refresh();
     } catch (reason) {
       setError(String(reason));
@@ -551,9 +568,13 @@ function App() {
                 />
               )}
               {activeView === "Recipes" && (
-                <RecipeView
+                <RecipeWizard
                   recipes={recipes}
                   busy={recipeBusy}
+                  plan={recipePlan}
+                  planError={recipePlanError}
+                  lastResult={recipeResult}
+                  onPreview={previewRecipe}
                   onInitialize={(input) => void initializeRecipe(input)}
                 />
               )}
@@ -1294,89 +1315,6 @@ function KeysView() {
           </Panel>
         )}
       </div>
-    </div>
-  );
-}
-
-function RecipeView({
-  recipes,
-  busy,
-  onInitialize,
-}: {
-  recipes: StackRecipe[];
-  busy: boolean;
-  onInitialize: (input: { recipe: string; projectName: string; force: boolean }) => void;
-}) {
-  const [selected, setSelected] = useState("");
-  const [projectName, setProjectName] = useState("");
-  const [force, setForce] = useState(false);
-
-  useEffect(() => {
-    if (!selected && recipes[0]) setSelected(recipes[0].id);
-  }, [recipes, selected]);
-
-  const recipe = recipes.find((item) => item.id === selected);
-  return (
-    <div className="grid grid-cols-[1fr_360px] gap-5">
-      <Panel title="Stack recipes" subtitle="Choose a safe starting contract for this workspace">
-        <div className="grid grid-cols-2 gap-3">
-          {recipes.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setSelected(item.id)}
-              className={`rounded-xl border p-4 text-left transition ${
-                selected === item.id
-                  ? "border-blue-400/40 bg-blue-500/10"
-                  : "border-white/7 bg-white/2 hover:border-white/15"
-              }`}
-            >
-              <div className="text-sm font-medium text-slate-200">{item.name}</div>
-              <div className="mt-1 font-mono text-[10px] text-blue-300/70">{item.id}</div>
-              <p className="mt-3 text-[11px] leading-5 text-slate-500">{item.description}</p>
-            </button>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel
-        title={recipe?.name ?? "Recipe setup"}
-        subtitle="Generate the canonical AGENTS.md bootstrap"
-      >
-        {recipe ? (
-          <div className="space-y-4">
-            <Field label="Project name (optional)" value={projectName} onChange={setProjectName} />
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-slate-600">Toolchain</div>
-              <div className="mt-2 space-y-1 text-xs text-slate-400">
-                {Object.entries(recipe.toolchain).map(([name, version]) => (
-                  <div key={name} className="flex justify-between gap-3">
-                    <span>{name}</span>
-                    <span className="font-mono text-slate-500">{version}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <label className="flex items-start gap-2 text-[11px] leading-5 text-slate-500">
-              <input
-                type="checkbox"
-                checked={force}
-                onChange={(event) => setForce(event.target.checked)}
-                className="mt-1 size-3.5 accent-red-400"
-              />
-              Replace an existing AGENTS.md. Leave off to preserve repository authority.
-            </label>
-            <button
-              onClick={() => onInitialize({ recipe: recipe.id, projectName, force })}
-              disabled={busy}
-              className="w-full rounded-lg bg-violet-500 px-4 py-2.5 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
-            >
-              {busy ? "Initializing…" : `Initialize ${recipe.name}`}
-            </button>
-          </div>
-        ) : (
-          <div className="py-16 text-center text-xs text-slate-500">Loading recipes…</div>
-        )}
-      </Panel>
     </div>
   );
 }
