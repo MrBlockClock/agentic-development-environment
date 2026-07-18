@@ -1,6 +1,7 @@
 pub mod analytics;
 pub mod audit;
 pub mod repo;
+pub mod reports;
 pub mod schema;
 pub mod secrets;
 pub mod team;
