@@ -18,11 +18,19 @@ enum Commands {
     Plan,
     /// Run EXECUTE phase — apply approved plan phases
     Execute,
-    /// Initialize a project with a stack recipe
+    /// Initialize a project with a stack recipe (writes AGENTS.md)
     Init {
         #[arg(short, long)]
         recipe: Option<String>,
+        /// Overwrite an existing AGENTS.md
+        #[arg(long)]
+        force: bool,
+        /// Project display name (defaults to directory name)
+        #[arg(long)]
+        name: Option<String>,
     },
+    /// List built-in stack recipes
+    Recipes,
     /// Run G0-G5 verification
     Verify {
         #[arg(short, long)]
@@ -93,10 +101,36 @@ async fn main() -> anyhow::Result<()> {
         Commands::Execute => {
             println!("EXECUTE phase — coming soon");
         }
-        Commands::Init { recipe } => {
-            let r = recipe.as_deref().unwrap_or("business-saas");
-            println!("Initializing project with recipe: {}", r);
-            println!("Coming soon: recipe wizard");
+        Commands::Init {
+            recipe,
+            force,
+            name,
+        } => {
+            let recipe_id = recipe.as_deref().unwrap_or("business-saas");
+            let recipe = ade_core::recipe::builtin_recipe(recipe_id)?;
+            let root = std::env::current_dir()?;
+            let project_name = name.clone().unwrap_or_else(|| {
+                root.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("project")
+                    .to_string()
+            });
+            let ctx = ade_core::agents_contract::AgentsContractContext::new(project_name)
+                .with_root(root.display().to_string());
+            let path = ade_core::agents_contract::AgentsContractGenerator::write(
+                &root, &recipe, &ctx, *force,
+            )?;
+            println!(
+                "Initialized recipe '{}' — wrote {}",
+                recipe.id,
+                path.display()
+            );
+        }
+        Commands::Recipes => {
+            println!("Built-in stack recipes:");
+            for r in ade_core::recipe::builtin_recipes() {
+                println!("  {:<18} {} — {}", r.id, r.name, r.description);
+            }
         }
         Commands::Verify { gate } => {
             let g = gate.as_deref().unwrap_or("G0");

@@ -1,3 +1,4 @@
+pub mod agents_contract;
 pub mod analytics;
 pub mod audit;
 pub mod authority;
