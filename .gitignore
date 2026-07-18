@@ -28,6 +28,7 @@ Thumbs.db
 
 # ADE local state
 .ade/handoff/
+.ade/spend/
 .ade/brain/local/
 **/agent-transcripts/
 
