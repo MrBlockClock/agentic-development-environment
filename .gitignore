@@ -31,6 +31,9 @@ Thumbs.db
 .ade/brain/local/
 **/agent-transcripts/
 
+# Per-environment data directories (local/staging/production)
+/data/
+
 # Tauri
 apps/desktop/src-tauri/target/
 
