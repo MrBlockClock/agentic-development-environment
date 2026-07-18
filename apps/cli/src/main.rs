@@ -99,6 +99,16 @@ enum Commands {
     },
     /// Show usage and analytics
     Analytics,
+    /// Manage git worktrees for parallel agents
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
+    /// Manage durable path leases for multi-agent ownership
+    Lease {
+        #[command(subcommand)]
+        action: LeaseAction,
+    },
     /// Run one streamed BYOK agent turn
     Agent {
         /// User prompt for this turn
@@ -127,6 +137,84 @@ enum Commands {
         /// Credential-vault profile (defaults to the active ADE environment)
         #[arg(long)]
         profile: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorktreeAction {
+    /// List git worktrees for the current repository
+    List {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a linked worktree on a new branch
+    Add {
+        /// Filesystem path for the new worktree
+        #[arg(long)]
+        path: String,
+        /// Branch name to create
+        #[arg(long)]
+        branch: String,
+        /// Optional start point (commit/branch)
+        #[arg(long)]
+        start_point: Option<String>,
+        /// Confirm you reviewed this mutating git operation
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Remove a linked worktree
+    Remove {
+        /// Filesystem path of the worktree to remove
+        #[arg(long)]
+        path: String,
+        /// Confirm you reviewed this mutating git operation
+        #[arg(long)]
+        approve: bool,
+        /// Force removal even if the worktree has local changes
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LeaseAction {
+    /// List active path leases
+    List {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Acquire a path lease for an agent
+    Acquire {
+        /// Agent id (UUID)
+        #[arg(long)]
+        agent: String,
+        /// Relative workspace path to lease
+        #[arg(long)]
+        path: String,
+        /// observe | cooperative | strong | exclusive
+        #[arg(long, default_value = "strong")]
+        mode: String,
+        /// Lease lifetime in seconds
+        #[arg(long, default_value_t = 28_800)]
+        ttl_secs: i64,
+        /// Confirm this mutating ownership change
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Release a lease by id
+    Release {
+        id: String,
+        /// Confirm this mutating ownership change
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Drop expired leases from the durable registry
+    ReleaseStale {
+        /// Confirm this mutating ownership change
+        #[arg(long)]
+        approve: bool,
     },
 }
 
@@ -684,6 +772,126 @@ async fn main() -> anyhow::Result<()> {
                         event.event_type,
                         event.detail.unwrap_or_default()
                     );
+                }
+            }
+        }
+        Commands::Worktree { action } => {
+            let root = std::env::current_dir()?;
+            let manager = ade_workflow::parallel::WorktreeManager::new(&root);
+            match action {
+                WorktreeAction::List { json } => {
+                    let items = manager.list()?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&items)?);
+                    } else if items.is_empty() {
+                        println!("No worktrees found");
+                    } else {
+                        for item in &items {
+                            println!(
+                                "{:<48}  {}",
+                                item.path,
+                                item.branch
+                                    .as_deref()
+                                    .unwrap_or(item.head.as_deref().unwrap_or("-"))
+                            );
+                        }
+                    }
+                }
+                WorktreeAction::Add {
+                    path,
+                    branch,
+                    start_point,
+                    approve,
+                } => {
+                    if !approve {
+                        anyhow::bail!("worktree add mutates git state; rerun with --approve");
+                    }
+                    let info =
+                        manager.add(std::path::Path::new(path), branch, start_point.as_deref())?;
+                    println!(
+                        "Added worktree {} on {}",
+                        info.path,
+                        info.branch.as_deref().unwrap_or("-")
+                    );
+                }
+                WorktreeAction::Remove {
+                    path,
+                    approve,
+                    force,
+                } => {
+                    if !approve {
+                        anyhow::bail!("worktree remove mutates git state; rerun with --approve");
+                    }
+                    manager.remove(std::path::Path::new(path), *force)?;
+                    println!("Removed worktree {path}");
+                }
+            }
+        }
+        Commands::Lease { action } => {
+            let root = std::env::current_dir()?;
+            let manager = ade_workflow::parallel::LeaseManager::new(&root);
+            match action {
+                LeaseAction::List { json } => {
+                    let leases = manager.list()?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&leases)?);
+                    } else if leases.is_empty() {
+                        println!("No active path leases");
+                    } else {
+                        println!("{:<38} {:<12} {:<10} PATH", "ID", "MODE", "PROTECTED");
+                        for lease in &leases {
+                            println!(
+                                "{:<38} {:<12} {:<10} {}  agent={}",
+                                lease.id,
+                                lease.mode.as_str(),
+                                if lease.protected { "yes" } else { "no" },
+                                lease.path,
+                                lease.agent_id
+                            );
+                        }
+                    }
+                }
+                LeaseAction::Acquire {
+                    agent,
+                    path,
+                    mode,
+                    ttl_secs,
+                    approve,
+                } => {
+                    if !approve {
+                        anyhow::bail!("lease acquire mutates ownership; rerun with --approve");
+                    }
+                    let agent_id = uuid::Uuid::parse_str(agent)
+                        .map_err(|error| anyhow::anyhow!("invalid --agent uuid: {error}"))?;
+                    let mode = ade_workflow::parallel::LeaseMode::parse(mode)?;
+                    let ttl = chrono::Duration::seconds(*ttl_secs);
+                    let lease = manager.acquire(agent_id, path, mode, ttl)?;
+                    println!(
+                        "Acquired {} lease {} on {} until {}",
+                        lease.mode.as_str(),
+                        lease.id,
+                        lease.path,
+                        lease.expires_at.to_rfc3339()
+                    );
+                }
+                LeaseAction::Release { id, approve } => {
+                    if !approve {
+                        anyhow::bail!("lease release mutates ownership; rerun with --approve");
+                    }
+                    if manager.release(id)? {
+                        println!("Released lease {id}");
+                    } else {
+                        anyhow::bail!("no lease matches '{id}'");
+                    }
+                }
+                LeaseAction::ReleaseStale { approve } => {
+                    if !approve {
+                        anyhow::bail!(
+                            "lease release-stale mutates ownership; rerun with --approve"
+                        );
+                    }
+                    let removed = manager.release_stale()?;
+                    println!("Released {removed} stale lease(s)");
                 }
             }
         }

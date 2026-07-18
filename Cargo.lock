@@ -58,6 +58,7 @@ dependencies = [
  "ade-db",
  "ade-workflow",
  "anyhow",
+ "chrono",
  "clap",
  "rpassword",
  "serde",
@@ -66,6 +67,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turso",
+ "uuid",
 ]
 
 [[package]]
@@ -165,6 +167,7 @@ version = "0.1.0"
 dependencies = [
  "ade-core",
  "ade-db",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
