@@ -10,6 +10,7 @@ name = "ade"
 [dependencies]
 ade-core = { path = "../../crates/core" }
 ade-agents = { path = "../../crates/agents" }
+ade-service = { path = "../../crates/service" }
 ade-workflow = { path = "../../crates/workflow" }
 ade-db = { path = "../../crates/db" }
 clap = { workspace = true }

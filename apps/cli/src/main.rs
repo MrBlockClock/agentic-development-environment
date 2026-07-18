@@ -109,6 +109,12 @@ enum Commands {
         #[command(subcommand)]
         action: LeaseAction,
     },
+    /// Serve the read-only local ADE HTTP API
+    Serve {
+        /// Loopback socket address (non-loopback binds are refused)
+        #[arg(long, default_value = "127.0.0.1:3210")]
+        bind: String,
+    },
     /// Run one streamed BYOK agent turn
     Agent {
         /// User prompt for this turn
@@ -241,7 +247,7 @@ enum WorkspaceAction {
 
 #[derive(Subcommand)]
 enum McpAction {
-    /// Expose ADE phase state over MCP stdio (audit/plan/verify/handoff tools)
+    /// Expose ADE state over MCP stdio (set ADE_MCP_TOKEN to require request metadata auth)
     Serve,
     /// Spawn a server, list its tools, then shut it down
     Tools {
@@ -643,7 +649,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Mcp { action } => match action {
             McpAction::Serve => {
                 let root = std::env::current_dir()?;
-                ade_agents::mcp_server::AdeMcpServer::new(root).serve_stdio()?;
+                let mut server = ade_agents::mcp_server::AdeMcpServer::new(root);
+                if let Ok(token) = std::env::var("ADE_MCP_TOKEN") {
+                    server = server.with_auth_token(token);
+                }
+                server.serve_stdio()?;
             }
             McpAction::Tools {
                 name,
@@ -897,6 +907,42 @@ async fn main() -> anyhow::Result<()> {
                     println!("Released {removed} stale lease(s)");
                 }
             }
+        }
+        Commands::Serve { bind } => {
+            let address: std::net::SocketAddr = bind
+                .parse()
+                .map_err(|error| anyhow::anyhow!("invalid --bind address: {error}"))?;
+            if !address.ip().is_loopback() {
+                anyhow::bail!(
+                    "ADE local API refuses non-loopback bind {}; use a reverse proxy with explicit policy",
+                    address
+                );
+            }
+            let root = std::env::current_dir()?;
+            let service =
+                ade_service::runtime::BoundService::bind(ade_service::runtime::ServiceConfig {
+                    workspace_root: root,
+                    bind: address,
+                    auth_token: std::env::var("ADE_API_TOKEN")
+                        .ok()
+                        .filter(|token| !token.trim().is_empty()),
+                })
+                .await?;
+            let local = service.local_addr();
+            println!(
+                "ADE API listening on http://{} (auth={})",
+                local,
+                if service.auth_required() {
+                    "bearer token required"
+                } else {
+                    "loopback read-only"
+                }
+            );
+            service
+                .serve(async {
+                    let _ = tokio::signal::ctrl_c().await;
+                })
+                .await?;
         }
         Commands::Smoke {
             profile,

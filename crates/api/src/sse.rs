@@ -1,6 +1,7 @@
 use axum::response::sse::Event;
 use tokio::sync::broadcast;
 
+#[derive(Clone)]
 pub struct SseManager {
     tx: broadcast::Sender<Event>,
 }
@@ -17,8 +18,8 @@ impl SseManager {
         Self { tx }
     }
 
-    pub fn send_event(&self, event: Event) {
-        let _ = self.tx.send(event);
+    pub fn send_event(&self, event: Event) -> usize {
+        self.tx.send(event).unwrap_or(0)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {

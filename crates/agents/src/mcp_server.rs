@@ -8,15 +8,28 @@ use ade_workflow::verify::VerifyRunner;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Minimal ADE MCP server over stdio JSON-RPC (initialize / tools/list / tools/call).
 pub struct AdeMcpServer {
     root: PathBuf,
+    auth_token: Option<Arc<str>>,
 }
 
 impl AdeMcpServer {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            auth_token: None,
+        }
+    }
+
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        let token = token.into();
+        if !token.trim().is_empty() {
+            self.auth_token = Some(Arc::from(token));
+        }
+        self
     }
 
     pub fn serve_stdio(&self) -> Result<(), AdeError> {
@@ -43,6 +56,19 @@ impl AdeMcpServer {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let id = request.get("id").cloned();
+        if matches!(method, "tools/list" | "tools/call") && !self.authorized(request) {
+            if id.is_none() {
+                return Ok(None);
+            }
+            return Ok(Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32001,
+                    "message": "valid ADE MCP token required"
+                }
+            })));
+        }
         let result = match method {
             "initialize" => json!({
                 "protocolVersion": "2024-11-05",
@@ -78,6 +104,16 @@ impl AdeMcpServer {
             "id": id,
             "result": result
         })))
+    }
+
+    fn authorized(&self, request: &Value) -> bool {
+        let Some(expected) = self.auth_token.as_deref() else {
+            return true;
+        };
+        let supplied = request
+            .pointer("/params/_meta/adeToken")
+            .and_then(Value::as_str);
+        supplied.is_some_and(|token| constant_time_eq(token.as_bytes(), expected.as_bytes()))
     }
 
     fn tools(&self) -> Vec<Value> {
@@ -153,6 +189,17 @@ impl AdeMcpServer {
     }
 }
 
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (&left, &right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
 fn tool_def(name: &str, description: &str) -> Value {
     json!({
         "name": name,
@@ -188,5 +235,31 @@ mod tests {
         let result = server.call_tool("ade_lease_list").unwrap();
         assert!(result.to_string().contains("src/feature"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn token_protects_tool_discovery_and_calls() {
+        let server = AdeMcpServer::new(".").with_auth_token("test-token");
+        let denied = server
+            .handle(&json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {}
+            }))
+            .unwrap()
+            .unwrap();
+        assert_eq!(denied["error"]["code"], -32001);
+
+        let allowed = server
+            .handle(&json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": { "_meta": { "adeToken": "test-token" } }
+            }))
+            .unwrap()
+            .unwrap();
+        assert!(allowed["result"]["tools"].is_array());
     }
 }
