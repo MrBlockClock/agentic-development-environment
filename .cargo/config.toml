@@ -1,3 +1,4 @@
 [build]
-# Keep Rust build artifacts off OneDrive to avoid sync/BSOD issues.
-target-dir = "C:/Dev/ade-target"
+# Keep Rust build artifacts as a sibling of the workspace (off OneDrive sync).
+# Relative path works on Windows and Linux CI; do not hardcode drive letters.
+target-dir = "../ade-target"
