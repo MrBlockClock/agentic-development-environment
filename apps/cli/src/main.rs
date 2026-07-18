@@ -96,7 +96,40 @@ async fn main() -> anyhow::Result<()> {
             println!("Wrote {}", out.display());
         }
         Commands::Plan => {
-            println!("PLAN phase — coming soon");
+            // Reuse the last audit if one exists for this root; otherwise run a fresh one.
+            let root = std::env::current_dir()?;
+            let last_audit_path = config.data_dir.join("last-audit.json");
+            let audit: ade_core::audit::AuditReport =
+                match std::fs::read_to_string(&last_audit_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<ade_core::audit::AuditReport>(&s).ok())
+                    .filter(|a| a.root == root.display().to_string())
+                {
+                    Some(report) => {
+                        println!("Using last audit from {}", last_audit_path.display());
+                        report
+                    }
+                    None => {
+                        println!("No matching audit found — running a fresh AUDIT first");
+                        ade_core::audit::AuditRunner::new(&root)
+                            .run(ade_core::audit::AuditMode::EvaluateExisting)
+                    }
+                };
+
+            let plan = ade_core::plan::PlanBuilder::new().build(&audit);
+            println!(
+                "PLAN complete — {} phase(s) from audit score {}/{}",
+                plan.phases.len(),
+                plan.score_before,
+                plan.score_max
+            );
+            if let Some(summary) = &plan.human_summary_markdown {
+                println!("\n{summary}");
+            }
+            let out = config.data_dir.join("last-plan.json");
+            std::fs::create_dir_all(&config.data_dir)?;
+            std::fs::write(&out, serde_json::to_string_pretty(&plan)?)?;
+            println!("Wrote {}", out.display());
         }
         Commands::Execute => {
             println!("EXECUTE phase — coming soon");

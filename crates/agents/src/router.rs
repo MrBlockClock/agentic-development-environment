@@ -36,8 +36,8 @@ impl PhaseRouter {
         ade_core::audit::AuditRunner::new(root).run(mode)
     }
 
-    pub async fn run_plan(&self, _audit: &AuditReport) -> PlanReport {
-        unimplemented!("PLAN phase implementation")
+    pub async fn run_plan(&self, audit: &AuditReport) -> PlanReport {
+        ade_core::plan::PlanBuilder::new().build(audit)
     }
 
     pub async fn run_execute(&self, _plan: &PlanReport) -> ExecuteReport {
