@@ -1,0 +1,29 @@
+---
+description: Run /summarize after verified roadmap phase milestones before starting the next phase
+alwaysApply: true
+---
+
+# Phase Boundary Summarize
+
+After a roadmap **phase** (P0–P5) or a clearly declared **bounded phase milestone** is verified, checkpointed, committed, and pushed — and **before** starting the next phase — run Cursor’s `/summarize` command.
+
+## When to summarize
+
+- Do summarize at phase/milestone boundaries (for example: P3 complete, transactional recipe scaffold shipped, local P5 worktrees/leases landed).
+- Do **not** summarize after every pillar or every commit; that burns context without helping continuity.
+
+## What the summary must capture
+
+1. Shipped scope (phase/milestone id + short bullet list)
+2. Verification evidence (fmt/clippy/test/tsc, and any smoke run)
+3. Checkpoint commit SHA(s) that were pushed
+4. Remaining blockers / held work (especially operator-key gates)
+5. Next safe command or next approved milestone
+
+## Order of operations
+
+1. Finish implementation for the milestone
+2. Pass the verify ladder
+3. Commit and push
+4. Run `/summarize` with the checklist above
+5. Only then begin the next phase
