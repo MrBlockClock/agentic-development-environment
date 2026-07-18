@@ -31,8 +31,9 @@ impl PhaseRouter {
         }
     }
 
-    pub async fn run_audit(&self, _mode: AuditMode) -> AuditReport {
-        unimplemented!("AUDIT phase implementation")
+    pub async fn run_audit(&self, mode: AuditMode) -> AuditReport {
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        ade_core::audit::AuditRunner::new(root).run(mode)
     }
 
     pub async fn run_plan(&self, _audit: &AuditReport) -> PlanReport {

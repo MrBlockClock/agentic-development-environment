@@ -62,9 +62,30 @@ async fn main() -> anyhow::Result<()> {
 
     match &cli.command {
         Commands::Audit { mode } => {
-            let m = mode.as_deref().unwrap_or("evaluate_existing");
-            println!("AUDIT phase — mode: {}", m);
-            println!("Coming soon: full AUDIT implementation");
+            let mode: ade_core::audit::AuditMode = mode
+                .as_deref()
+                .unwrap_or("evaluate_existing")
+                .parse()
+                .map_err(anyhow::Error::msg)?;
+            let root = std::env::current_dir()?;
+            let report = ade_core::audit::AuditRunner::new(root).run(mode);
+            println!(
+                "AUDIT complete — score {}/{} (mode={}, root={})",
+                report.score, report.score_max, report.mode, report.root
+            );
+            if !report.blockers.is_empty() {
+                println!("Blockers:");
+                for b in &report.blockers {
+                    println!("  - {b}");
+                }
+            }
+            if let Some(summary) = &report.human_summary_markdown {
+                println!("\n{summary}");
+            }
+            let out = config.data_dir.join("last-audit.json");
+            std::fs::create_dir_all(&config.data_dir)?;
+            std::fs::write(&out, serde_json::to_string_pretty(&report)?)?;
+            println!("Wrote {}", out.display());
         }
         Commands::Plan => {
             println!("PLAN phase — coming soon");
