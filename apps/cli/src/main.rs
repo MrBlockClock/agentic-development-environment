@@ -115,6 +115,11 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1:3210")]
         bind: String,
     },
+    /// Manage the background ADE daemon (local API as a detached process)
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
     /// Run one streamed BYOK agent turn
     Agent {
         /// User prompt for this turn
@@ -237,6 +242,30 @@ enum LeaseAction {
         /// Confirm this mutating ownership change
         #[arg(long)]
         approve: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Start the daemon as a detached background process
+    Start {
+        /// Loopback socket address (non-loopback binds are refused)
+        #[arg(long, default_value = "127.0.0.1:3210")]
+        bind: String,
+    },
+    /// Stop the running daemon
+    Stop,
+    /// Show daemon status
+    Status {
+        /// Emit JSON instead of prose
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the daemon in the foreground (used internally by `daemon start`)
+    Run {
+        /// Loopback socket address (non-loopback binds are refused)
+        #[arg(long, default_value = "127.0.0.1:3210")]
+        bind: String,
     },
 }
 
@@ -943,15 +972,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Serve { bind } => {
-            let address: std::net::SocketAddr = bind
-                .parse()
-                .map_err(|error| anyhow::anyhow!("invalid --bind address: {error}"))?;
-            if !address.ip().is_loopback() {
-                anyhow::bail!(
-                    "ADE local API refuses non-loopback bind {}; use a reverse proxy with explicit policy",
-                    address
-                );
-            }
+            let address = parse_loopback_bind(bind)?;
             let root = std::env::current_dir()?;
             let service =
                 ade_service::runtime::BoundService::bind(ade_service::runtime::ServiceConfig {
@@ -977,6 +998,86 @@ async fn main() -> anyhow::Result<()> {
                     let _ = tokio::signal::ctrl_c().await;
                 })
                 .await?;
+        }
+        Commands::Daemon { action } => {
+            let root = std::env::current_dir()?;
+            let lifecycle = ade_service::lifecycle::DaemonLifecycle::new(&root);
+            match action {
+                DaemonAction::Start { bind } => {
+                    let address = parse_loopback_bind(bind)?;
+                    let token = std::env::var("ADE_API_TOKEN")
+                        .ok()
+                        .filter(|token| !token.trim().is_empty());
+                    let state = lifecycle.start_detached(address, token.as_deref())?;
+                    println!(
+                        "ADE daemon started (pid {}) on http://{} (auth={}). Logs: {}",
+                        state.pid,
+                        state.bind,
+                        if state.auth_required {
+                            "bearer token required"
+                        } else {
+                            "loopback read-only"
+                        },
+                        lifecycle.log_path().display()
+                    );
+                }
+                DaemonAction::Stop => {
+                    let pid = lifecycle.stop()?;
+                    println!("ADE daemon stopped (pid {pid})");
+                }
+                DaemonAction::Status { json } => {
+                    let status = lifecycle.status();
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&status)?);
+                    } else if status.running {
+                        println!(
+                            "ADE daemon running (pid {}) on http://{} since {} (auth={})",
+                            status.pid.unwrap_or_default(),
+                            status.bind.as_deref().unwrap_or("unknown"),
+                            status.started_at.as_deref().unwrap_or("unknown"),
+                            match status.auth_required {
+                                Some(true) => "bearer token required",
+                                Some(false) => "loopback read-only",
+                                None => "unknown",
+                            }
+                        );
+                    } else {
+                        println!("ADE daemon is not running. Logs: {}", status.log_path);
+                    }
+                }
+                DaemonAction::Run { bind } => {
+                    let address = parse_loopback_bind(bind)?;
+                    let token = std::env::var("ADE_API_TOKEN")
+                        .ok()
+                        .filter(|token| !token.trim().is_empty());
+                    let service = ade_service::runtime::BoundService::bind(
+                        ade_service::runtime::ServiceConfig {
+                            workspace_root: root.clone(),
+                            bind: address,
+                            auth_token: token,
+                        },
+                    )
+                    .await?;
+                    let local = service.local_addr();
+                    lifecycle.mark_running(local, service.auth_required())?;
+                    println!(
+                        "ADE daemon serving on http://{} (auth={})",
+                        local,
+                        if service.auth_required() {
+                            "bearer token required"
+                        } else {
+                            "loopback read-only"
+                        }
+                    );
+                    let outcome = service
+                        .serve(async {
+                            let _ = tokio::signal::ctrl_c().await;
+                        })
+                        .await;
+                    lifecycle.mark_stopped();
+                    outcome?;
+                }
+            }
         }
         Commands::Smoke {
             profile,
@@ -1193,6 +1294,18 @@ async fn persist_report<T: serde::Serialize>(
     let store = ade_db::reports::ReportStore::new(database.connect()?);
     store.save(kind, schema, workspace_root, report).await?;
     Ok(())
+}
+
+fn parse_loopback_bind(bind: &str) -> anyhow::Result<std::net::SocketAddr> {
+    let address: std::net::SocketAddr = bind
+        .parse()
+        .map_err(|error| anyhow::anyhow!("invalid --bind address: {error}"))?;
+    if !address.ip().is_loopback() {
+        anyhow::bail!(
+            "ADE local API refuses non-loopback bind {address}; use a reverse proxy with explicit policy"
+        );
+    }
+    Ok(address)
 }
 
 fn current_branch(root: &std::path::Path) -> Option<String> {
