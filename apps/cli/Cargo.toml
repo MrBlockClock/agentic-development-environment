@@ -13,6 +13,7 @@ ade-agents = { path = "../../crates/agents" }
 ade-service = { path = "../../crates/service" }
 ade-workflow = { path = "../../crates/workflow" }
 ade-db = { path = "../../crates/db" }
+ade-plugins = { path = "../../crates/plugins" }
 clap = { workspace = true }
 turso = { workspace = true }
 tokio = { workspace = true }

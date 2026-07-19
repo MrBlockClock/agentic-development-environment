@@ -32,6 +32,7 @@ Thumbs.db
 .ade/brain/local/
 .ade/daemon/
 .ade/leases/
+.ade/plugins/
 .ade/tasks/
 **/agent-transcripts/
 

@@ -114,6 +114,11 @@ enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
+    /// Discover and invoke sandboxed capability-free WASM plugins
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
     /// Serve the read-only local ADE HTTP API
     Serve {
         /// Loopback socket address (non-loopback binds are refused)
@@ -332,6 +337,27 @@ enum TaskAction {
     },
     /// Requeue expired claims and release any remaining leases
     RequeueExpired {
+        #[arg(long)]
+        approve: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginAction {
+    /// List workspace plugins and validate their manifests
+    List {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Invoke one enabled plugin with a JSON value
+    Invoke {
+        /// Plugin manifest id
+        id: String,
+        /// JSON input passed to the capability-free guest
+        #[arg(long, default_value = "{}")]
+        input: String,
+        /// Confirm execution of third-party WASM code
         #[arg(long)]
         approve: bool,
     },
@@ -1169,6 +1195,47 @@ async fn main() -> anyhow::Result<()> {
                     require_approval(*approve, "task requeue-expired")?;
                     let count = coordinator.requeue_expired()?;
                     println!("Requeued {count} expired task claim(s)");
+                }
+            }
+        }
+        Commands::Plugin { action } => {
+            let root = std::env::current_dir()?;
+            let registry = ade_plugins::registry::PluginRegistry::from_workspace(&root);
+            match action {
+                PluginAction::List { json } => {
+                    let plugins = registry.discover()?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&plugins)?);
+                    } else if plugins.is_empty() {
+                        println!("No plugins found under .ade/plugins");
+                    } else {
+                        println!("{:<32} {:<12} {:<9} MODULE", "ID", "VERSION", "ENABLED");
+                        for plugin in plugins {
+                            println!(
+                                "{:<32} {:<12} {:<9} {}",
+                                plugin.manifest.id,
+                                plugin.manifest.version,
+                                if plugin.manifest.enabled { "yes" } else { "no" },
+                                plugin.module_path.display()
+                            );
+                        }
+                    }
+                }
+                PluginAction::Invoke { id, input, approve } => {
+                    require_approval(*approve, "plugin invoke")?;
+                    let plugins = registry.discover()?;
+                    let plugin = plugins
+                        .iter()
+                        .find(|plugin| plugin.manifest.id == *id)
+                        .ok_or_else(|| anyhow::anyhow!("plugin '{id}' was not discovered"))?;
+                    let input: serde_json::Value = serde_json::from_str(input)
+                        .map_err(|error| anyhow::anyhow!("invalid --input JSON: {error}"))?;
+                    let mut host = ade_plugins::wasm::WasmPluginHost::new()?;
+                    host.load(plugin)?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&host.invoke(id, &input)?)?
+                    );
                 }
             }
         }
