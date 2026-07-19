@@ -124,13 +124,13 @@ enum Commands {
         #[command(subcommand)]
         action: PluginAction,
     },
-    /// Serve the read-only local ADE HTTP API
+    /// Serve the local ADE HTTP API (reads always; coordination writes when token scopes allow)
     Serve {
         /// Loopback socket address (non-loopback binds are refused)
         #[arg(long, default_value = "127.0.0.1:3210")]
         bind: String,
     },
-    /// Manage the background ADE daemon (local API as a detached process)
+    /// Manage the ADE daemon (workspace-local process or OS service install)
     Daemon {
         #[command(subcommand)]
         action: DaemonAction,
@@ -452,6 +452,9 @@ enum DaemonAction {
         /// Loopback socket address (non-loopback binds are refused)
         #[arg(long, default_value = "127.0.0.1:3210")]
         bind: String,
+        /// Workspace root (defaults to the current directory)
+        #[arg(long)]
+        root: Option<String>,
     },
     /// Stop the running daemon
     Stop,
@@ -461,11 +464,38 @@ enum DaemonAction {
         #[arg(long)]
         json: bool,
     },
-    /// Run the daemon in the foreground (used internally by `daemon start`)
+    /// Run the daemon in the foreground (used internally by `daemon start` / OS services)
     Run {
         /// Loopback socket address (non-loopback binds are refused)
         #[arg(long, default_value = "127.0.0.1:3210")]
         bind: String,
+        /// Workspace root (defaults to the current directory)
+        #[arg(long)]
+        root: Option<String>,
+    },
+    /// Install an OS autostart service (launchd/systemd/Windows SCM)
+    Install {
+        /// Loopback socket address (non-loopback binds are refused)
+        #[arg(long, default_value = "127.0.0.1:3210")]
+        bind: String,
+        /// Workspace root pinned into the service args (defaults to cwd)
+        #[arg(long)]
+        root: Option<String>,
+        /// Confirm OS service registration
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Remove the OS autostart service
+    Uninstall {
+        /// Confirm OS service removal
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Show whether the OS autostart service is installed
+    ServiceStatus {
+        /// Emit JSON instead of prose
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1479,13 +1509,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Serve { bind } => {
             let address = parse_loopback_bind(bind)?;
             let root = std::env::current_dir()?;
+            let (auth_token, auth_scopes) = api_auth_from_env()?;
             let service =
                 ade_service::runtime::BoundService::bind(ade_service::runtime::ServiceConfig {
                     workspace_root: root,
                     bind: address,
-                    auth_token: std::env::var("ADE_API_TOKEN")
-                        .ok()
-                        .filter(|token| !token.trim().is_empty()),
+                    auth_token,
+                    auth_scopes,
                 })
                 .await?;
             let local = service.local_addr();
@@ -1495,7 +1525,7 @@ async fn main() -> anyhow::Result<()> {
                 if service.auth_required() {
                     "bearer token required"
                 } else {
-                    "loopback read-only"
+                    "loopback reads open; writes require ADE_API_TOKEN"
                 }
             );
             service
@@ -1504,92 +1534,155 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .await?;
         }
-        Commands::Daemon { action } => {
-            let root = std::env::current_dir()?;
-            let lifecycle = ade_service::lifecycle::DaemonLifecycle::new(&root);
-            match action {
-                DaemonAction::Start { bind } => {
-                    let address = parse_loopback_bind(bind)?;
-                    let token = std::env::var("ADE_API_TOKEN")
-                        .ok()
-                        .filter(|token| !token.trim().is_empty());
-                    let state = lifecycle.start_detached(address, token.as_deref())?;
-                    println!(
-                        "ADE daemon started (pid {}) on http://{} (auth={}). Logs: {}",
-                        state.pid,
-                        state.bind,
-                        if state.auth_required {
-                            "bearer token required"
-                        } else {
-                            "loopback read-only"
-                        },
-                        lifecycle.log_path().display()
-                    );
-                }
-                DaemonAction::Stop => {
-                    let pid = lifecycle.stop()?;
-                    println!("ADE daemon stopped (pid {pid})");
-                }
-                DaemonAction::Status { json } => {
-                    let status = lifecycle.status();
-                    if *json {
-                        println!("{}", serde_json::to_string_pretty(&status)?);
-                    } else if status.running {
-                        println!(
-                            "ADE daemon running (pid {}) on http://{} since {} (auth={})",
-                            status.pid.unwrap_or_default(),
-                            status.bind.as_deref().unwrap_or("unknown"),
-                            status.started_at.as_deref().unwrap_or("unknown"),
-                            match status.auth_required {
-                                Some(true) => "bearer token required",
-                                Some(false) => "loopback read-only",
-                                None => "unknown",
-                            }
-                        );
+        Commands::Daemon { action } => match action {
+            DaemonAction::Start { bind, root } => {
+                let workspace = resolve_workspace_root(root.as_deref())?;
+                let lifecycle = ade_service::lifecycle::DaemonLifecycle::new(&workspace);
+                let address = parse_loopback_bind(bind)?;
+                let (token, _) = api_auth_from_env()?;
+                let state = lifecycle.start_detached(address, token.as_deref())?;
+                println!(
+                    "ADE daemon started (pid {}) on http://{} (auth={}). Logs: {}",
+                    state.pid,
+                    state.bind,
+                    if state.auth_required {
+                        "bearer token required"
                     } else {
-                        println!("ADE daemon is not running. Logs: {}", status.log_path);
-                    }
-                }
-                DaemonAction::Run { bind } => {
-                    let address = parse_loopback_bind(bind)?;
-                    let token = std::env::var("ADE_API_TOKEN")
-                        .ok()
-                        .filter(|token| !token.trim().is_empty());
-                    let scheduler_root = root.clone();
-                    tokio::spawn(async move {
-                        ade_service::scheduler::Scheduler::new(scheduler_root)
-                            .run()
-                            .await;
-                    });
-                    let service = ade_service::runtime::BoundService::bind(
-                        ade_service::runtime::ServiceConfig {
-                            workspace_root: root.clone(),
-                            bind: address,
-                            auth_token: token,
-                        },
-                    )
-                    .await?;
-                    let local = service.local_addr();
-                    lifecycle.mark_running(local, service.auth_required())?;
+                        "loopback reads open; writes require ADE_API_TOKEN"
+                    },
+                    lifecycle.log_path().display()
+                );
+            }
+            DaemonAction::Stop => {
+                let workspace = std::env::current_dir()?;
+                let lifecycle = ade_service::lifecycle::DaemonLifecycle::new(&workspace);
+                let pid = lifecycle.stop()?;
+                println!("ADE daemon stopped (pid {pid})");
+            }
+            DaemonAction::Status { json } => {
+                let workspace = std::env::current_dir()?;
+                let lifecycle = ade_service::lifecycle::DaemonLifecycle::new(&workspace);
+                let status = lifecycle.status();
+                if *json {
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                } else if status.running {
                     println!(
-                        "ADE daemon serving on http://{} (auth={})",
-                        local,
-                        if service.auth_required() {
-                            "bearer token required"
-                        } else {
-                            "loopback read-only"
+                        "ADE daemon running (pid {}) on http://{} since {} (auth={})",
+                        status.pid.unwrap_or_default(),
+                        status.bind.as_deref().unwrap_or("unknown"),
+                        status.started_at.as_deref().unwrap_or("unknown"),
+                        match status.auth_required {
+                            Some(true) => "bearer token required",
+                            Some(false) => "loopback reads open; writes require ADE_API_TOKEN",
+                            None => "unknown",
                         }
                     );
-                    let outcome = service
-                        .serve(async {
-                            let _ = tokio::signal::ctrl_c().await;
-                        })
-                        .await;
-                    lifecycle.mark_stopped();
-                    outcome?;
+                } else {
+                    println!("ADE daemon is not running. Logs: {}", status.log_path);
                 }
             }
-        }
+            DaemonAction::Run { bind, root } => {
+                let workspace = resolve_workspace_root(root.as_deref())?;
+                let lifecycle = ade_service::lifecycle::DaemonLifecycle::new(&workspace);
+                let address = parse_loopback_bind(bind)?;
+                let (token, auth_scopes) = api_auth_from_env()?;
+                let scheduler_root = workspace.clone();
+                tokio::spawn(async move {
+                    ade_service::scheduler::Scheduler::new(scheduler_root)
+                        .run()
+                        .await;
+                });
+                let service =
+                    ade_service::runtime::BoundService::bind(ade_service::runtime::ServiceConfig {
+                        workspace_root: workspace.clone(),
+                        bind: address,
+                        auth_token: token,
+                        auth_scopes,
+                    })
+                    .await?;
+                let local = service.local_addr();
+                lifecycle.mark_running(local, service.auth_required())?;
+                println!(
+                    "ADE daemon serving on http://{} (auth={})",
+                    local,
+                    if service.auth_required() {
+                        "bearer token required"
+                    } else {
+                        "loopback reads open; writes require ADE_API_TOKEN"
+                    }
+                );
+                let outcome = service
+                    .serve(async {
+                        let _ = tokio::signal::ctrl_c().await;
+                    })
+                    .await;
+                lifecycle.mark_stopped();
+                outcome?;
+            }
+            DaemonAction::Install {
+                bind,
+                root,
+                approve,
+            } => {
+                require_approval(*approve, "daemon install")?;
+                let workspace = resolve_workspace_root(root.as_deref())?;
+                let address = parse_loopback_bind(bind)?;
+                let daemon = ade_service::daemon::AdeDaemon::for_workspace(&workspace, address);
+                daemon.install_service().map_err(|error| {
+                    anyhow::anyhow!("failed to install OS service '{}': {error}", daemon.name())
+                })?;
+                println!(
+                    "Installed OS service '{}' for workspace {} on {}",
+                    daemon.name(),
+                    daemon.workspace_root().display(),
+                    daemon.bind()
+                );
+                println!(
+                        "Set ADE_API_TOKEN (and optional ADE_API_SCOPES) in the service environment before starting it."
+                    );
+            }
+            DaemonAction::Uninstall { approve } => {
+                require_approval(*approve, "daemon uninstall")?;
+                let workspace = std::env::current_dir()?;
+                let daemon = ade_service::daemon::AdeDaemon::for_workspace(
+                    &workspace,
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 3210)),
+                );
+                daemon.uninstall_service().map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to uninstall OS service '{}': {error}",
+                        daemon.name()
+                    )
+                })?;
+                println!("Uninstalled OS service '{}'", daemon.name());
+            }
+            DaemonAction::ServiceStatus { json } => {
+                let workspace = std::env::current_dir()?;
+                let daemon = ade_service::daemon::AdeDaemon::for_workspace(
+                    &workspace,
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 3210)),
+                );
+                let installed = daemon.is_service_installed();
+                if *json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "name": daemon.name(),
+                            "installed": installed,
+                            "workspace_root": daemon.workspace_root().display().to_string(),
+                        })
+                    );
+                } else if installed {
+                    println!(
+                        "OS service '{}' is installed (workspace {})",
+                        daemon.name(),
+                        daemon.workspace_root().display()
+                    );
+                } else {
+                    println!("OS service '{}' is not installed", daemon.name());
+                }
+            }
+        },
         Commands::Smoke {
             profile,
             live,
@@ -1817,6 +1910,26 @@ fn parse_loopback_bind(bind: &str) -> anyhow::Result<std::net::SocketAddr> {
         );
     }
     Ok(address)
+}
+
+fn api_auth_from_env() -> anyhow::Result<(
+    Option<String>,
+    std::collections::HashSet<ade_service::runtime::ApiScope>,
+)> {
+    ade_service::runtime::ServiceConfig::auth_from_env().map_err(Into::into)
+}
+
+fn resolve_workspace_root(root: Option<&str>) -> anyhow::Result<std::path::PathBuf> {
+    match root {
+        Some(path) => {
+            let path = std::path::PathBuf::from(path);
+            if !path.is_dir() {
+                anyhow::bail!("workspace root does not exist: {}", path.display());
+            }
+            Ok(path.canonicalize().unwrap_or(path))
+        }
+        None => Ok(std::env::current_dir()?),
+    }
 }
 
 fn parse_agent_id(value: &str) -> anyhow::Result<uuid::Uuid> {

@@ -99,6 +99,8 @@ impl DaemonLifecycle {
             .arg("run")
             .arg("--bind")
             .arg(bind.to_string())
+            .arg("--root")
+            .arg(self.workspace_root.as_os_str())
             .current_dir(&self.workspace_root)
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)

@@ -1,6 +1,11 @@
+use crate::auth::ApiScope;
 use crate::middleware::{audit_middleware, auth_middleware};
 use crate::sse::SseManager;
+use crate::write_routes::{
+    claim_task, complete_task, fail_task, heartbeat_task, renew_lease, start_task,
+};
 use ade_core::audit::{AuditMode, AuditReport, AuditRunner};
+use ade_core::error::AdeError;
 use ade_core::plan::{PlanBuilder, PlanReport};
 use ade_core::recipe::StackRecipe;
 use ade_workflow::parallel::{LeaseManager, PathLease, WorktreeInfo, WorktreeManager};
@@ -13,11 +18,12 @@ use axum::{
         sse::{Event, KeepAlive},
         IntoResponse, Response, Sse,
     },
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
 use serde_json::json;
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::future::Future;
 use std::path::PathBuf;
@@ -34,6 +40,7 @@ pub struct ApiState {
     started_at: Instant,
     events: SseManager,
     auth_token: Option<Arc<str>>,
+    scopes: Arc<HashSet<ApiScope>>,
 }
 
 impl ApiState {
@@ -43,6 +50,7 @@ impl ApiState {
             started_at: Instant::now(),
             events: SseManager::new(),
             auth_token: None,
+            scopes: Arc::new(HashSet::new()),
         }
     }
 
@@ -50,12 +58,24 @@ impl ApiState {
         let token = token.into();
         if !token.trim().is_empty() {
             self.auth_token = Some(Arc::from(token));
+            if self.scopes.is_empty() {
+                self.scopes = Arc::new(ApiScope::coordination_defaults());
+            }
         }
+        self
+    }
+
+    pub fn with_scopes(mut self, scopes: HashSet<ApiScope>) -> Self {
+        self.scopes = Arc::new(scopes);
         self
     }
 
     pub fn auth_token(&self) -> Option<&str> {
         self.auth_token.as_deref()
+    }
+
+    pub fn has_scope(&self, scope: ApiScope) -> bool {
+        self.scopes.contains(&scope)
     }
 
     pub fn workspace_root(&self) -> &PathBuf {
@@ -92,7 +112,7 @@ struct ApiSnapshot {
 }
 
 #[derive(Debug)]
-struct ApiError {
+pub(crate) struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
@@ -105,6 +125,70 @@ impl ApiError {
             code: "internal_error",
             message: error.to_string(),
         }
+    }
+
+    pub(crate) fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: "unauthorized",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: message.into(),
+        }
+    }
+}
+
+pub(crate) fn require_approve(approve: bool, operation: &str) -> Result<(), ApiError> {
+    if approve {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!(
+            "{operation} mutates coordination state; set approve=true"
+        )))
+    }
+}
+
+pub(crate) fn require_scope(state: &ApiState, scope: ApiScope) -> Result<(), ApiError> {
+    if state.auth_token().is_none() {
+        return Err(ApiError::unauthorized(
+            "coordination writes require ADE_API_TOKEN",
+        ));
+    }
+    if state.has_scope(scope) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!(
+            "bearer token lacks scope '{}'",
+            scope.as_str()
+        )))
+    }
+}
+
+pub(crate) fn map_ade_error(error: AdeError) -> ApiError {
+    match error {
+        AdeError::Authorization(message) => ApiError::forbidden(message),
+        AdeError::Auth(message) => ApiError::unauthorized(message),
+        AdeError::NotFound(message) => ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "not_found",
+            message,
+        },
+        AdeError::Other(message) => ApiError::bad_request(message),
+        other => ApiError::internal(other),
     }
 }
 
@@ -123,7 +207,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-type ApiResult<T> = Result<Json<T>, ApiError>;
+pub(crate) type ApiResult<T> = Result<Json<T>, ApiError>;
 
 pub fn build_router() -> Router {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -138,9 +222,15 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/recipes", get(list_recipes))
         .route("/leases", get(list_leases))
         .route("/tasks", get(list_tasks))
+        .route("/tasks/claim", post(claim_task))
+        .route("/tasks/:id/start", post(start_task))
+        .route("/tasks/:id/heartbeat", post(heartbeat_task))
+        .route("/tasks/:id/complete", post(complete_task))
+        .route("/tasks/:id/fail", post(fail_task))
         .route("/worktrees", get(list_worktrees))
         .route("/handoff", get(handoff_status))
         .route("/events", get(events))
+        .route("/leases/:id/renew", post(renew_lease))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -169,8 +259,8 @@ fn local_cors() -> CorsLayer {
                     || value == "tauri://localhost"
             })
         }))
-        .allow_methods([Method::GET])
-        .allow_headers([header::AUTHORIZATION])
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
 pub async fn serve<F>(
@@ -393,6 +483,137 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn task_claim_requires_token_scope_and_approve() {
+        use ade_workflow::parallel::LeaseMode;
+        use ade_workflow::tasks::EnqueueTask;
+
+        let root = fixture();
+        let agent = uuid::Uuid::new_v4();
+        TaskCoordinator::new(&root)
+            .enqueue(EnqueueTask {
+                goal: "exercise write API".into(),
+                owned_paths: vec!["src/api".into()],
+                depends_on: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+            })
+            .unwrap();
+
+        let unauth = build_router_with_state(ApiState::new(&root))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/claim")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "agent_id": agent,
+                            "approve": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+        let read_only = build_router_with_state(
+            ApiState::new(&root)
+                .with_auth_token("test-token")
+                .with_scopes(HashSet::from([ApiScope::Read])),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/tasks/claim")
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "agent_id": agent,
+                        "approve": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read_only.status(), StatusCode::FORBIDDEN);
+
+        let app = build_router_with_state(ApiState::new(&root).with_auth_token("test-token"));
+        let missing_approve = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/claim")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "agent_id": agent,
+                            "approve": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_approve.status(), StatusCode::FORBIDDEN);
+
+        let claimed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/claim")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "agent_id": agent,
+                            "ttl_secs": 120,
+                            "approve": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(claimed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let task: AgentTask = serde_json::from_slice(&body).unwrap();
+        assert_eq!(task.agent_id, Some(agent));
+
+        let heartbeat = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/heartbeat", task.id))
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "agent_id": agent,
+                            "ttl_secs": 180,
+                            "approve": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(heartbeat.status(), StatusCode::OK);
         let _ = std::fs::remove_dir_all(root);
     }
 }

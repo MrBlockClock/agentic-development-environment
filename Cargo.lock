@@ -41,6 +41,7 @@ dependencies = [
  "ade-db",
  "ade-workflow",
  "axum",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

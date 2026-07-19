@@ -1,5 +1,9 @@
+pub use ade_api::auth::ApiScope;
+
+use ade_api::auth;
 use ade_api::router::ApiState;
 use ade_core::error::AdeError;
+use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -10,6 +14,7 @@ pub struct ServiceConfig {
     pub workspace_root: PathBuf,
     pub bind: SocketAddr,
     pub auth_token: Option<String>,
+    pub auth_scopes: HashSet<ApiScope>,
 }
 
 impl ServiceConfig {
@@ -18,7 +23,13 @@ impl ServiceConfig {
             workspace_root: workspace_root.into(),
             bind: SocketAddr::from(([127, 0, 0, 1], 3210)),
             auth_token: None,
+            auth_scopes: HashSet::new(),
         }
+    }
+
+    /// Resolve bearer token + scopes from `ADE_API_TOKEN` / `ADE_API_SCOPES`.
+    pub fn auth_from_env() -> Result<(Option<String>, HashSet<ApiScope>), AdeError> {
+        auth::auth_from_env().map_err(AdeError::Config)
     }
 
     pub fn validate(&self) -> Result<(), AdeError> {
@@ -56,6 +67,9 @@ impl BoundService {
         let mut state = ApiState::new(config.workspace_root);
         if let Some(token) = config.auth_token {
             state = state.with_auth_token(token);
+        }
+        if !config.auth_scopes.is_empty() {
+            state = state.with_scopes(config.auth_scopes);
         }
         Ok(Self {
             listener,
@@ -103,6 +117,7 @@ mod tests {
             workspace_root: root.clone(),
             bind: SocketAddr::from(([127, 0, 0, 1], 0)),
             auth_token: Some("test-token".into()),
+            auth_scopes: ApiScope::coordination_defaults(),
         })
         .await
         .unwrap();
@@ -119,6 +134,7 @@ mod tests {
             workspace_root: PathBuf::from("."),
             bind: SocketAddr::from(([0, 0, 0, 0], 3210)),
             auth_token: None,
+            auth_scopes: HashSet::new(),
         };
         assert!(config.validate().is_err());
     }
