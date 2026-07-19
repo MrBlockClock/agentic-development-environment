@@ -1,8 +1,11 @@
+use crate::manifest::PluginKind;
 use crate::registry::PluginDescriptor;
 use crate::sandbox::PluginPermissions;
+use crate::trust::{verify_artifact, PluginTrustStore};
 use ade_core::error::AdeError;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 use wasmtime::{Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// Stable v1 guest ABI:
@@ -42,15 +45,47 @@ impl WasmPluginHost {
         })
     }
 
-    pub fn load(&mut self, descriptor: &PluginDescriptor) -> Result<String, AdeError> {
+    pub fn load(
+        &mut self,
+        descriptor: &PluginDescriptor,
+        trust: &PluginTrustStore,
+    ) -> Result<String, AdeError> {
         descriptor.manifest.validate()?;
+        if descriptor.manifest.kind != PluginKind::Wasm {
+            return Err(AdeError::Plugin(format!(
+                "plugin '{}' is not a wasm plugin",
+                descriptor.manifest.id
+            )));
+        }
         if !descriptor.manifest.enabled {
             return Err(AdeError::Plugin(format!(
                 "plugin '{}' is disabled; enable it explicitly in plugin.json",
                 descriptor.manifest.id
             )));
         }
-        let module = Module::from_file(&self.engine, &descriptor.module_path)
+        let module_path = descriptor.module_path.as_ref().ok_or_else(|| {
+            AdeError::Plugin(format!(
+                "plugin '{}' is missing a resolved wasm module path",
+                descriptor.manifest.id
+            ))
+        })?;
+        let artifact = std::fs::read(module_path)?;
+        let trust_entry = trust.get(&descriptor.manifest.id)?.ok_or_else(|| {
+            AdeError::Plugin(format!(
+                "plugin '{}' is not trusted; run `ade plugin trust {} --approve`",
+                descriptor.manifest.id, descriptor.manifest.id
+            ))
+        })?;
+        verify_artifact(
+            &descriptor.manifest.id,
+            &descriptor.manifest.version,
+            &artifact,
+            descriptor.manifest.digest.as_deref(),
+            descriptor.manifest.signature.as_deref(),
+            &trust_entry,
+        )?;
+
+        let module = Module::from_file(&self.engine, module_path)
             .map_err(|error| plugin_error_with_id(&descriptor.manifest.id, error))?;
         if let Some(import) = module.imports().next() {
             return Err(AdeError::Plugin(format!(
@@ -83,6 +118,18 @@ impl WasmPluginHost {
             return Err(AdeError::Plugin(format!("plugin '{id}' is already loaded")));
         }
         Ok(id)
+    }
+
+    /// Convenience for callers that already resolved a workspace trust store.
+    pub fn load_from_workspace(
+        &mut self,
+        descriptor: &PluginDescriptor,
+        workspace_root: &Path,
+    ) -> Result<String, AdeError> {
+        self.load(
+            descriptor,
+            &PluginTrustStore::from_workspace(workspace_root),
+        )
     }
 
     pub fn loaded_ids(&self) -> Vec<String> {
@@ -188,8 +235,9 @@ fn plugin_error_with_id(id: &str, error: impl std::fmt::Display) -> AdeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{PluginManifest, PLUGIN_MANIFEST_SCHEMA};
+    use crate::manifest::{PluginKind, PluginManifest, PLUGIN_MANIFEST_SCHEMA};
     use crate::registry::PluginDescriptor;
+    use crate::trust::{sha256_hex, PluginTrustStore, TrustEntry};
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -211,35 +259,50 @@ mod tests {
     fn fixture_descriptor(
         wat: &str,
         permissions: PluginPermissions,
-    ) -> (PathBuf, PluginDescriptor) {
+    ) -> (PathBuf, PluginDescriptor, PluginTrustStore) {
         let root = std::env::temp_dir().join(format!("ade-wasm-plugin-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join(".ade").join("plugins")).unwrap();
         let module_path = root.join("plugin.wasm");
-        std::fs::write(&module_path, wat::parse_str(wat).unwrap()).unwrap();
+        let wasm = wat::parse_str(wat).unwrap();
+        std::fs::write(&module_path, &wasm).unwrap();
+        let digest = sha256_hex(&wasm);
         let manifest_path = root.join("plugin.json");
         let manifest = PluginManifest {
             schema: PLUGIN_MANIFEST_SCHEMA.into(),
             id: "example.echo".into(),
             version: "1.0.0".into(),
-            entry: "plugin.wasm".into(),
+            kind: PluginKind::Wasm,
+            entry: Some("plugin.wasm".into()),
+            mcp: None,
             enabled: true,
             permissions,
+            digest: Some(digest.clone()),
+            signature: None,
         };
+        let trust = PluginTrustStore::from_workspace(&root);
+        trust
+            .trust(TrustEntry {
+                plugin_id: "example.echo".into(),
+                digest: Some(digest),
+                pubkey: None,
+            })
+            .unwrap();
         (
             root,
             PluginDescriptor {
                 manifest_path,
-                module_path,
+                module_path: Some(module_path),
                 manifest,
             },
+            trust,
         )
     }
 
     #[test]
     fn invokes_capability_free_json_guest() {
-        let (root, descriptor) = fixture_descriptor(ECHO_WAT, PluginPermissions::default());
+        let (root, descriptor, trust) = fixture_descriptor(ECHO_WAT, PluginPermissions::default());
         let mut host = WasmPluginHost::new().unwrap();
-        let id = host.load(&descriptor).unwrap();
+        let id = host.load(&descriptor, &trust).unwrap();
         let input = serde_json::json!({ "hello": "world" });
         assert_eq!(host.invoke(&id, &input).unwrap(), input);
         let _ = std::fs::remove_dir_all(root);
@@ -247,9 +310,13 @@ mod tests {
 
     #[test]
     fn rejects_disabled_or_importing_plugins() {
-        let (root, mut descriptor) = fixture_descriptor(ECHO_WAT, PluginPermissions::default());
+        let (root, mut descriptor, trust) =
+            fixture_descriptor(ECHO_WAT, PluginPermissions::default());
         descriptor.manifest.enabled = false;
-        assert!(WasmPluginHost::new().unwrap().load(&descriptor).is_err());
+        assert!(WasmPluginHost::new()
+            .unwrap()
+            .load(&descriptor, &trust)
+            .is_err());
         let _ = std::fs::remove_dir_all(root);
 
         let importing = r#"
@@ -259,8 +326,11 @@ mod tests {
               (func (export "ade_alloc") (param i32) (result i32) (i32.const 0))
               (func (export "ade_invoke") (param i32 i32) (result i64) (i64.const 0)))
         "#;
-        let (root, descriptor) = fixture_descriptor(importing, PluginPermissions::default());
-        assert!(WasmPluginHost::new().unwrap().load(&descriptor).is_err());
+        let (root, descriptor, trust) = fixture_descriptor(importing, PluginPermissions::default());
+        assert!(WasmPluginHost::new()
+            .unwrap()
+            .load(&descriptor, &trust)
+            .is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -281,10 +351,21 @@ mod tests {
             max_fuel: 10_000,
             ..PluginPermissions::default()
         };
-        let (root, descriptor) = fixture_descriptor(expensive, permissions);
+        let (root, descriptor, trust) = fixture_descriptor(expensive, permissions);
         let mut host = WasmPluginHost::new().unwrap();
-        let id = host.load(&descriptor).unwrap();
+        let id = host.load(&descriptor, &trust).unwrap();
         assert!(host.invoke(&id, &serde_json::json!({})).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refuses_untrusted_plugins() {
+        let (root, descriptor, _trust) = fixture_descriptor(ECHO_WAT, PluginPermissions::default());
+        let empty = PluginTrustStore::from_workspace(root.join("other"));
+        assert!(WasmPluginHost::new()
+            .unwrap()
+            .load(&descriptor, &empty)
+            .is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 }

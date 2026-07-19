@@ -1,14 +1,13 @@
-use crate::manifest::PluginManifest;
+use crate::manifest::{PluginKind, PluginManifest};
 use ade_core::error::AdeError;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginDescriptor {
     pub manifest_path: PathBuf,
-    pub module_path: PathBuf,
+    pub module_path: Option<PathBuf>,
     pub manifest: PluginManifest,
 }
 
@@ -64,7 +63,10 @@ impl PluginRegistry {
                         manifest.id
                     )));
                 }
-                let module_path = manifest.resolve_entry(&manifest_path)?;
+                let module_path = match manifest.kind {
+                    PluginKind::Wasm => Some(manifest.resolve_entry(&manifest_path)?),
+                    PluginKind::Mcp => None,
+                };
                 plugins.push(PluginDescriptor {
                     manifest_path,
                     module_path,

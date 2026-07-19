@@ -114,6 +114,11 @@ enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
+    /// Run an automatic AgentTurn worker against the task queue
+    Worker {
+        #[command(subcommand)]
+        action: WorkerAction,
+    },
     /// Discover and invoke sandboxed capability-free WASM plugins
     Plugin {
         #[command(subcommand)]
@@ -343,6 +348,55 @@ enum TaskAction {
 }
 
 #[derive(Subcommand)]
+enum WorkerAction {
+    /// Claim and execute lease-backed tasks until interrupted
+    Run {
+        /// Stable agent UUID used for claims and lease binding
+        #[arg(long)]
+        agent: String,
+        /// Provider id used to locate the key in the OS credential vault
+        #[arg(long, default_value = "openai")]
+        provider: String,
+        /// OpenAI-compatible API base URL
+        #[arg(long, default_value = "https://api.openai.com/v1")]
+        base_url: String,
+        /// Exact model id; ADE never silently substitutes another model
+        #[arg(long)]
+        model: String,
+        /// Provider price per million input tokens (USD)
+        #[arg(long, default_value_t = 0.0)]
+        input_cost_per_mtok: f64,
+        /// Provider price per million output tokens (USD)
+        #[arg(long, default_value_t = 0.0)]
+        output_cost_per_mtok: f64,
+        /// Model context window; required non-zero when prices are set
+        #[arg(long, default_value_t = 128_000)]
+        context_limit: u64,
+        /// Model max output tokens; required non-zero when prices are set
+        #[arg(long, default_value_t = 16_384)]
+        output_limit: u64,
+        /// Credential-vault profile (defaults to the active ADE environment)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Claim and lease lifetime in seconds
+        #[arg(long, default_value_t = 28_800)]
+        ttl_secs: i64,
+        /// Idle poll interval in milliseconds
+        #[arg(long, default_value_t = 2_000)]
+        poll_ms: u64,
+        /// Provision an isolated git worktree per claimed task
+        #[arg(long)]
+        worktree: bool,
+        /// Remove successful worktrees after completion
+        #[arg(long)]
+        cleanup_worktree: bool,
+        /// Confirm this process may automatically claim and mutate ownership
+        #[arg(long)]
+        approve: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum PluginAction {
     /// List workspace plugins and validate their manifests
     List {
@@ -350,7 +404,27 @@ enum PluginAction {
         #[arg(long)]
         json: bool,
     },
-    /// Invoke one enabled plugin with a JSON value
+    /// Pin a plugin digest/pubkey into the local trust store
+    Trust {
+        /// Plugin manifest id
+        id: String,
+        /// Optional Ed25519 verifying key (hex)
+        #[arg(long)]
+        pubkey: Option<String>,
+        /// Pin the current artifact digest instead of trusting by id alone
+        #[arg(long, default_value_t = true)]
+        pin_digest: bool,
+        /// Confirm this mutating trust-store change
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Remove a plugin from the local trust store
+    Revoke {
+        id: String,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Invoke one enabled trusted WASM plugin with a JSON value
     Invoke {
         /// Plugin manifest id
         id: String,
@@ -358,6 +432,14 @@ enum PluginAction {
         #[arg(long, default_value = "{}")]
         input: String,
         /// Confirm execution of third-party WASM code
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Connect one enabled trusted MCP plugin through the ADE MCP host
+    ConnectMcp {
+        /// Plugin manifest id
+        id: String,
+        /// Confirm spawning this reviewed MCP command
         #[arg(long)]
         approve: bool,
     },
@@ -1198,27 +1280,147 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Worker { action } => match action {
+            WorkerAction::Run {
+                agent,
+                provider,
+                base_url,
+                model,
+                input_cost_per_mtok,
+                output_cost_per_mtok,
+                context_limit,
+                output_limit,
+                profile,
+                ttl_secs,
+                poll_ms,
+                worktree,
+                cleanup_worktree,
+                approve,
+            } => {
+                require_approval(*approve, "worker run")?;
+                let root = std::env::current_dir()?;
+                let profile = profile
+                    .clone()
+                    .unwrap_or_else(|| config.environment.to_string());
+                let worker =
+                    ade_service::worker::AgentTurnWorker::new(ade_service::worker::WorkerConfig {
+                        workspace_root: root,
+                        agent_id: parse_agent_id(agent)?,
+                        provider: provider.clone(),
+                        base_url: base_url.clone(),
+                        model: model.clone(),
+                        input_cost_per_mtok: ade_core::money::Money::try_from_usd_f64(
+                            *input_cost_per_mtok,
+                        )?,
+                        output_cost_per_mtok: ade_core::money::Money::try_from_usd_f64(
+                            *output_cost_per_mtok,
+                        )?,
+                        context_limit: *context_limit,
+                        output_limit: *output_limit,
+                        profile,
+                        ttl_secs: *ttl_secs,
+                        poll_interval: std::time::Duration::from_millis(*poll_ms),
+                        provision_worktree: *worktree,
+                        cleanup_worktree: *cleanup_worktree,
+                    });
+                println!(
+                    "ADE worker running as {} (worktree={} cleanup={})",
+                    agent, worktree, cleanup_worktree
+                );
+                worker.run().await?;
+            }
+        },
         Commands::Plugin { action } => {
+            use ade_plugins::manifest::PluginKind;
+            use ade_plugins::mcp_ext::McpPluginLoader;
+            use ade_plugins::trust::{sha256_hex, verify_artifact, PluginTrustStore, TrustEntry};
+
             let root = std::env::current_dir()?;
             let registry = ade_plugins::registry::PluginRegistry::from_workspace(&root);
+            let trust_store = PluginTrustStore::from_workspace(&root);
             match action {
                 PluginAction::List { json } => {
                     let plugins = registry.discover()?;
+                    let trusted = trust_store.list()?;
                     if *json {
-                        println!("{}", serde_json::to_string_pretty(&plugins)?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "plugins": plugins,
+                                "trust": trusted,
+                            }))?
+                        );
                     } else if plugins.is_empty() {
                         println!("No plugins found under .ade/plugins");
                     } else {
-                        println!("{:<32} {:<12} {:<9} MODULE", "ID", "VERSION", "ENABLED");
+                        println!(
+                            "{:<28} {:<8} {:<8} {:<8} ARTIFACT",
+                            "ID", "KIND", "ENABLED", "TRUSTED"
+                        );
                         for plugin in plugins {
+                            let trusted = trusted
+                                .iter()
+                                .any(|entry| entry.plugin_id == plugin.manifest.id);
+                            let artifact = match plugin.manifest.kind {
+                                PluginKind::Wasm => plugin
+                                    .module_path
+                                    .as_ref()
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_else(|| "-".into()),
+                                PluginKind::Mcp => plugin
+                                    .manifest
+                                    .mcp
+                                    .as_ref()
+                                    .map(|mcp| format!("{} {:?}", mcp.command, mcp.args))
+                                    .unwrap_or_else(|| "-".into()),
+                            };
                             println!(
-                                "{:<32} {:<12} {:<9} {}",
+                                "{:<28} {:<8} {:<8} {:<8} {}",
                                 plugin.manifest.id,
-                                plugin.manifest.version,
+                                format!("{:?}", plugin.manifest.kind).to_ascii_lowercase(),
                                 if plugin.manifest.enabled { "yes" } else { "no" },
-                                plugin.module_path.display()
+                                if trusted { "yes" } else { "no" },
+                                artifact
                             );
                         }
+                    }
+                }
+                PluginAction::Trust {
+                    id,
+                    pubkey,
+                    pin_digest,
+                    approve,
+                } => {
+                    require_approval(*approve, "plugin trust")?;
+                    let plugins = registry.discover()?;
+                    let plugin = plugins
+                        .iter()
+                        .find(|plugin| plugin.manifest.id == *id)
+                        .ok_or_else(|| anyhow::anyhow!("plugin '{id}' was not discovered"))?;
+                    let digest = if *pin_digest {
+                        Some(sha256_hex(
+                            &plugin.manifest.artifact_bytes(&plugin.manifest_path)?,
+                        ))
+                    } else {
+                        None
+                    };
+                    let entry = trust_store.trust(TrustEntry {
+                        plugin_id: id.clone(),
+                        digest,
+                        pubkey: pubkey.clone(),
+                    })?;
+                    println!(
+                        "Trusted plugin {} (digest={})",
+                        entry.plugin_id,
+                        entry.digest.as_deref().unwrap_or("unpinned")
+                    );
+                }
+                PluginAction::Revoke { id, approve } => {
+                    require_approval(*approve, "plugin revoke")?;
+                    if trust_store.revoke(id)? {
+                        println!("Revoked trust for plugin {id}");
+                    } else {
+                        anyhow::bail!("no trust entry for '{id}'");
                     }
                 }
                 PluginAction::Invoke { id, input, approve } => {
@@ -1231,10 +1433,45 @@ async fn main() -> anyhow::Result<()> {
                     let input: serde_json::Value = serde_json::from_str(input)
                         .map_err(|error| anyhow::anyhow!("invalid --input JSON: {error}"))?;
                     let mut host = ade_plugins::wasm::WasmPluginHost::new()?;
-                    host.load(plugin)?;
+                    host.load(plugin, &trust_store)?;
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&host.invoke(id, &input)?)?
+                    );
+                }
+                PluginAction::ConnectMcp { id, approve } => {
+                    require_approval(*approve, "plugin connect-mcp")?;
+                    let plugins = registry.discover()?;
+                    let plugin = plugins
+                        .iter()
+                        .find(|plugin| plugin.manifest.id == *id)
+                        .ok_or_else(|| anyhow::anyhow!("plugin '{id}' was not discovered"))?;
+                    let trust = trust_store.get(id)?.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "plugin '{id}' is not trusted; run `ade plugin trust {id} --approve`"
+                        )
+                    })?;
+                    let artifact = plugin.manifest.artifact_bytes(&plugin.manifest_path)?;
+                    verify_artifact(
+                        &plugin.manifest.id,
+                        &plugin.manifest.version,
+                        &artifact,
+                        plugin.manifest.digest.as_deref(),
+                        plugin.manifest.signature.as_deref(),
+                        &trust,
+                    )?;
+                    let config = McpPluginLoader::new().load(plugin)?;
+                    let host = ade_agents::mcp::McpHost::new();
+                    host.connect_server(ade_agents::mcp::McpServerConfig {
+                        name: config.name.clone(),
+                        command: config.command.clone(),
+                        args: config.args.clone(),
+                        approved: true,
+                    })
+                    .await?;
+                    println!(
+                        "Connected trusted MCP plugin {} via {} {:?}",
+                        config.name, config.command, config.args
                     );
                 }
             }

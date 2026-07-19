@@ -125,6 +125,9 @@ pub struct AgentTurnBuilder {
     ledger: Option<UsageLedgerStore>,
     actor: Option<String>,
     lease_agent_id: Option<Uuid>,
+    /// Primary workspace used for leases/handoff/spend when execution occurs
+    /// inside an isolated worktree. Defaults to `spec.workspace_root`.
+    coordination_root: Option<PathBuf>,
     key_vault: Arc<dyn ProviderKeyVault>,
     provider_transport: Option<Arc<dyn ChatProvider>>,
 }
@@ -141,6 +144,7 @@ impl AgentTurnBuilder {
             ledger: None,
             actor: None,
             lease_agent_id: None,
+            coordination_root: None,
             key_vault: Arc::new(NativeProviderKeyVault),
             provider_transport: None,
         }
@@ -187,6 +191,13 @@ impl AgentTurnBuilder {
         self
     }
 
+    /// Use a different root for leases, handoff capsules, and spend tracking
+    /// while executing tools against `spec.workspace_root` (e.g. a worktree).
+    pub fn coordination_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.coordination_root = Some(root.into());
+        self
+    }
+
     pub fn key_vault(mut self, key_vault: Arc<dyn ProviderKeyVault>) -> Self {
         self.key_vault = key_vault;
         self
@@ -223,14 +234,17 @@ impl AgentTurnBuilder {
             }
         };
 
+        let coordination_root = self
+            .coordination_root
+            .unwrap_or_else(|| self.spec.workspace_root.clone());
         let owned_paths = match self.lease_agent_id {
-            Some(agent_id) => LeaseManager::new(&self.spec.workspace_root)
+            Some(agent_id) => LeaseManager::new(&coordination_root)
                 .resolve_owned_paths(agent_id, &self.spec.owned_paths)?,
             None => self.spec.owned_paths.clone(),
         };
         let authority = AuthorityEnforcer::load(&self.spec.workspace_root, owned_paths)?;
         let effective_owned_paths = authority.owned_paths();
-        let handoff_summary = match HandoffManager::new(&self.spec.workspace_root).load_latest() {
+        let handoff_summary = match HandoffManager::new(&coordination_root).load_latest() {
             Ok(handoff) => {
                 let summary = handoff.prompt_summary(self.spec.handoff_chars);
                 if summary
@@ -269,8 +283,7 @@ impl AgentTurnBuilder {
         };
         let session_id = Uuid::new_v4();
         let caps = self.spend_caps.unwrap_or_else(SpendCaps::from_env);
-        let mut guard =
-            SpendGuard::new(&self.spec.workspace_root, session_id, caps, ledger.clone());
+        let mut guard = SpendGuard::new(&coordination_root, session_id, caps, ledger.clone());
         if let Some(actor) = self.actor {
             guard = guard.with_actor(actor);
         }
@@ -297,7 +310,7 @@ impl AgentTurnBuilder {
         Ok(AgentTurnService {
             session,
             prompt: self.spec.prompt,
-            workspace_root: self.spec.workspace_root,
+            coordination_root,
             provider: self.spec.provider,
             model: self.spec.model,
             cancel: self.cancel,
@@ -328,7 +341,7 @@ impl AgentTurnBuilder {
 pub struct AgentTurnService {
     session: AgentSession,
     prompt: String,
-    workspace_root: PathBuf,
+    coordination_root: PathBuf,
     provider: String,
     model: String,
     cancel: Option<Arc<AtomicBool>>,
@@ -357,7 +370,7 @@ impl AgentTurnService {
         let (events, receiver) = mpsc::channel(128);
         let session = self.session.clone();
         let prompt = self.prompt.clone();
-        let workspace_root = self.workspace_root.clone();
+        let coordination_root = self.coordination_root.clone();
         let provider = self.provider.clone();
         let model = self.model.clone();
         let usage = Arc::clone(&self.usage);
@@ -366,28 +379,27 @@ impl AgentTurnService {
         tokio::spawn(async move {
             match session.run_turn(prompt.clone(), events.clone()).await {
                 Ok(result) => {
-                    if let Err(error) =
-                        usage
-                            .record_turn(&workspace_root, &result)
-                            .await
-                            .and_then(|_| {
-                                save_turn_capsule(
-                                    &workspace_root,
-                                    &prompt,
-                                    result.session_id,
-                                    &result.provider,
-                                    &result.model,
-                                    TurnCapsuleOutcome {
-                                        status: "completed",
-                                        blockers: vec![],
-                                        score_before,
-                                        context_compaction: context_compaction.clone(),
-                                    },
-                                )
-                            })
+                    if let Err(error) = usage
+                        .record_turn(&coordination_root, &result)
+                        .await
+                        .and_then(|_| {
+                            save_turn_capsule(
+                                &coordination_root,
+                                &prompt,
+                                result.session_id,
+                                &result.provider,
+                                &result.model,
+                                TurnCapsuleOutcome {
+                                    status: "completed",
+                                    blockers: vec![],
+                                    score_before,
+                                    context_compaction: context_compaction.clone(),
+                                },
+                            )
+                        })
                     {
                         let _ = save_turn_capsule(
-                            &workspace_root,
+                            &coordination_root,
                             &prompt,
                             result.session_id,
                             &result.provider,
@@ -415,7 +427,7 @@ impl AgentTurnService {
                         "failed"
                     };
                     let _ = save_turn_capsule(
-                        &workspace_root,
+                        &coordination_root,
                         &prompt,
                         session.session_id(),
                         &provider,
