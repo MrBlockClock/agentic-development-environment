@@ -109,6 +109,11 @@ enum Commands {
         #[command(subcommand)]
         action: LeaseAction,
     },
+    /// Coordinate durable lease-backed tasks across agents
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
+    },
     /// Serve the read-only local ADE HTTP API
     Serve {
         /// Loopback socket address (non-loopback binds are refused)
@@ -240,6 +245,93 @@ enum LeaseAction {
     /// Drop expired leases from the durable registry
     ReleaseStale {
         /// Confirm this mutating ownership change
+        #[arg(long)]
+        approve: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaskAction {
+    /// List all coordinated tasks
+    List {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a task to the durable queue
+    Enqueue {
+        /// Goal delivered to the assigned agent
+        #[arg(long)]
+        goal: String,
+        /// Relative writable path; repeat for multiple paths
+        #[arg(long = "path")]
+        owned_paths: Vec<String>,
+        /// observe | cooperative | strong | exclusive
+        #[arg(long, default_value = "strong")]
+        mode: String,
+        /// Task id that must complete first; repeat for multiple dependencies
+        #[arg(long = "depends-on")]
+        depends_on: Vec<String>,
+        /// Confirm this mutating queue operation
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Atomically claim the oldest dependency-ready task and acquire its leases
+    Claim {
+        /// Agent id (UUID) claiming the task
+        #[arg(long)]
+        agent: String,
+        /// Claim and lease lifetime in seconds
+        #[arg(long, default_value_t = 28_800)]
+        ttl_secs: i64,
+        /// Confirm this mutating ownership operation
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Mark a claimed task as running
+    Start {
+        id: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Renew an active task claim and all of its leases
+    Heartbeat {
+        id: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long, default_value_t = 28_800)]
+        ttl_secs: i64,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Complete a task and release its leases
+    Complete {
+        id: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Fail a task and release its leases
+    Fail {
+        id: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Cancel a queued or active task
+    Cancel {
+        id: String,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Requeue expired claims and release any remaining leases
+    RequeueExpired {
         #[arg(long)]
         approve: bool,
     },
@@ -971,6 +1063,115 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Task { action } => {
+            use ade_workflow::tasks::{EnqueueTask, TaskCoordinator};
+
+            let root = std::env::current_dir()?;
+            let coordinator = TaskCoordinator::new(&root);
+            match action {
+                TaskAction::List { json } => {
+                    let tasks = coordinator.list()?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&tasks)?);
+                    } else if tasks.is_empty() {
+                        println!("No coordinated tasks");
+                    } else {
+                        println!("{:<38} {:<10} {:<38} GOAL", "ID", "STATUS", "AGENT");
+                        for task in tasks {
+                            println!(
+                                "{:<38} {:<10} {:<38} {}",
+                                task.id,
+                                format!("{:?}", task.status).to_ascii_lowercase(),
+                                task.agent_id
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_else(|| "-".into()),
+                                task.goal
+                            );
+                        }
+                    }
+                }
+                TaskAction::Enqueue {
+                    goal,
+                    owned_paths,
+                    mode,
+                    depends_on,
+                    approve,
+                } => {
+                    require_approval(*approve, "task enqueue")?;
+                    let task = coordinator.enqueue(EnqueueTask {
+                        goal: goal.clone(),
+                        owned_paths: owned_paths.clone(),
+                        lease_mode: ade_workflow::parallel::LeaseMode::parse(mode)?,
+                        depends_on: depends_on.clone(),
+                    })?;
+                    println!("Enqueued task {}: {}", task.id, task.goal);
+                }
+                TaskAction::Claim {
+                    agent,
+                    ttl_secs,
+                    approve,
+                } => {
+                    require_approval(*approve, "task claim")?;
+                    let agent_id = parse_agent_id(agent)?;
+                    match coordinator.claim(agent_id, chrono::Duration::seconds(*ttl_secs))? {
+                        Some(task) => {
+                            println!("{}", serde_json::to_string_pretty(&task)?);
+                        }
+                        None => println!("No dependency-ready task available"),
+                    }
+                }
+                TaskAction::Start { id, agent, approve } => {
+                    require_approval(*approve, "task start")?;
+                    let task = coordinator.start(id, parse_agent_id(agent)?)?;
+                    println!("Started task {}", task.id);
+                }
+                TaskAction::Heartbeat {
+                    id,
+                    agent,
+                    ttl_secs,
+                    approve,
+                } => {
+                    require_approval(*approve, "task heartbeat")?;
+                    let task = coordinator.heartbeat(
+                        id,
+                        parse_agent_id(agent)?,
+                        chrono::Duration::seconds(*ttl_secs),
+                    )?;
+                    println!(
+                        "Renewed task {} until {}",
+                        task.id,
+                        task.expires_at
+                            .map(|expiry| expiry.to_rfc3339())
+                            .unwrap_or_else(|| "-".into())
+                    );
+                }
+                TaskAction::Complete { id, agent, approve } => {
+                    require_approval(*approve, "task complete")?;
+                    coordinator.complete(id, parse_agent_id(agent)?)?;
+                    println!("Completed task {id} and released its leases");
+                }
+                TaskAction::Fail {
+                    id,
+                    agent,
+                    reason,
+                    approve,
+                } => {
+                    require_approval(*approve, "task fail")?;
+                    coordinator.fail(id, parse_agent_id(agent)?, reason)?;
+                    println!("Failed task {id} and released its leases");
+                }
+                TaskAction::Cancel { id, approve } => {
+                    require_approval(*approve, "task cancel")?;
+                    coordinator.cancel(id)?;
+                    println!("Cancelled task {id} and released its leases");
+                }
+                TaskAction::RequeueExpired { approve } => {
+                    require_approval(*approve, "task requeue-expired")?;
+                    let count = coordinator.requeue_expired()?;
+                    println!("Requeued {count} expired task claim(s)");
+                }
+            }
+        }
         Commands::Serve { bind } => {
             let address = parse_loopback_bind(bind)?;
             let root = std::env::current_dir()?;
@@ -1050,6 +1251,12 @@ async fn main() -> anyhow::Result<()> {
                     let token = std::env::var("ADE_API_TOKEN")
                         .ok()
                         .filter(|token| !token.trim().is_empty());
+                    let scheduler_root = root.clone();
+                    tokio::spawn(async move {
+                        ade_service::scheduler::Scheduler::new(scheduler_root)
+                            .run()
+                            .await;
+                    });
                     let service = ade_service::runtime::BoundService::bind(
                         ade_service::runtime::ServiceConfig {
                             workspace_root: root.clone(),
@@ -1306,6 +1513,17 @@ fn parse_loopback_bind(bind: &str) -> anyhow::Result<std::net::SocketAddr> {
         );
     }
     Ok(address)
+}
+
+fn parse_agent_id(value: &str) -> anyhow::Result<uuid::Uuid> {
+    uuid::Uuid::parse_str(value).map_err(|error| anyhow::anyhow!("invalid --agent uuid: {error}"))
+}
+
+fn require_approval(approved: bool, operation: &str) -> anyhow::Result<()> {
+    if !approved {
+        anyhow::bail!("{operation} mutates coordination state; rerun with --approve");
+    }
+    Ok(())
 }
 
 fn current_branch(root: &std::path::Path) -> Option<String> {

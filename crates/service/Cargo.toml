@@ -10,6 +10,7 @@ path = "src/lib.rs"
 ade-core = { path = "../core" }
 ade-agents = { path = "../agents" }
 ade-api = { path = "../api" }
+ade-workflow = { path = "../workflow" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

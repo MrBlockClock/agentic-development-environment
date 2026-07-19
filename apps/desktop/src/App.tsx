@@ -82,12 +82,27 @@ type PathLease = {
   protected: boolean;
 };
 
+type AgentTask = {
+  id: string;
+  goal: string;
+  owned_paths: string[];
+  lease_mode: "observe" | "cooperative" | "strong" | "exclusive";
+  depends_on: string[];
+  status: "queued" | "claimed" | "running" | "completed" | "failed" | "cancelled";
+  agent_id: string | null;
+  created_at: string;
+  heartbeat_at: string | null;
+  expires_at: string | null;
+  failure: string | null;
+};
+
 type DashboardSnapshot = {
   workspace_root: string;
   audit: AuditReport;
   plan: PlanReport;
   handoff: HandoffMetrics;
   leases: PathLease[];
+  tasks: AgentTask[];
 };
 
 type VerifyResult = {
@@ -204,7 +219,8 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      setDashboard(await invoke<DashboardSnapshot>("get_dashboard"));
+      const snapshot = await invoke<DashboardSnapshot>("get_dashboard");
+      setDashboard({ ...snapshot, tasks: snapshot.tasks ?? [] });
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -621,7 +637,7 @@ function Overview({
   const passed = verifyResults.filter((result) => result.passed).length;
   return (
     <div className="space-y-5">
-      <section className="grid grid-cols-6 gap-4">
+      <section className="grid grid-cols-7 gap-4">
         <MetricCard label="Readiness score" value={`${scorePercent}%`} accent="blue" />
         <MetricCard
           label="Audit blockers"
@@ -647,6 +663,15 @@ function Overview({
           label="Active leases"
           value={String(dashboard.leases.length)}
           accent={dashboard.leases.length ? "violet" : "slate"}
+        />
+        <MetricCard
+          label="Open tasks"
+          value={String(
+            dashboard.tasks.filter(
+              (task) => !["completed", "failed", "cancelled"].includes(task.status),
+            ).length,
+          )}
+          accent={dashboard.tasks.some((task) => task.status === "running") ? "blue" : "slate"}
         />
       </section>
 
@@ -741,6 +766,49 @@ function Overview({
                 <span className="truncate font-mono text-slate-600">{lease.agent_id}</span>
                 <span className="text-right text-slate-600">
                   {new Date(lease.expires_at).toLocaleTimeString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Panel
+        title="Coordinated task queue"
+        subtitle="Dependency-aware claims acquire durable path leases before agent work starts"
+      >
+        {dashboard.tasks.length === 0 ? (
+          <p className="text-xs text-slate-500">
+            No queued tasks. Use <span className="font-mono">ade task enqueue --approve</span> to
+            add lease-backed work.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {dashboard.tasks.slice(-8).map((task) => (
+              <div
+                key={task.id}
+                className="grid grid-cols-[90px_1fr_150px_120px] items-center gap-3 border-b border-white/5 py-2 text-[11px]"
+              >
+                <span
+                  className={
+                    task.status === "running"
+                      ? "text-blue-300"
+                      : task.status === "completed"
+                        ? "text-emerald-300"
+                        : task.status === "failed"
+                          ? "text-red-300"
+                          : "text-slate-400"
+                  }
+                >
+                  {task.status}
+                </span>
+                <span className="truncate text-slate-300">{task.goal}</span>
+                <span className="truncate font-mono text-slate-600">
+                  {task.agent_id ?? "unassigned"}
+                </span>
+                <span className="text-right text-slate-600">
+                  {task.owned_paths.length} owned path
+                  {task.owned_paths.length === 1 ? "" : "s"}
                 </span>
               </div>
             ))}

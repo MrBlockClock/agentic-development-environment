@@ -73,6 +73,7 @@ pub struct DashboardSnapshot {
     pub plan: PlanReport,
     pub handoff: ade_agents::handoff::HandoffMetrics,
     pub leases: Vec<ade_workflow::parallel::PathLease>,
+    pub tasks: Vec<ade_workflow::tasks::AgentTask>,
 }
 
 #[tauri::command]
@@ -85,12 +86,16 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
     let leases = ade_workflow::parallel::LeaseManager::new(&state.workspace_root)
         .list()
         .map_err(|error| error.to_string())?;
+    let tasks = ade_workflow::tasks::TaskCoordinator::new(&state.workspace_root)
+        .list()
+        .map_err(|error| error.to_string())?;
     Ok(DashboardSnapshot {
         workspace_root: state.workspace_root.display().to_string(),
         audit,
         plan,
         handoff,
         leases,
+        tasks,
     })
 }
 

@@ -4,6 +4,7 @@ use ade_core::audit::{AuditMode, AuditReport, AuditRunner};
 use ade_core::plan::{PlanBuilder, PlanReport};
 use ade_core::recipe::StackRecipe;
 use ade_workflow::parallel::{LeaseManager, PathLease, WorktreeInfo, WorktreeManager};
+use ade_workflow::tasks::{AgentTask, TaskCoordinator};
 use axum::{
     extract::State,
     http::{header, Method, StatusCode},
@@ -85,6 +86,7 @@ struct ApiSnapshot {
     plan: PlanReport,
     handoff: ade_agents::handoff::HandoffMetrics,
     leases: Vec<PathLease>,
+    tasks: Vec<AgentTask>,
     worktrees: Vec<WorktreeInfo>,
     worktree_error: Option<String>,
 }
@@ -135,6 +137,7 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/state", get(state_snapshot))
         .route("/recipes", get(list_recipes))
         .route("/leases", get(list_leases))
+        .route("/tasks", get(list_tasks))
         .route("/worktrees", get(list_worktrees))
         .route("/handoff", get(handoff_status))
         .route("/events", get(events))
@@ -244,6 +247,13 @@ async fn list_leases(State(state): State<ApiState>) -> ApiResult<Vec<PathLease>>
         .map_err(ApiError::internal)
 }
 
+async fn list_tasks(State(state): State<ApiState>) -> ApiResult<Vec<AgentTask>> {
+    TaskCoordinator::new(state.workspace_root())
+        .list()
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
 async fn list_worktrees(State(state): State<ApiState>) -> ApiResult<Vec<WorktreeInfo>> {
     WorktreeManager::new(state.workspace_root())
         .list()
@@ -269,6 +279,9 @@ async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot>
     let leases = LeaseManager::new(state.workspace_root())
         .list()
         .map_err(ApiError::internal)?;
+    let tasks = TaskCoordinator::new(state.workspace_root())
+        .list()
+        .map_err(ApiError::internal)?;
     let (worktrees, worktree_error) = match WorktreeManager::new(state.workspace_root()).list() {
         Ok(worktrees) => (worktrees, None),
         Err(error) => (Vec::new(), Some(error.to_string())),
@@ -280,6 +293,7 @@ async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot>
         plan,
         handoff,
         leases,
+        tasks,
         worktrees,
         worktree_error,
     }))

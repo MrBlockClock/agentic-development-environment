@@ -4,6 +4,7 @@ use ade_core::handoff::HandoffCapsule;
 use ade_core::plan::PlanBuilder;
 use ade_core::verify::VerifyGate;
 use ade_workflow::parallel::{LeaseManager, LeaseMode};
+use ade_workflow::tasks::TaskCoordinator;
 use ade_workflow::verify::VerifyRunner;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -142,6 +143,10 @@ impl AdeMcpServer {
                 "ade_lease_list",
                 "List active path leases without mutating ownership",
             ),
+            tool_def(
+                "ade_task_list",
+                "List coordinated tasks and their dependency/claim status without mutation",
+            ),
             tool_def_with_schema(
                 "ade_lease_acquire",
                 "Acquire a durable path lease for an agent (mutating; requires approve=true)",
@@ -229,6 +234,10 @@ impl AdeMcpServer {
             "ade_lease_list" => {
                 let leases = LeaseManager::new(&self.root).list()?;
                 serde_json::to_string_pretty(&leases)?
+            }
+            "ade_task_list" => {
+                let tasks = TaskCoordinator::new(&self.root).list()?;
+                serde_json::to_string_pretty(&tasks)?
             }
             other => {
                 return Ok(json!({
@@ -377,6 +386,10 @@ mod tests {
             .tools()
             .iter()
             .any(|tool| tool["name"] == "ade_lease_list"));
+        assert!(server
+            .tools()
+            .iter()
+            .any(|tool| tool["name"] == "ade_task_list"));
         let result = server.call_tool("ade_lease_list", &json!({})).unwrap();
         assert!(result.to_string().contains("src/feature"));
         let _ = std::fs::remove_dir_all(root);
