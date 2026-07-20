@@ -1175,6 +1175,7 @@ function App() {
                   plan={recipePlan}
                   planError={recipePlanError}
                   lastResult={recipeResult}
+                  simpleMode={surfaceMode === "guided"}
                   onPreview={previewRecipe}
                   onInitialize={(input) => void initializeRecipe(input)}
                 />

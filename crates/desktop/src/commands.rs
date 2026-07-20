@@ -657,6 +657,13 @@ pub fn list_recipes() -> Vec<StackRecipe> {
 }
 
 #[tauri::command]
+pub fn rank_recipes(
+    answers: ade_core::recipe_fit::FitAnswers,
+) -> Vec<ade_core::recipe_fit::ScoredRecipe> {
+    ade_core::recipe_fit::rank_builtin_recipes(&answers)
+}
+
+#[tauri::command]
 pub fn list_rules(
     state: State<'_, AppState>,
 ) -> Result<Vec<ade_agents::authority::RuleFileInfo>, String> {
@@ -689,7 +696,8 @@ pub fn get_active_guidance_profile() -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub fn set_active_guidance_profile(id: Option<String>) -> Result<Option<String>, String> {
-    ade_core::guidance::write_active_profile_id(id.as_deref()).map_err(|error| error.to_string())?;
+    ade_core::guidance::write_active_profile_id(id.as_deref())
+        .map_err(|error| error.to_string())?;
     Ok(ade_core::guidance::read_active_profile_id())
 }
 

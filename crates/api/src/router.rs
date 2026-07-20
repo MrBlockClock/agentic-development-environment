@@ -221,10 +221,14 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/plan", get(plan_status))
         .route("/state", get(state_snapshot))
         .route("/recipes", get(list_recipes))
+        .route("/recipes/fit", post(rank_recipes))
         .route("/rules", get(list_rules))
         .route("/skills", get(list_skills))
         .route("/guidance/profiles", get(list_guidance_profiles))
-        .route("/guidance/active-profile", get(get_active_guidance_profile).post(set_active_guidance_profile))
+        .route(
+            "/guidance/active-profile",
+            get(get_active_guidance_profile).post(set_active_guidance_profile),
+        )
         .route("/guidance/global-audit", get(run_global_audit))
         .route("/leases", get(list_leases))
         .route("/tasks", get(list_tasks))
@@ -337,6 +341,12 @@ async fn list_recipes() -> Json<Vec<StackRecipe>> {
     Json(ade_core::recipe::builtin_recipes())
 }
 
+async fn rank_recipes(
+    Json(answers): Json<ade_core::recipe_fit::FitAnswers>,
+) -> Json<Vec<ade_core::recipe_fit::ScoredRecipe>> {
+    Json(ade_core::recipe_fit::rank_builtin_recipes(&answers))
+}
+
 async fn list_rules(
     State(state): State<ApiState>,
 ) -> ApiResult<Vec<ade_agents::authority::RuleFileInfo>> {
@@ -380,7 +390,9 @@ async fn set_active_guidance_profile(
     Ok(Json(ade_core::guidance::read_active_profile_id()))
 }
 
-async fn run_global_audit(State(state): State<ApiState>) -> Json<ade_core::guidance::GlobalAuditReport> {
+async fn run_global_audit(
+    State(state): State<ApiState>,
+) -> Json<ade_core::guidance::GlobalAuditReport> {
     Json(ade_core::guidance::run_global_audit(Some(
         state.workspace_root().as_path(),
     )))

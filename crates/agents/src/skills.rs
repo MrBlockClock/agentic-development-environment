@@ -46,11 +46,8 @@ impl SkillLoader {
     pub fn load_all(&self) -> Result<Vec<SkillDefinition>, AdeError> {
         let mut by_name: BTreeMap<String, SkillDefinition> = BTreeMap::new();
 
-        for skill in load_skills_from_dir(
-            &ade_core::guidance::global_skills_dir(),
-            None,
-            "global",
-        )? {
+        for skill in load_skills_from_dir(&ade_core::guidance::global_skills_dir(), None, "global")?
+        {
             merge_skill_into(&mut by_name, skill);
         }
         for skill in load_skills_from_dir(&self.skills_dir(), Some(&self.root), "workspace")? {
@@ -127,9 +124,7 @@ fn resolve_skill_dir(workspace: &Path, skill: &SkillDefinition) -> Option<PathBu
     if skill.scope == "global" {
         Some(ade_core::guidance::global_skills_dir().join(&skill.name))
     } else {
-        Path::new(&skill.source)
-            .parent()
-            .map(|p| workspace.join(p))
+        Path::new(&skill.source).parent().map(|p| workspace.join(p))
     }
 }
 

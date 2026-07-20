@@ -73,7 +73,10 @@ pub struct GuidanceProfile {
 /// Load profiles from workspace `.ade/profiles` then global (workspace wins on id).
 pub fn load_profiles(workspace: &Path) -> Result<Vec<GuidanceProfile>, AdeError> {
     let mut by_id = std::collections::BTreeMap::new();
-    for dir in [global_profiles_dir(), workspace.join(".ade").join("profiles")] {
+    for dir in [
+        global_profiles_dir(),
+        workspace.join(".ade").join("profiles"),
+    ] {
         if !dir.is_dir() {
             continue;
         }
@@ -161,12 +164,8 @@ fn parse_packs_toml(raw: &str) -> Vec<String> {
 
 /// Extract optional `pack:` from markdown frontmatter.
 pub fn frontmatter_pack(content: &str) -> Option<String> {
-    let header = {
-        let Some(rest) = content.strip_prefix("---") else {
-            return None;
-        };
-        rest.split_once("---").map(|(h, _)| h).unwrap_or("")
-    };
+    let rest = content.strip_prefix("---")?;
+    let header = rest.split_once("---").map(|(h, _)| h).unwrap_or("");
     for line in header.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed
@@ -184,11 +183,7 @@ pub fn frontmatter_pack(content: &str) -> Option<String> {
 
 /// Keep item if no active profile, or pack is untagged, or pack is in profile.
 /// Deny rules with a pack still pass when `force_keep_denies` and the item is a deny.
-pub fn pack_allowed(
-    pack: Option<&str>,
-    active: Option<&GuidanceProfile>,
-    is_deny: bool,
-) -> bool {
+pub fn pack_allowed(pack: Option<&str>, active: Option<&GuidanceProfile>, is_deny: bool) -> bool {
     let Some(profile) = active else {
         return true;
     };
@@ -242,8 +237,7 @@ pub fn run_global_audit(preferred_workspace: Option<&Path>) -> GlobalAuditReport
     });
 
     let ws_ptr = ade_machine_home().join("workspace-root.txt");
-    let ptr_ok = ws_ptr.is_file()
-        || preferred_workspace.is_some_and(|p| p.exists());
+    let ptr_ok = ws_ptr.is_file() || preferred_workspace.is_some_and(|p| p.exists());
     checks.push(GlobalAuditCheck {
         id: "workspace_pointer".into(),
         label: "Preferred workspace pointer".into(),

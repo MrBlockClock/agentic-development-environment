@@ -167,34 +167,40 @@ impl HandoffManager {
         let latest_path = directory.join("latest.json");
         if latest_path.is_file() {
             let payload = std::fs::read(&latest_path)?;
-            let capsule: HandoffCapsule = serde_json::from_slice(&payload)?;
-            validate_capsule(&capsule)?;
-            let summary_chars = capsule
-                .compact_summary
-                .as_deref()
-                .map(|summary| summary.chars().count() as u64)
-                .unwrap_or(0);
-            let latest_bytes = payload.len() as u64;
-            metrics.latest_bytes = latest_bytes;
-            metrics.latest_summary_chars = summary_chars;
-            let retained = summary_chars
-                .saturating_mul(100)
-                .checked_div(latest_bytes)
-                .unwrap_or(0);
-            metrics.latest_compaction_percent = 100_u32.saturating_sub(retained.min(100) as u32);
-            metrics.latest_score_before = capsule.score_before;
-            metrics.latest_score_after = capsule.score_after;
-            metrics.latest_score_max = capsule.score_max;
-            metrics.latest_score_delta = capsule
-                .score_before
-                .zip(capsule.score_after)
-                .map(|(before, after)| i64::from(after) - i64::from(before));
-            metrics.latest_status = capsule.turn_status.clone();
-            metrics.latest_created_at = capsule.created_at.clone();
-            if let Some(context) = &capsule.context_compaction {
-                metrics.latest_context_status = Some(context.status.clone());
-                metrics.latest_context_tokens = Some(context.tokens_estimated);
-                metrics.latest_context_sections = context.sections.clone();
+            match serde_json::from_slice::<HandoffCapsule>(&payload) {
+                Ok(capsule) if validate_capsule(&capsule).is_ok() => {
+                    let summary_chars = capsule
+                        .compact_summary
+                        .as_deref()
+                        .map(|summary| summary.chars().count() as u64)
+                        .unwrap_or(0);
+                    let latest_bytes = payload.len() as u64;
+                    metrics.latest_bytes = latest_bytes;
+                    metrics.latest_summary_chars = summary_chars;
+                    let retained = summary_chars
+                        .saturating_mul(100)
+                        .checked_div(latest_bytes)
+                        .unwrap_or(0);
+                    metrics.latest_compaction_percent =
+                        100_u32.saturating_sub(retained.min(100) as u32);
+                    metrics.latest_score_before = capsule.score_before;
+                    metrics.latest_score_after = capsule.score_after;
+                    metrics.latest_score_max = capsule.score_max;
+                    metrics.latest_score_delta = capsule
+                        .score_before
+                        .zip(capsule.score_after)
+                        .map(|(before, after)| i64::from(after) - i64::from(before));
+                    metrics.latest_status = capsule.turn_status.clone();
+                    metrics.latest_created_at = capsule.created_at.clone();
+                    if let Some(context) = &capsule.context_compaction {
+                        metrics.latest_context_status = Some(context.status.clone());
+                        metrics.latest_context_tokens = Some(context.tokens_estimated);
+                        metrics.latest_context_sections = context.sections.clone();
+                    }
+                }
+                _ => {
+                    metrics.invalid_capsule_count = metrics.invalid_capsule_count.saturating_add(1);
+                }
             }
         }
 

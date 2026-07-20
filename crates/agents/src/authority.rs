@@ -386,11 +386,7 @@ fn load_scoped_rules(root: &Path) -> Result<Vec<ScopedRule>, AdeError> {
     let mut by_stem: BTreeMap<String, ScopedRule> = BTreeMap::new();
 
     // Global first; workspace overwrites prompt body but deny union kept via merge_rule.
-    for rule in load_rules_from_dir(
-        &ade_core::guidance::global_rules_dir(),
-        None,
-        "global",
-    )? {
+    for rule in load_rules_from_dir(&ade_core::guidance::global_rules_dir(), None, "global")? {
         merge_rule_into(&mut by_stem, rule);
     }
     for rule in load_rules_from_dir(&root.join(".ade").join("rules"), Some(root), "workspace")? {
@@ -472,7 +468,10 @@ fn load_rules_from_dir(
                     .display()
                     .to_string()
             } else {
-                format!("global/rules/{}", path.file_name().and_then(|n| n.to_str()).unwrap_or(&stem))
+                format!(
+                    "global/rules/{}",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or(&stem)
+                )
             };
             Ok(ScopedRule {
                 source,

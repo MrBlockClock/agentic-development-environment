@@ -4,6 +4,33 @@ use std::collections::BTreeMap;
 
 pub const RECIPE_SCHEMA: &str = "ade.recipe/v1";
 
+/// Browse facet: classic well-known vs modern defaults vs frontier stacks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecipeEra {
+    Classic,
+    #[default]
+    Modern,
+    Frontier,
+}
+
+/// Hints used by Stack Fit scoring (see `recipe_fit`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RecipeFitHints {
+    #[serde(default)]
+    pub intents: Vec<String>,
+    #[serde(default)]
+    pub runtimes: Vec<String>,
+    #[serde(default)]
+    pub ui_surfaces: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub compliance: Vec<String>,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
 /// A stack recipe used by `ade init` to scaffold a project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackRecipe {
@@ -18,6 +45,14 @@ pub struct StackRecipe {
     /// How G5 evidence should be gathered for this stack.
     #[serde(default)]
     pub g5: RecipeG5,
+    #[serde(default)]
+    pub era: RecipeEra,
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub fit: RecipeFitHints,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +109,25 @@ pub enum RecipeG5 {
     None,
 }
 
+fn fit(
+    intents: &[&str],
+    runtimes: &[&str],
+    ui_surfaces: &[&str],
+    evidence: &[&str],
+    compliance: &[&str],
+    hosts: &[&str],
+) -> RecipeFitHints {
+    RecipeFitHints {
+        intents: intents.iter().map(|s| (*s).into()).collect(),
+        runtimes: runtimes.iter().map(|s| (*s).into()).collect(),
+        ui_surfaces: ui_surfaces.iter().map(|s| (*s).into()).collect(),
+        evidence: evidence.iter().map(|s| (*s).into()).collect(),
+        compliance: compliance.iter().map(|s| (*s).into()).collect(),
+        hosts: hosts.iter().map(|s| (*s).into()).collect(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn recipe(
     id: &str,
     name: &str,
@@ -82,6 +136,10 @@ fn recipe(
     toolchain: &[(&str, &str)],
     commands: RecipeCommands,
     g5: RecipeG5,
+    era: RecipeEra,
+    domain: &str,
+    tags: &[&str],
+    fit_hints: RecipeFitHints,
 ) -> StackRecipe {
     StackRecipe {
         id: id.into(),
@@ -94,10 +152,14 @@ fn recipe(
             .collect(),
         commands,
         g5,
+        era,
+        domain: domain.into(),
+        tags: tags.iter().map(|t| (*t).into()).collect(),
+        fit: fit_hints,
     }
 }
 
-/// Built-in recipe catalog — the 13 ADE stack recipes.
+/// Built-in recipe catalog — the 13 ADE stack recipes (+ compatibility alias).
 pub fn builtin_recipes() -> Vec<StackRecipe> {
     vec![
         recipe(
@@ -113,6 +175,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: steps(&["cargo test", "npm test"]),
             },
             RecipeG5::Playwright,
+            RecipeEra::Modern,
+            "saas",
+            &["saas", "multi-tenant", "playwright", "rust", "node"],
+            fit(
+                &["product"],
+                &["rust", "node", "mixed"],
+                &["web"],
+                &["playwright"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "business-regulated",
@@ -127,6 +200,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: steps(&["cargo test", "npm test"]),
             },
             RecipeG5::Playwright,
+            RecipeEra::Classic,
+            "saas",
+            &["saas", "compliance", "regulated", "authz", "playwright"],
+            fit(
+                &["product"],
+                &["rust", "node", "mixed"],
+                &["web"],
+                &["playwright"],
+                &["regulated"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "rust-systems",
@@ -141,6 +225,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("cargo test"),
             },
             RecipeG5::BinarySmoke,
+            RecipeEra::Classic,
+            "systems",
+            &["rust", "cli", "library", "binary"],
+            fit(
+                &["lib", "product"],
+                &["rust"],
+                &["none"],
+                &["binary"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "rust-api-turso",
@@ -155,6 +250,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("cargo test"),
             },
             RecipeG5::HttpContract,
+            RecipeEra::Modern,
+            "systems",
+            &["rust", "axum", "turso", "api", "http"],
+            fit(
+                &["product", "lib"],
+                &["rust"],
+                &["none", "web"],
+                &["http"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "godot-rust-game",
@@ -169,6 +275,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("cargo test"),
             },
             RecipeG5::PlaytestChecklist,
+            RecipeEra::Frontier,
+            "game",
+            &["godot", "game", "rust", "gdscript"],
+            fit(
+                &["product"],
+                &["rust"],
+                &["game"],
+                &["any"],
+                &["none"],
+                &["windows", "macos", "linux"],
+            ),
         ),
         recipe(
             "python-data-ai",
@@ -183,6 +300,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("pytest"),
             },
             RecipeG5::ReproducibilityNote,
+            RecipeEra::Modern,
+            "data-ai",
+            &["python", "ml", "data", "ruff", "pytest"],
+            fit(
+                &["lib", "product"],
+                &["python"],
+                &["none"],
+                &["any"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "mobile-app",
@@ -197,6 +325,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("npm test"),
             },
             RecipeG5::DeviceChecklist,
+            RecipeEra::Modern,
+            "mobile",
+            &["mobile", "react-native", "flutter", "device"],
+            fit(
+                &["product"],
+                &["node", "any"],
+                &["mobile"],
+                &["device"],
+                &["none"],
+                &["macos", "linux", "windows"],
+            ),
         ),
         recipe(
             "tauri-desktop",
@@ -211,6 +350,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("cargo test"),
             },
             RecipeG5::InstallSmoke,
+            RecipeEra::Frontier,
+            "desktop",
+            &["tauri", "desktop", "rust", "node"],
+            fit(
+                &["product"],
+                &["rust", "node", "mixed"],
+                &["desktop"],
+                &["binary"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "web-playwright-quality",
@@ -225,6 +375,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("npm test"),
             },
             RecipeG5::Playwright,
+            RecipeEra::Classic,
+            "saas",
+            &["web", "node", "playwright", "typescript"],
+            fit(
+                &["product"],
+                &["node"],
+                &["web"],
+                &["playwright"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "embedded-hil",
@@ -239,6 +400,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("cargo test"),
             },
             RecipeG5::HardwareSignoff,
+            RecipeEra::Classic,
+            "embedded",
+            &["embedded", "firmware", "hil", "rust"],
+            fit(
+                &["product", "lib"],
+                &["rust"],
+                &["none"],
+                &["hil"],
+                &["none"],
+                &["linux", "macos", "windows"],
+            ),
         ),
         recipe(
             "oss-fork-maintainer",
@@ -253,6 +425,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: steps(&["cargo test", "npm test"]),
             },
             RecipeG5::UpstreamTests,
+            RecipeEra::Classic,
+            "oss",
+            &["oss", "fork", "upstream", "maintainer"],
+            fit(
+                &["ops", "lib"],
+                &["any", "mixed", "rust", "node"],
+                &["none", "web"],
+                &["any"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "ade-plan-heavy",
@@ -267,6 +450,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: None,
             },
             RecipeG5::PlanChecklist,
+            RecipeEra::Frontier,
+            "ade",
+            &["plan", "architecture", "ade"],
+            fit(
+                &["ops"],
+                &["any"],
+                &["none"],
+                &["plan"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
         recipe(
             "multi-ade-shop",
@@ -281,6 +475,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("cargo test"),
             },
             RecipeG5::ParityProbes,
+            RecipeEra::Frontier,
+            "ade",
+            &["multi-agent", "parity", "team", "ade"],
+            fit(
+                &["ops", "product"],
+                &["rust", "any"],
+                &["none", "desktop"],
+                &["any"],
+                &["none"],
+                &["windows", "wsl"],
+            ),
         ),
         // Compatibility alias used by older docs/UI copy.
         recipe(
@@ -296,6 +501,17 @@ pub fn builtin_recipes() -> Vec<StackRecipe> {
                 test: cmd("npm test"),
             },
             RecipeG5::Playwright,
+            RecipeEra::Classic,
+            "saas",
+            &["web", "node", "alias"],
+            fit(
+                &["product"],
+                &["node"],
+                &["web"],
+                &["playwright"],
+                &["none"],
+                &["windows", "wsl", "macos", "linux"],
+            ),
         ),
     ]
 }
@@ -350,6 +566,8 @@ mod tests {
             vec!["cargo test"]
         );
         assert_eq!(recipe.g5, RecipeG5::HttpContract);
+        assert_eq!(recipe.domain, "systems");
+        assert_eq!(recipe.era, RecipeEra::Modern);
     }
 
     #[test]
@@ -382,6 +600,17 @@ mod tests {
                     assert!(!step.contains("||"), "{}: {step}", recipe.id);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn recipes_have_fit_metadata() {
+        for recipe in builtin_recipes() {
+            if recipe.id == "node-web" {
+                continue;
+            }
+            assert!(!recipe.domain.is_empty(), "{}", recipe.id);
+            assert!(!recipe.fit.runtimes.is_empty(), "{}", recipe.id);
         }
     }
 }

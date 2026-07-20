@@ -110,6 +110,13 @@ export async function invoke<T>(
       body: JSON.stringify({ id: args?.id ?? null }),
     });
   }
+  if (command === "rank_recipes") {
+    return http<T>("/api/recipes/fit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args?.answers ?? args ?? {}),
+    });
+  }
   const route = httpReads[command];
   if (route) {
     return http<T>(route);
