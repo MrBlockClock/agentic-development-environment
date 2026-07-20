@@ -1933,6 +1933,17 @@ async fn main() -> anyhow::Result<()> {
                             ade_core::money::Money::from_micros(soft_cap_micros).format_usd()
                         );
                     }
+                    ade_agents::session::AgentEvent::VerifyComplete {
+                        gate,
+                        passed,
+                        summary,
+                        ..
+                    } => {
+                        eprintln!(
+                            "\n{} verify {gate}: {summary}",
+                            if passed { "✓" } else { "✗" }
+                        );
+                    }
                     ade_agents::session::AgentEvent::Completed { result } => {
                         final_result = Some(result);
                     }
