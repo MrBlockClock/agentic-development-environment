@@ -318,6 +318,37 @@ pub struct AuthorityDecision {
     pub effect: ToolEffect,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleFileInfo {
+    pub source: String,
+    pub description: String,
+    pub globs: Vec<String>,
+    pub deny_writes: bool,
+    pub content: String,
+}
+
+/// Public listing of `.ade/rules/*.mdc` for desktop/API surfaces.
+pub fn list_rule_files(root: impl AsRef<Path>) -> Result<Vec<RuleFileInfo>, AdeError> {
+    let root = root.as_ref();
+    Ok(load_scoped_rules(root)?
+        .into_iter()
+        .map(|rule| {
+            let description = frontmatter(&rule.content)
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("description:"))
+                .map(|value| value.trim().trim_matches('"').to_string())
+                .unwrap_or_default();
+            RuleFileInfo {
+                source: rule.source.replace('\\', "/"),
+                description,
+                globs: rule.patterns,
+                deny_writes: rule.deny_writes,
+                content: rule.content,
+            }
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone)]
 struct ScopedRule {
     source: String,
@@ -396,7 +427,7 @@ fn parse_patterns(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn classify_tool_effect(request: &ToolAuthRequest) -> ToolEffect {
+pub fn classify_tool_effect(request: &ToolAuthRequest) -> ToolEffect {
     if let Some(effect) = registry_effect(&request.server, &request.tool) {
         return effect;
     }
@@ -452,6 +483,7 @@ fn tool_registry() -> &'static BTreeMap<String, ToolEffect> {
             ("ade", "ade_recipe_list", ToolEffect::ReadOnly),
             ("ade", "ade_key_status", ToolEffect::ReadOnly),
             ("ade", "ade_lease_list", ToolEffect::ReadOnly),
+            ("ade", "activate_skill", ToolEffect::ReadOnly),
             ("fs", "read_file", ToolEffect::ReadOnly),
             ("fs", "list_directory", ToolEffect::ReadOnly),
             ("fs", "write_file", ToolEffect::WorkspaceWrite),

@@ -1,0 +1,12 @@
+---
+description: Infra discipline for ADE local API, daemon, and tooling
+globs: [scripts/**, crates/api/**, crates/service/**, apps/cli/**]
+---
+# ADE Infra Core
+
+- Single source of truth per fact (ports, bind address, token env vars). Default API: `127.0.0.1:3210`.
+- Scripts are idempotent; safe to run twice on healthy state.
+- Anything that must stay up: health endpoint (`/health/live`), restart path, and a one-line status check.
+- Full absolute interpreter/binary paths on Windows; verify the process actually starts after wiring.
+- Secrets in env / vault only — never in rules, skills, AGENTS.md, or committed configs.
+- Before removing a service or port, grep the tree for references.

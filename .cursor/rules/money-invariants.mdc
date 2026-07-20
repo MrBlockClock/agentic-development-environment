@@ -1,0 +1,10 @@
+---
+description: Money type invariants for spend/ledger code
+globs: [crates/core/src/money.rs, crates/agents/src/spend.rs, crates/db/**]
+---
+# Money Invariants
+
+- Use `ade_core::Money` (i64 micro-dollars) for all financial arithmetic.
+- Never reintroduce `f64` for money math.
+- Convert display/USD strings only at UI/CLI/API boundaries.
+- Soft caps and ledgers must stay integer-safe under concurrent reserve/reconcile.

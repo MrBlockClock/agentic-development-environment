@@ -25,6 +25,7 @@ impl ContextBudget {
     pub fn total_prompt_allowance(&self) -> u32 {
         self.always_on_tokens
             .saturating_add(self.rules_tokens)
+            .saturating_add(self.skills_tokens)
             .saturating_add(self.handoff_tokens)
     }
 
@@ -119,6 +120,7 @@ impl PromptAssembler {
         &self,
         start_prompt: &str,
         authority_context: &str,
+        skills_context: Option<&str>,
         handoff_summary: Option<&str>,
     ) -> AssembledPrompt {
         let mut sections = Vec::new();
@@ -141,6 +143,17 @@ impl PromptAssembler {
             truncated: authority_truncated,
         });
         parts.push(authority);
+
+        if let Some(skills) = skills_context.filter(|text| !text.trim().is_empty()) {
+            let (skills_text, skills_truncated) =
+                truncate_to_tokens(skills, self.budget.skills_tokens);
+            sections.push(PromptSection {
+                name: "skills".into(),
+                tokens: estimate_tokens(&skills_text),
+                truncated: skills_truncated,
+            });
+            parts.push(skills_text);
+        }
 
         if let Some(handoff) = handoff_summary.filter(|text| !text.trim().is_empty()) {
             let (summary, handoff_truncated) =
@@ -209,7 +222,7 @@ mod tests {
     fn estimates_and_truncates_under_budget() {
         let assembler = PromptAssembler::daily(8_000);
         let huge_rules = "rule\n".repeat(5_000);
-        let assembled = assembler.assemble("start prompt", &huge_rules, Some("handoff body"));
+        let assembled = assembler.assemble("start prompt", &huge_rules, None, Some("handoff body"));
         assert!(
             assembled.tokens_estimated <= ContextBudget::default_daily().total_prompt_allowance()
         );
@@ -242,6 +255,7 @@ mod tests {
         let assembled = PromptAssembler::daily(8_000).assemble(
             "start prompt",
             "authority rules",
+            Some("skill body"),
             Some("handoff body"),
         );
         let metrics = assembled.compaction_metrics();

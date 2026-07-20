@@ -1,0 +1,10 @@
+---
+description: AUDIT → PLAN → EXECUTE routing for ADE agents
+---
+# Golden Path Routing
+
+- **AUDIT:** Read-only discovery and scoring. No code changes.
+- **PLAN:** Phases, gates, ownership. Read-mostly. Drafts only in `docs/` or `.ade/`.
+- **EXECUTE:** Apply approved phases only. Never expand scope.
+- Risky EXECUTE needs `.ade/plan/last.json` (PlanEnforcer). Do not bypass.
+- Authority order: law/security → CI/tests → AGENTS.md → `.ade/rules` → skills → task criteria → chat.

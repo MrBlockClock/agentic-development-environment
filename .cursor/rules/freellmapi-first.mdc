@@ -1,0 +1,10 @@
+---
+description: Offload AI-heavy work to the local $0 FreeLLMAPI router
+---
+# FreeLLMAPI-first
+
+Canonical facts live in `C:\AI-Tooling\freellmapi\FREELLMAPI-BASE.md` — read when needed; never restate here.
+
+- Prefer MCP `user-freellmapi` tools (`freellmapi_code`, `freellmapi_review`, `freellmapi_chat`) for large codegen/review/analysis.
+- Reserve Cursor/ADE built-in models for orchestration (tools, git, terminal, small edits, runtime debugging) or when FreeLLMAPI is unreachable.
+- If FreeLLMAPI is down, note once and continue; watchdog restores it.

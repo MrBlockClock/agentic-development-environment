@@ -10,17 +10,30 @@ const apiBase = import.meta.env.VITE_ADE_API_URL ?? "http://127.0.0.1:3210";
 const httpReads: Record<string, string> = {
   get_dashboard: "/api/state",
   list_recipes: "/api/recipes",
+  list_rules: "/api/rules",
+  list_skills: "/api/skills",
 };
 
-async function http<T>(path: string): Promise<T> {
-  const headers: Record<string, string> = {};
+/**
+ * MCP connections live in the desktop process, not the loopback API.
+ * Browser preview reports an empty registry so the MCP panel can load.
+ */
+const browserEmptyReads = new Set(["mcp_list_servers", "mcp_list_tools"]);
+
+async function http<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+  };
   const token = window.localStorage.getItem("ade_api_token");
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
   let response: Response;
   try {
-    response = await fetch(`${apiBase}${path}`, { headers });
+    response = await fetch(`${apiBase}${path}`, { ...init, headers });
   } catch {
     throw new Error(
       `Browser mode: cannot reach the local ADE API at ${apiBase}. ` +
@@ -34,14 +47,23 @@ async function http<T>(path: string): Promise<T> {
     );
   }
   if (!response.ok) {
-    throw new Error(`ADE API ${path} failed: HTTP ${response.status}`);
+    let detail = `HTTP ${response.status}`;
+    try {
+      const body = (await response.json()) as { error?: { message?: string } };
+      if (body.error?.message) {
+        detail = body.error.message;
+      }
+    } catch {
+      // keep status detail
+    }
+    throw new Error(`ADE API ${path} failed: ${detail}`);
   }
   return (await response.json()) as T;
 }
 
 /**
- * Tauri `invoke` with a browser fallback: read-only commands are served by the
- * local HTTP API; everything else needs the desktop shell.
+ * Tauri `invoke` with a browser fallback: coordination reads + verify go to the
+ * local HTTP API; MCP list returns empty; mutations need desktop.
  */
 export async function invoke<T>(
   command: string,
@@ -50,12 +72,25 @@ export async function invoke<T>(
   if (isTauri) {
     return tauriInvoke<T>(command, args);
   }
+  if (browserEmptyReads.has(command)) {
+    return [] as T;
+  }
+  if (command === "run_verify") {
+    return http<T>("/api/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gate: String(args?.gate ?? "G0"),
+        through: Boolean(args?.through),
+      }),
+    });
+  }
   const route = httpReads[command];
   if (route) {
     return http<T>(route);
   }
   throw new Error(
-    `"${command}" requires the ADE desktop app. The browser preview is ` +
-      "read-only (dashboard and recipes via the local ADE API).",
+    `"${command}" requires the ADE desktop app. Browser preview supports ` +
+      "dashboard/recipes/verify/rules/skills via the local API; MCP connect and agent turns need Tauri.",
   );
 }

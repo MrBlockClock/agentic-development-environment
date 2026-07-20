@@ -1,8 +1,13 @@
-use crate::authority::{AuthorityEnforcer, ToolAnnotations, ToolAuthRequest, WriteScope};
+use crate::authority::{
+    classify_tool_effect, AuthorityEnforcer, ToolAnnotations, ToolAuthRequest, ToolEffect,
+    WriteScope,
+};
+use crate::autonomy::AutonomyLevel;
 use crate::mcp::McpHost;
 use crate::provider::{
     ChatProvider, ModelConfig, ProviderRequest, ProviderStreamEvent, ProviderTool, ProviderUsage,
 };
+use crate::skills::{skill_body_block, SkillLoader};
 use crate::spend::{SpendCaps, SpendGuard, SpendOutcome};
 use ade_core::error::AdeError;
 use ade_db::usage_ledger::UsageLedgerStore;
@@ -16,7 +21,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-const MAX_TOOL_ROUNDS: usize = 8;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTurnResult {
@@ -44,6 +49,7 @@ pub enum AgentEvent {
         server: String,
         tool: String,
         arguments: Value,
+        effect: ToolEffect,
     },
     ToolResult {
         server: String,
@@ -61,6 +67,11 @@ pub enum AgentEvent {
         period_key: String,
         projected_micros: i64,
         soft_cap_micros: i64,
+    },
+    VerifyComplete {
+        gate: String,
+        passed: bool,
+        summary: String,
     },
     Completed {
         result: AgentTurnResult,
@@ -85,6 +96,9 @@ pub struct AgentSession {
     spend: Option<SpendGuard>,
     cancel: Option<Arc<AtomicBool>>,
     request_timeout: Duration,
+    autonomy: AutonomyLevel,
+    max_tool_rounds: usize,
+    max_tokens: Option<u64>,
 }
 
 impl AgentSession {
@@ -105,6 +119,9 @@ impl AgentSession {
             spend: None,
             cancel: None,
             request_timeout: Duration::from_secs(120),
+            autonomy: AutonomyLevel::Propose,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_tokens: None,
         }
     }
 
@@ -115,6 +132,21 @@ impl AgentSession {
 
     pub fn with_workspace(mut self, root: impl Into<PathBuf>) -> Self {
         self.workspace_root = root.into();
+        self
+    }
+
+    pub fn with_autonomy(mut self, autonomy: AutonomyLevel) -> Self {
+        self.autonomy = autonomy;
+        self
+    }
+
+    pub fn with_max_tool_rounds(mut self, rounds: usize) -> Self {
+        self.max_tool_rounds = rounds.max(1);
+        self
+    }
+
+    pub fn with_max_tokens(mut self, max_tokens: Option<u64>) -> Self {
+        self.max_tokens = max_tokens.filter(|value| *value > 0);
         self
     }
 
@@ -205,8 +237,18 @@ impl AgentSession {
         let mut total_usage = ProviderUsage::default();
         let mut tool_call_count = 0;
 
-        for _round in 0..MAX_TOOL_ROUNDS {
+        for round in 0..self.max_tool_rounds {
             self.check_cancelled()?;
+            if let Some(max_tokens) = self.max_tokens {
+                let used = total_usage
+                    .input_tokens
+                    .saturating_add(total_usage.output_tokens);
+                if used >= max_tokens {
+                    return Err(AdeError::Provider(format!(
+                        "agent exceeded the {max_tokens}-token turn budget (used {used})"
+                    )));
+                }
+            }
             let estimate = self.model.max_round_cost()?;
             let (reservations, outcomes) = spend
                 .reserve(estimate, &provider_name, &self.model.id)
@@ -270,6 +312,18 @@ impl AgentSession {
             total_usage.input_tokens += completion.usage.input_tokens;
             total_usage.output_tokens += completion.usage.output_tokens;
 
+            if let Some(max_tokens) = self.max_tokens {
+                let used = total_usage
+                    .input_tokens
+                    .saturating_add(total_usage.output_tokens);
+                if used > max_tokens {
+                    return Err(AdeError::Provider(format!(
+                        "agent exceeded the {max_tokens}-token turn budget after round {} (used {used})",
+                        round + 1
+                    )));
+                }
+            }
+
             if completion.tool_calls.is_empty() {
                 let result = AgentTurnResult {
                     session_id: self.session_id,
@@ -321,7 +375,7 @@ impl AgentSession {
                         call.name
                     )));
                 }
-                self.authority.authorize_tool_call(&ToolAuthRequest {
+                let auth_request = ToolAuthRequest {
                     server: route.server.clone(),
                     tool: route.tool.clone(),
                     arguments: arguments.clone(),
@@ -329,40 +383,71 @@ impl AgentSession {
                     annotations: Some(route.annotations.clone()),
                     write_scope: WriteScope::PlanOwnedPaths,
                     human_approved: false,
-                })?;
+                };
+                let effect = classify_tool_effect(&auth_request);
+                if !self.autonomy.allows_tool_effect(effect) {
+                    return Err(AdeError::Authorization(format!(
+                        "tool {}/{} ({effect:?}) blocked by autonomy={}",
+                        route.server,
+                        route.tool,
+                        self.autonomy.as_str()
+                    )));
+                }
+                self.authority.authorize_tool_call(&auth_request)?;
                 let _ = events
                     .send(AgentEvent::ToolCall {
                         server: route.server.clone(),
                         tool: route.tool.clone(),
                         arguments: arguments.clone(),
+                        effect,
                     })
                     .await;
-                let result = self
-                    .mcp
-                    .call_tool(&route.server, &route.tool, arguments)
-                    .await?;
+                let (is_error, text, content) = if route.host {
+                    match self.call_host_tool(&route.tool, &arguments) {
+                        Ok(text) => (false, text.clone(), Value::String(text)),
+                        Err(error) => {
+                            let text = error.to_string();
+                            (true, text.clone(), Value::String(text))
+                        }
+                    }
+                } else {
+                    let result = self
+                        .mcp
+                        .call_tool(&route.server, &route.tool, arguments)
+                        .await?;
+                    (
+                        result.is_error,
+                        result.text.clone(),
+                        if result.text.is_empty() {
+                            result.content
+                        } else {
+                            Value::String(result.text)
+                        },
+                    )
+                };
                 let _ = events
                     .send(AgentEvent::ToolResult {
                         server: route.server.clone(),
                         tool: route.tool.clone(),
-                        is_error: result.is_error,
-                        text: result.text.clone(),
+                        is_error,
+                        text: text.clone(),
                     })
                     .await;
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": if result.text.is_empty() {
-                        serde_json::to_string(&result.content)?
+                    "content": if text.is_empty() {
+                        serde_json::to_string(&content)?
                     } else {
-                        result.text
+                        text
                     },
                 }));
             }
         }
 
         Err(AdeError::Provider(format!(
-            "agent exceeded the {MAX_TOOL_ROUNDS}-round tool-call limit"
+            "agent exceeded the {}-round tool-call limit",
+            self.max_tool_rounds
         )))
     }
 
@@ -434,13 +519,79 @@ impl AgentSession {
         Ok(())
     }
 
+    fn call_host_tool(&self, tool: &str, arguments: &Value) -> Result<String, AdeError> {
+        match tool {
+            "activate_skill" => {
+                let name = arguments
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let skill = SkillLoader::new(&self.workspace_root).activate(name)?;
+                Ok(skill_body_block(&skill))
+            }
+            other => Err(AdeError::NotFound(format!("unknown host tool '{other}'"))),
+        }
+    }
+
     async fn provider_tools(
         &self,
     ) -> Result<(Vec<ProviderTool>, BTreeMap<String, ToolRoute>), AdeError> {
         let tools = self.mcp.list_tools().await?;
-        let mut provider_tools = Vec::with_capacity(tools.len());
+        let mut provider_tools = Vec::with_capacity(tools.len() + 1);
         let mut routes = BTreeMap::new();
+
+        for host in host_tools() {
+            let effect = classify_tool_effect(&ToolAuthRequest {
+                server: host.server.clone(),
+                tool: host.tool.clone(),
+                arguments: json!({}),
+                input_schema: Some(host.input_schema.clone()),
+                annotations: Some(host.annotations.clone()),
+                write_scope: WriteScope::PlanOwnedPaths,
+                human_approved: false,
+            });
+            if !self.autonomy.allows_tool_effect(effect) {
+                continue;
+            }
+            let name = provider_tool_name(&host.server, &host.tool);
+            if routes
+                .insert(
+                    name.clone(),
+                    ToolRoute {
+                        server: host.server.clone(),
+                        tool: host.tool.clone(),
+                        input_schema: Some(host.input_schema.clone()),
+                        annotations: host.annotations.clone(),
+                        host: true,
+                    },
+                )
+                .is_some()
+            {
+                return Err(AdeError::Mcp(format!(
+                    "tool name collision after provider encoding: '{name}'"
+                )));
+            }
+            provider_tools.push(ProviderTool {
+                name,
+                description: format!("[{}] {}", host.server, host.description),
+                input_schema: host.input_schema,
+            });
+        }
+
         for tool in tools {
+            let effect = classify_tool_effect(&ToolAuthRequest {
+                server: tool.server.clone(),
+                tool: tool.name.clone(),
+                arguments: json!({}),
+                input_schema: Some(tool.input_schema.clone()),
+                annotations: Some(tool.annotations.clone()),
+                write_scope: WriteScope::PlanOwnedPaths,
+                human_approved: false,
+            });
+            if !self.autonomy.allows_tool_effect(effect) {
+                continue;
+            }
             let name = provider_tool_name(&tool.server, &tool.name);
             if routes
                 .insert(
@@ -450,6 +601,7 @@ impl AgentSession {
                         tool: tool.name.clone(),
                         input_schema: Some(tool.input_schema.clone()),
                         annotations: tool.annotations.clone(),
+                        host: false,
                     },
                 )
                 .is_some()
@@ -474,6 +626,39 @@ struct ToolRoute {
     tool: String,
     input_schema: Option<Value>,
     annotations: ToolAnnotations,
+    host: bool,
+}
+
+struct HostToolDef {
+    server: String,
+    tool: String,
+    description: String,
+    input_schema: Value,
+    annotations: ToolAnnotations,
+}
+
+fn host_tools() -> Vec<HostToolDef> {
+    vec![HostToolDef {
+        server: "ade".into(),
+        tool: "activate_skill".into(),
+        description: "Load the full body of a listed .ade/skills skill by exact name (progressive disclosure T2).".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Exact skill name from the T1 catalog"
+                }
+            },
+            "required": ["name"],
+            "x-ade-effect": "read_only"
+        }),
+        annotations: ToolAnnotations {
+            read_only_hint: Some(true),
+            ade_effect: Some(ToolEffect::ReadOnly),
+            ..Default::default()
+        },
+    }]
 }
 
 fn provider_tool_name(server: &str, tool: &str) -> String {

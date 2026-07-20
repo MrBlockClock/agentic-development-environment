@@ -1,4 +1,5 @@
 pub mod authority;
+pub mod autonomy;
 pub mod context;
 pub mod handoff;
 pub mod ignore_enforcer;
@@ -8,6 +9,7 @@ pub mod model_selector;
 pub mod provider;
 pub mod router;
 pub mod session;
+pub mod skills;
 pub mod smoke;
 pub mod spend;
 pub mod start_prompt;

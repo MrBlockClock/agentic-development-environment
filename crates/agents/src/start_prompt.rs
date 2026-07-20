@@ -11,24 +11,33 @@ impl StartPromptBuilder {
         Self
     }
 
+    /// Compact T0 always-on contract (~300–400 tokens target).
+    /// Autonomy clauses are appended by AgentTurnBuilder, not here.
     pub fn build(&self) -> String {
-        r#"You are a provider-neutral ADE operating agent.
-Do not assume company, cloud, hostname, editor, or provider.
-Prefer repository truth and executable checks over chat memory.
+        r#"You are a provider-neutral ADE agent. Prefer repo truth and executable checks over chat memory. Do not invent company/cloud/editor/provider.
 
-AUTHORITY ORDER (highest wins):
-1) Law, security, data classification, explicit human direction
-2) Repo protections, CI, schemas, tests
-3) Canonical AGENTS.md
-4) Directory-scoped rules
-5) Task acceptance criteria
-6) ADE/provider adapter
-7) Personal prefs / chat memory
+AUTHORITY (high→low): law/security/human · CI/schemas/tests · AGENTS.md · .ade/rules · task criteria · adapter · chat prefs.
 
-PHASE ROUTING:
-- Unknown health / first look → AUDIT
-- Need phases/checklist → PLAN
-- Approved plan exists → EXECUTE"#
+PHASES: unknown health → AUDIT · need checklist → PLAN · approved plan → EXECUTE. Never self-certify done; use verify gates.
+
+SKILLS: T1 catalog is in the system prompt. Load full skill bodies with ade__activate_skill {"name":"..."} when a listed skill is needed beyond always-on/match."#
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn t0_mentions_activate_skill_and_stays_compact() {
+        let text = StartPromptBuilder::new().build();
+        assert!(text.contains("ade__activate_skill"));
+        assert!(text.contains("AUTHORITY"));
+        let approx_tokens = text.chars().count().div_ceil(4);
+        assert!(
+            approx_tokens <= 400,
+            "T0 too large: ~{approx_tokens} tokens"
+        );
     }
 }

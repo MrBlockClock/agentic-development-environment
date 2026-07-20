@@ -1,0 +1,8 @@
+---
+description: Build outputs and dependencies are write-denied
+globs: [ade-target/**, target/**, **/node_modules/**, **/dist/**, playwright-report/**, test-results/**]
+write: deny
+---
+# Generated / Vendor Deny
+
+Do not hand-edit build outputs or vendored dependencies. Change sources and rebuild.

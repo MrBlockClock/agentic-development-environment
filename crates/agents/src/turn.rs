@@ -1,9 +1,11 @@
 use crate::authority::AuthorityEnforcer;
+use crate::autonomy::AutonomyLevel;
 use crate::context::PromptAssembler;
 use crate::handoff::HandoffManager;
 use crate::mcp::McpHost;
 use crate::provider::{ChatProvider, ModelConfig, OpenAiCompatibleProvider, ProviderConfig};
 use crate::session::{AgentEvent, AgentSession, AgentTurnResult};
+use crate::skills::SkillLoader;
 use crate::spend::{SpendCaps, SpendGuard};
 use crate::start_prompt::StartPromptBuilder;
 use ade_core::audit::{AuditMode, AuditRunner};
@@ -11,10 +13,12 @@ use ade_core::error::AdeError;
 use ade_core::handoff::{HandoffCapsule, HandoffContextCompaction};
 use ade_core::ignore::SensitivePathPolicy;
 use ade_core::money::Money;
+use ade_core::verify::{VerifyGate, VerifyStatus};
 use ade_db::repo::{AdeDatabase, DbConfig};
 use ade_db::secrets::{NativeProviderKeyVault, ProviderKeyVault};
 use ade_db::usage_ledger::UsageLedgerStore;
 use ade_workflow::parallel::LeaseManager;
+use ade_workflow::verify::VerifyRunner;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -25,6 +29,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const DEFAULT_HANDOFF_CHARS: usize = 1_500;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTurnSpec {
@@ -130,6 +135,10 @@ pub struct AgentTurnBuilder {
     coordination_root: Option<PathBuf>,
     key_vault: Arc<dyn ProviderKeyVault>,
     provider_transport: Option<Arc<dyn ChatProvider>>,
+    autonomy: AutonomyLevel,
+    max_tool_rounds: usize,
+    max_tokens: Option<u64>,
+    verify_on_complete: Option<VerifyGate>,
 }
 
 impl AgentTurnBuilder {
@@ -147,6 +156,10 @@ impl AgentTurnBuilder {
             coordination_root: None,
             key_vault: Arc::new(NativeProviderKeyVault),
             provider_transport: None,
+            autonomy: AutonomyLevel::Propose,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_tokens: None,
+            verify_on_complete: None,
         }
     }
 
@@ -195,6 +208,26 @@ impl AgentTurnBuilder {
     /// while executing tools against `spec.workspace_root` (e.g. a worktree).
     pub fn coordination_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.coordination_root = Some(root.into());
+        self
+    }
+
+    pub fn autonomy(mut self, autonomy: AutonomyLevel) -> Self {
+        self.autonomy = autonomy;
+        self
+    }
+
+    pub fn max_tool_rounds(mut self, rounds: usize) -> Self {
+        self.max_tool_rounds = rounds.max(1);
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: Option<u64>) -> Self {
+        self.max_tokens = max_tokens.filter(|value| *value > 0);
+        self
+    }
+
+    pub fn verify_on_complete(mut self, gate: Option<VerifyGate>) -> Self {
+        self.verify_on_complete = gate;
         self
     }
 
@@ -264,9 +297,22 @@ impl AgentTurnBuilder {
             }
             Err(_) => None,
         };
+        let skills_context = SkillLoader::new(&self.spec.workspace_root)
+            .prompt_context(
+                &self.spec.prompt,
+                PromptAssembler::daily(self.spec.context_limit)
+                    .budget()
+                    .skills_tokens,
+            )
+            .unwrap_or_default();
         let assembled = PromptAssembler::daily(self.spec.context_limit).assemble(
-            &StartPromptBuilder::new().build(),
+            &format!(
+                "{}\n\n{}",
+                StartPromptBuilder::new().build(),
+                self.autonomy.prompt_clause()
+            ),
             &authority.prompt_context(),
+            Some(skills_context.as_str()).filter(|text| !text.is_empty()),
             handoff_summary.as_deref(),
         );
         if matches!(assembled.status, crate::context::ContextStatus::Critical) {
@@ -293,6 +339,12 @@ impl AgentTurnBuilder {
             guard = guard.with_actor(actor);
         }
 
+        let verify_on_complete = if self.autonomy.requires_verify_on_complete() {
+            Some(self.verify_on_complete.unwrap_or(VerifyGate::G3))
+        } else {
+            self.verify_on_complete
+        };
+
         let mut session = AgentSession::new(
             transport,
             model,
@@ -302,7 +354,10 @@ impl AgentTurnBuilder {
         .with_authority(authority)
         .with_workspace(&self.spec.workspace_root)
         .with_spend_guard(guard)
-        .with_request_timeout(self.request_timeout);
+        .with_request_timeout(self.request_timeout)
+        .with_autonomy(self.autonomy)
+        .with_max_tool_rounds(self.max_tool_rounds)
+        .with_max_tokens(self.max_tokens);
         if let Some(cancel) = &self.cancel {
             session = session.with_cancel_flag(Arc::clone(cancel));
         }
@@ -315,6 +370,7 @@ impl AgentTurnBuilder {
         Ok(AgentTurnService {
             session,
             prompt: self.spec.prompt,
+            workspace_root: self.spec.workspace_root.clone(),
             coordination_root,
             provider: self.spec.provider,
             model: self.spec.model,
@@ -323,6 +379,7 @@ impl AgentTurnBuilder {
             score_before,
             context_compaction,
             effective_owned_paths,
+            verify_on_complete,
         })
     }
 
@@ -346,6 +403,7 @@ impl AgentTurnBuilder {
 pub struct AgentTurnService {
     session: AgentSession,
     prompt: String,
+    workspace_root: PathBuf,
     coordination_root: PathBuf,
     provider: String,
     model: String,
@@ -354,6 +412,7 @@ pub struct AgentTurnService {
     score_before: WorkspaceScore,
     context_compaction: HandoffContextCompaction,
     effective_owned_paths: Vec<String>,
+    verify_on_complete: Option<VerifyGate>,
 }
 
 impl AgentTurnService {
@@ -375,12 +434,14 @@ impl AgentTurnService {
         let (events, receiver) = mpsc::channel(128);
         let session = self.session.clone();
         let prompt = self.prompt.clone();
+        let workspace_root = self.workspace_root.clone();
         let coordination_root = self.coordination_root.clone();
         let provider = self.provider.clone();
         let model = self.model.clone();
         let usage = Arc::clone(&self.usage);
         let score_before = self.score_before;
         let context_compaction = self.context_compaction.clone();
+        let verify_on_complete = self.verify_on_complete;
         tokio::spawn(async move {
             match session.run_turn(prompt.clone(), events.clone()).await {
                 Ok(result) => {
@@ -423,6 +484,51 @@ impl AgentTurnService {
                             .await;
                         return;
                     }
+
+                    if let Some(gate) = verify_on_complete {
+                        let results = VerifyRunner::with_root(&workspace_root)
+                            .run_through(gate)
+                            .await;
+                        let passed = results.iter().all(|result| {
+                            result.passed || result.status == VerifyStatus::Unavailable
+                        });
+                        let summary = results
+                            .iter()
+                            .map(|result| {
+                                format!(
+                                    "{}:{}",
+                                    result.gate,
+                                    if result.passed {
+                                        "pass"
+                                    } else if result.status == VerifyStatus::Unavailable {
+                                        "skip"
+                                    } else {
+                                        "fail"
+                                    }
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let _ = events
+                            .send(AgentEvent::VerifyComplete {
+                                gate: gate.id().into(),
+                                passed,
+                                summary: summary.clone(),
+                            })
+                            .await;
+                        if !passed {
+                            let _ = events
+                                .send(AgentEvent::Failed {
+                                    error: format!(
+                                        "verify-on-complete failed through {}: {summary}",
+                                        gate.id()
+                                    ),
+                                })
+                                .await;
+                            return;
+                        }
+                    }
+
                     let _ = events.send(AgentEvent::Completed { result }).await;
                 }
                 Err(error) => {

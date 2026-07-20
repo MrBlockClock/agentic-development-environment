@@ -1,6 +1,7 @@
 use crate::auth::ApiScope;
 use crate::middleware::{audit_middleware, auth_middleware};
 use crate::sse::SseManager;
+use crate::verify_routes::run_verify;
 use crate::write_routes::{
     claim_task, complete_task, fail_task, heartbeat_task, renew_lease, start_task,
 };
@@ -220,6 +221,8 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/plan", get(plan_status))
         .route("/state", get(state_snapshot))
         .route("/recipes", get(list_recipes))
+        .route("/rules", get(list_rules))
+        .route("/skills", get(list_skills))
         .route("/leases", get(list_leases))
         .route("/tasks", get(list_tasks))
         .route("/tasks/claim", post(claim_task))
@@ -230,6 +233,7 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/worktrees", get(list_worktrees))
         .route("/handoff", get(handoff_status))
         .route("/events", get(events))
+        .route("/verify", post(run_verify))
         .route("/leases/:id/renew", post(renew_lease))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -328,6 +332,23 @@ async fn plan_status(State(state): State<ApiState>) -> ApiResult<PlanReport> {
 
 async fn list_recipes() -> Json<Vec<StackRecipe>> {
     Json(ade_core::recipe::builtin_recipes())
+}
+
+async fn list_rules(
+    State(state): State<ApiState>,
+) -> ApiResult<Vec<ade_agents::authority::RuleFileInfo>> {
+    ade_agents::authority::list_rule_files(state.workspace_root())
+        .map(Json)
+        .map_err(map_ade_error)
+}
+
+async fn list_skills(
+    State(state): State<ApiState>,
+) -> ApiResult<Vec<ade_agents::skills::SkillDefinition>> {
+    ade_agents::skills::SkillLoader::new(state.workspace_root())
+        .load_all()
+        .map(Json)
+        .map_err(map_ade_error)
 }
 
 async fn list_leases(State(state): State<ApiState>) -> ApiResult<Vec<PathLease>> {

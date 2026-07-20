@@ -31,10 +31,10 @@ Thumbs.db
 .ade/spend/
 .ade/brain/local/
 .ade/daemon/
- .ade/leases/
-+.ade/worktrees/
- .ade/plugins/
- .ade/tasks/
+.ade/leases/
+.ade/worktrees/
+.ade/plugins/
+.ade/tasks/
 **/agent-transcripts/
 
 # Per-environment data directories (local/staging/production)
@@ -51,4 +51,8 @@ apps/desktop/src-tauri/target/
 
 # Tauri generated schemas (local)
 apps/desktop/src-tauri/gen/
+
+
+# Local competitive research evidence (generated)
+.ade/research/
 

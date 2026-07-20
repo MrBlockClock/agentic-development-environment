@@ -1,0 +1,11 @@
+---
+description: Locate → slice → act; keep I/O tight
+---
+# Minimal Context
+
+- Locate → slice → act: grep/glob first; read with offset/limit; never whole files by default.
+- Console: last ~30 lines or JSON last line — not full logs in chat.
+- Task in 3 lines (bug, scope, verify cmd); reply = result + evidence + path:lines.
+- No re-reads of unchanged files; new chat per unrelated task.
+- Wire mode: user `@ADE/w1` → reply `R+Δ+V+E+N` (see skill `agent-wire`).
+- Science notes: `C:\AI-Tooling\ade-setup-book\TOKEN-SCIENCE.md` (link only).

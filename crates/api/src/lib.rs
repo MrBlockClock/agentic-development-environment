@@ -7,6 +7,7 @@ pub mod project_routes;
 pub mod router;
 pub mod sse;
 pub mod team_routes;
+pub mod verify_routes;
 pub mod workspace_routes;
 pub mod write_routes;
 pub mod ws;

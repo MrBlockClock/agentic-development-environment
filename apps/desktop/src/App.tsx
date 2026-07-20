@@ -7,6 +7,72 @@ import {
   type ScaffoldFilePlan,
   type StackRecipe,
 } from "./components/RecipeWizard";
+import { RulesEditor } from "./components/RulesEditor";
+
+const DEV_MODE_KEY = "ade_dev_mode";
+const AUTONOMY_KEY = "ade_autonomy_level";
+
+type AutonomyLevel = "observe" | "propose" | "act" | "automate";
+
+const AUTONOMY_LEVELS: { id: AutonomyLevel; label: string; hint: string }[] = [
+  { id: "observe", label: "Observe", hint: "Read-only; explain and point" },
+  { id: "propose", label: "Propose", hint: "Plan + diffs; no apply" },
+  { id: "act", label: "Act", hint: "Execute approved owned paths" },
+  { id: "automate", label: "Automate", hint: "Caps + verify gates required" },
+];
+
+function readAutonomy(): AutonomyLevel {
+  if (typeof window === "undefined") return "propose";
+  const raw = window.localStorage.getItem(AUTONOMY_KEY);
+  if (raw === "observe" || raw === "propose" || raw === "act" || raw === "automate") {
+    return raw;
+  }
+  return "propose";
+}
+
+type NavItem = { id: string; label: string; icon: string; desktopOnly?: boolean };
+
+type NavGroup = { title?: string; items: NavItem[] };
+
+const navGroups: NavGroup[] = [
+  {
+    items: [
+      { id: "Home", label: "Home", icon: "⌂" },
+      { id: "Agent", label: "Agent", icon: "✦" },
+    ],
+  },
+  {
+    title: "Setup",
+    items: [
+      { id: "Recipes", label: "Recipes", icon: "▦" },
+      { id: "Rules", label: "Rules", icon: "☰" },
+      { id: "Plan", label: "Plan", icon: "◇" },
+    ],
+  },
+  {
+    title: "Trust",
+    items: [
+      { id: "Health", label: "Health", icon: "◎" },
+      { id: "Audit", label: "Audit", icon: "◉" },
+      { id: "Verify", label: "Verify", icon: "✓" },
+    ],
+  },
+  {
+    title: "Integrations",
+    items: [
+      { id: "Keys", label: "Keys", icon: "◈", desktopOnly: true },
+      { id: "MCP", label: "MCP", icon: "⬡", desktopOnly: true },
+    ],
+  },
+];
+
+function readDevMode(): boolean {
+  if (typeof window === "undefined") return false;
+  const env = (import.meta as { env?: { VITE_ADE_DEV_MODE?: string } }).env
+    ?.VITE_ADE_DEV_MODE;
+  if (env === "1" || env === "true") return true;
+  return window.localStorage.getItem(DEV_MODE_KEY) === "1";
+}
 
 type Finding = {
   layer: string;
@@ -103,6 +169,7 @@ type DashboardSnapshot = {
   handoff: HandoffMetrics;
   leases: PathLease[];
   tasks: AgentTask[];
+  rebuild_lock_warnings?: string[];
 };
 
 type VerifyResult = {
@@ -146,7 +213,13 @@ type AgentTurnResult = {
 type AgentEvent =
   | { type: "started"; session_id: string; provider: string; model: string }
   | { type: "text_delta"; text: string }
-  | { type: "tool_call"; server: string; tool: string; arguments: unknown }
+  | {
+      type: "tool_call";
+      server: string;
+      tool: string;
+      arguments: unknown;
+      effect?: string;
+    }
   | { type: "tool_result"; server: string; tool: string; is_error: boolean; text: string }
   | {
       type: "usage";
@@ -161,6 +234,7 @@ type AgentEvent =
       projected_micros: number;
       soft_cap_micros: number;
     }
+  | { type: "verify_complete"; gate: string; passed: boolean; summary: string }
   | { type: "completed"; result: AgentTurnResult }
   | { type: "failed"; error: string }
   | { type: "cancelled"; reason: string };
@@ -184,20 +258,10 @@ type ProviderKeySmokeResult = {
   detail: string;
 };
 
-const navItems = [
-  ["Overview", "⌂"],
-  ["Agent", "✦"],
-  ["Keys", "◈"],
-  ["Audit", "◎"],
-  ["Plan", "◇"],
-  ["Verify", "✓"],
-  ["MCP", "⬡"],
-  ["Recipes", "▦"],
-] as const;
-
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
-  const [activeView, setActiveView] = useState("Overview");
+  const [activeView, setActiveView] = useState("Home");
+  const [devMode, setDevMode] = useState(readDevMode);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [gate, setGate] = useState("G3");
@@ -214,6 +278,15 @@ function App() {
   const [recipePlan, setRecipePlan] = useState<ScaffoldFilePlan[] | null>(null);
   const [recipePlanError, setRecipePlanError] = useState<string | null>(null);
   const [recipeResult, setRecipeResult] = useState<ScaffoldResult | null>(null);
+  const [homePrompt, setHomePrompt] = useState("");
+
+  const toggleDevMode = () => {
+    setDevMode((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(DEV_MODE_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -361,6 +434,11 @@ function App() {
     outputCostPerMtok: number;
     sessionCapUsd: number;
     dailyCapUsd: number;
+    autonomy: AutonomyLevel;
+    maxSteps: number;
+    maxTokens: number | null;
+    verifyOnComplete: boolean;
+    verifyGate: string;
   }) => {
     if (!isTauri) {
       setError(
@@ -386,6 +464,11 @@ function App() {
         sessionCapUsd: input.sessionCapUsd,
         dailyCapUsd: input.dailyCapUsd,
         leaseAgentId: null,
+        autonomy: input.autonomy,
+        maxSteps: input.maxSteps,
+        maxTokens: input.maxTokens,
+        verifyOnComplete: input.verifyOnComplete,
+        verifyGate: input.verifyGate,
         onEvent,
       });
     } catch (reason) {
@@ -453,20 +536,40 @@ function App() {
           </div>
         </div>
 
-        <nav className="space-y-1">
-          {navItems.map(([label, icon]) => (
-            <button
-              key={label}
-              onClick={() => setActiveView(label)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
-                activeView === label
-                  ? "bg-blue-500/12 text-blue-200"
-                  : "text-slate-400 hover:bg-white/4 hover:text-slate-200"
-              }`}
-            >
-              <span className="w-4 text-center text-base">{icon}</span>
-              {label}
-            </button>
+        <nav className="space-y-4">
+          {navGroups.map((group) => (
+            <div key={group.title ?? "primary"}>
+              {group.title && (
+                <div className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+                  {group.title}
+                </div>
+              )}
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const needsDesktop = Boolean(item.desktopOnly) && !isTauri;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setActiveView(item.id)}
+                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                        activeView === item.id
+                          ? "bg-blue-500/12 text-blue-200"
+                          : "text-slate-400 hover:bg-white/4 hover:text-slate-200"
+                      }`}
+                    >
+                      <span className="w-4 text-center text-base">{item.icon}</span>
+                      <span className="flex-1">{item.label}</span>
+                      {needsDesktop && (
+                        <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200/90">
+                          Desktop
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           ))}
         </nav>
 
@@ -476,11 +579,11 @@ function App() {
         <div className="mt-3 space-y-1 text-xs text-slate-500">
           <div className="flex items-center gap-2 px-3 py-2">
             <span className="size-1.5 rounded-full bg-emerald-400" />
-            Local runtime
+            {isTauri ? "Desktop runtime" : "Browser + local API"}
           </div>
           <div className="flex items-center gap-2 px-3 py-2">
             <span className="size-1.5 rounded-full bg-blue-400" />
-            Key vault ready
+            Key vault {isTauri ? "ready" : "via Desktop"}
           </div>
           <div className="flex items-center gap-2 px-3 py-2">
             <span
@@ -492,6 +595,20 @@ function App() {
               ? `${mcpServers.length} MCP server${mcpServers.length === 1 ? "" : "s"}`
               : "MCP host idle"}
           </div>
+          <button
+            type="button"
+            onClick={toggleDevMode}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
+              devMode
+                ? "bg-amber-400/10 text-amber-200"
+                : "hover:bg-white/4 hover:text-slate-300"
+            }`}
+          >
+            <span
+              className={`size-1.5 rounded-full ${devMode ? "bg-amber-400" : "bg-slate-600"}`}
+            />
+            Dev/Debug {devMode ? "on" : "off"}
+          </button>
         </div>
 
         <div className="mt-auto rounded-xl border border-white/7 bg-white/2.5 p-3">
@@ -517,9 +634,17 @@ function App() {
       <main className="thin-scrollbar min-w-0 flex-1 overflow-y-auto">
         <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-white/7 bg-[#080b11]/90 px-7 backdrop-blur-xl">
           <div>
-            <h1 className="text-sm font-semibold">{activeView}</h1>
+            <h1 className="text-sm font-semibold">
+              {activeView}
+              {devMode && (
+                <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                  Dev
+                </span>
+              )}
+            </h1>
             <p className="mt-0.5 max-w-[62vw] truncate text-[11px] text-slate-500">
               {dashboard?.workspace_root ?? "Locating workspace…"}
+              {!isTauri && " · browser preview"}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -561,13 +686,39 @@ function App() {
             <LoadingState />
           ) : dashboard ? (
             <>
-              {activeView === "Overview" && (
+              {activeView === "Home" && (
+                <HomeView
+                  dashboard={dashboard}
+                  scorePercent={scorePercent}
+                  prompt={homePrompt}
+                  onPromptChange={setHomePrompt}
+                  agentBusy={agentBusy}
+                  devMode={devMode}
+                  onOpenAgent={() => setActiveView("Agent")}
+                  onOpenHealth={() => setActiveView("Health")}
+                  onOpenVerify={() => {
+                    setActiveView("Verify");
+                    void runVerify();
+                  }}
+                  onOpenRecipes={() => setActiveView("Recipes")}
+                  onStarter={(text) => {
+                    setHomePrompt(text);
+                    setActiveView("Agent");
+                  }}
+                  onRunAgent={() => {
+                    if (!homePrompt.trim()) return;
+                    setActiveView("Agent");
+                  }}
+                />
+              )}
+              {activeView === "Health" && (
                 <Overview
                   dashboard={dashboard}
                   scorePercent={scorePercent}
                   verifyResults={verifyResults}
                   executing={executing}
                   onExecute={() => void executePlan()}
+                  devMode={devMode}
                 />
               )}
               {activeView === "Agent" && (
@@ -575,6 +726,10 @@ function App() {
                   events={agentEvents}
                   busy={agentBusy}
                   connectedTools={mcpTools.length}
+                  initialPrompt={homePrompt}
+                  devMode={devMode}
+                  leases={dashboard.leases}
+                  rebuildLockWarnings={dashboard.rebuild_lock_warnings ?? []}
                   onRun={(input) => void runAgentTurn(input)}
                 />
               )}
@@ -590,6 +745,7 @@ function App() {
               {activeView === "Verify" && (
                 <VerifyView results={verifyResults} onRun={() => void runVerify()} />
               )}
+              {activeView === "Rules" && <RulesEditor />}
               {activeView === "MCP" && (
                 <McpView
                   servers={mcpServers}
@@ -621,22 +777,216 @@ function App() {
   );
 }
 
+function HomeView({
+  dashboard,
+  scorePercent,
+  prompt,
+  onPromptChange,
+  agentBusy,
+  devMode,
+  onOpenAgent,
+  onOpenHealth,
+  onOpenVerify,
+  onOpenRecipes,
+  onStarter,
+  onRunAgent,
+}: {
+  dashboard: DashboardSnapshot;
+  scorePercent: number;
+  prompt: string;
+  onPromptChange: (value: string) => void;
+  agentBusy: boolean;
+  devMode: boolean;
+  onOpenAgent: () => void;
+  onOpenHealth: () => void;
+  onOpenVerify: () => void;
+  onOpenRecipes: () => void;
+  onStarter: (text: string) => void;
+  onRunAgent: () => void;
+}) {
+  const latestHandoff = dashboard.handoff.recent[0];
+  const dogfoodPrompt =
+    "Improve ADE itself in this workspace: propose a small, verify-gated change that advances Ideal ADE I2 (autonomy dial, budgets, traces). Stay inside owned_paths from PLAN. Run verify after.";
+  const understandPrompt =
+    "Explain how this ADE workspace is structured (crates, desktop, API). Cite concrete paths. Do not edit files.";
+  const starters = [
+    {
+      title: "Understand project",
+      detail: "Map architecture before changing anything",
+      prompt: understandPrompt,
+    },
+    {
+      title: "Run verify",
+      detail: "Execute the verify ladder through the selected gate",
+      action: "verify" as const,
+    },
+    {
+      title: "Improve ADE",
+      detail: "Dogfood: use ADE to build ADE",
+      prompt: dogfoodPrompt,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <section className="relative overflow-hidden rounded-2xl border border-white/8 bg-[#0c121c] px-7 py-8">
+        <div className="max-w-2xl">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-300/80">
+            ADE
+          </div>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-50">
+            What should the agent do?
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Home is for work. Audit and readiness live under Trust.{" "}
+            {!isTauri && (
+              <span className="text-amber-200/90">
+                Browser preview: MCP connect and live agent turns need Desktop.
+              </span>
+            )}
+          </p>
+        </div>
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <textarea
+            value={prompt}
+            onChange={(event) => onPromptChange(event.target.value)}
+            rows={3}
+            placeholder="Describe the task…"
+            className="min-h-[88px] flex-1 resize-y rounded-xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-slate-200 outline-none ring-blue-400/30 placeholder:text-slate-600 focus:ring-2"
+          />
+          <div className="flex shrink-0 flex-col gap-2">
+            <button
+              type="button"
+              onClick={onRunAgent}
+              disabled={!prompt.trim() || agentBusy}
+              className="rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+            >
+              Open in Agent
+            </button>
+            <button
+              type="button"
+              onClick={onOpenAgent}
+              className="rounded-xl border border-white/10 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5"
+            >
+              Agent studio
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          {starters.map((starter) => (
+            <button
+              key={starter.title}
+              type="button"
+              onClick={() => {
+                if ("action" in starter && starter.action === "verify") {
+                  onOpenVerify();
+                  return;
+                }
+                if ("prompt" in starter && starter.prompt) {
+                  onStarter(starter.prompt);
+                }
+              }}
+              className="rounded-xl border border-white/8 bg-white/3 px-4 py-3 text-left transition hover:border-blue-400/30 hover:bg-blue-500/8"
+            >
+              <div className="text-sm font-medium text-slate-200">{starter.title}</div>
+              <p className="mt-1 text-xs leading-5 text-slate-500">{starter.detail}</p>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-3">
+        <button
+          type="button"
+          onClick={onOpenHealth}
+          className="rounded-xl border border-white/7 bg-white/2.5 px-4 py-3 text-left hover:bg-white/4"
+        >
+          <div className="text-[10px] uppercase tracking-wider text-slate-600">Readiness</div>
+          <div className="mt-1 text-lg font-semibold text-slate-100">{scorePercent}%</div>
+          <div className="mt-1 text-[11px] text-slate-500">Open Trust → Health</div>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenHealth}
+          className="rounded-xl border border-white/7 bg-white/2.5 px-4 py-3 text-left hover:bg-white/4"
+        >
+          <div className="text-[10px] uppercase tracking-wider text-slate-600">Handoff</div>
+          <div className="mt-1 text-lg font-semibold text-slate-100">
+            {dashboard.handoff.capsule_count}
+          </div>
+          <div className="mt-1 truncate text-[11px] text-slate-500">
+            {latestHandoff
+              ? `${latestHandoff.turn_status ?? "capsule"} · ${latestHandoff.id}`
+              : "No capsules yet"}
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenRecipes}
+          className="rounded-xl border border-white/7 bg-white/2.5 px-4 py-3 text-left hover:bg-white/4"
+        >
+          <div className="text-[10px] uppercase tracking-wider text-slate-600">Setup</div>
+          <div className="mt-1 text-lg font-semibold text-slate-100">Recipes</div>
+          <div className="mt-1 text-[11px] text-slate-500">Bootstrap or re-apply stack</div>
+        </button>
+      </section>
+
+      {devMode && (
+        <section className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs text-amber-100/90">
+          <div className="font-semibold uppercase tracking-wider text-amber-200/80">
+            Dev/Debug
+          </div>
+          <p className="mt-1 leading-5 text-amber-100/70">
+            Workspace: <span className="font-mono">{dashboard.workspace_root}</span>
+            {" · "}
+            leases {dashboard.leases.length}
+            {" · "}
+            open tasks{" "}
+            {
+              dashboard.tasks.filter(
+                (task) => !["completed", "failed", "cancelled"].includes(task.status),
+              ).length
+            }
+          </p>
+          {(dashboard.rebuild_lock_warnings?.length ?? 0) > 0 && (
+            <ul className="mt-2 space-y-1 text-amber-100/80">
+              {(dashboard.rebuild_lock_warnings ?? []).map((warning) => (
+                <li key={warning}>⚠ {warning}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function Overview({
   dashboard,
   scorePercent,
   verifyResults,
   executing,
   onExecute,
+  devMode = false,
 }: {
   dashboard: DashboardSnapshot;
   scorePercent: number;
   verifyResults: VerifyResult[];
   executing: boolean;
   onExecute: () => void;
+  devMode?: boolean;
 }) {
   const passed = verifyResults.filter((result) => result.passed).length;
   return (
     <div className="space-y-5">
+      {devMode && (
+        <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-2 text-[11px] text-amber-100/80">
+          Trust → Health (former Overview). Dev mode: score {dashboard.audit.score}/
+          {dashboard.audit.score_max}, leases {dashboard.leases.length}.
+        </div>
+      )}
       <section className="grid grid-cols-7 gap-4">
         <MetricCard label="Readiness score" value={`${scorePercent}%`} accent="blue" />
         <MetricCard
@@ -988,10 +1338,18 @@ function AgentView({
   busy,
   connectedTools,
   onRun,
+  initialPrompt = "",
+  devMode = false,
+  leases = [],
+  rebuildLockWarnings = [],
 }: {
   events: AgentEvent[];
   busy: boolean;
   connectedTools: number;
+  initialPrompt?: string;
+  devMode?: boolean;
+  leases?: PathLease[];
+  rebuildLockWarnings?: string[];
   onRun: (input: {
     prompt: string;
     provider: string;
@@ -1001,9 +1359,14 @@ function AgentView({
     outputCostPerMtok: number;
     sessionCapUsd: number;
     dailyCapUsd: number;
+    autonomy: AutonomyLevel;
+    maxSteps: number;
+    maxTokens: number | null;
+    verifyOnComplete: boolean;
+    verifyGate: string;
   }) => void;
 }) {
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [provider, setProvider] = useState("openai");
   const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
   const [model, setModel] = useState("");
@@ -1011,6 +1374,29 @@ function AgentView({
   const [outputCost, setOutputCost] = useState("0");
   const [sessionCap, setSessionCap] = useState("1");
   const [dailyCap, setDailyCap] = useState("10");
+  const [autonomy, setAutonomy] = useState<AutonomyLevel>(readAutonomy);
+  const [maxSteps, setMaxSteps] = useState("8");
+  const [maxTokens, setMaxTokens] = useState("");
+  const [verifyOnComplete, setVerifyOnComplete] = useState(false);
+  const [verifyGate, setVerifyGate] = useState("G3");
+
+  useEffect(() => {
+    if (initialPrompt.trim()) {
+      setPrompt(initialPrompt);
+    }
+  }, [initialPrompt]);
+
+  useEffect(() => {
+    if (autonomy === "automate") {
+      setVerifyOnComplete(true);
+    }
+  }, [autonomy]);
+
+  const setAutonomyPersisted = (level: AutonomyLevel) => {
+    setAutonomy(level);
+    window.localStorage.setItem(AUTONOMY_KEY, level);
+  };
+
   const text = events
     .filter((event): event is Extract<AgentEvent, { type: "text_delta" }> =>
       event.type === "text_delta",
@@ -1021,8 +1407,22 @@ function AgentView({
     (event): event is Extract<AgentEvent, { type: "completed" }> =>
       event.type === "completed",
   );
+  const failed = [...events].reverse().find(
+    (event): event is Extract<AgentEvent, { type: "failed" }> => event.type === "failed",
+  );
+  const verifyEvent = [...events].reverse().find(
+    (event): event is Extract<AgentEvent, { type: "verify_complete" }> =>
+      event.type === "verify_complete",
+  );
   const activity = events.filter(
     (event) => event.type === "tool_call" || event.type === "tool_result",
+  );
+  const usageEvents = events.filter(
+    (event): event is Extract<AgentEvent, { type: "usage" }> => event.type === "usage",
+  );
+  const spendWarnings = events.filter(
+    (event): event is Extract<AgentEvent, { type: "spend_warning" }> =>
+      event.type === "spend_warning",
   );
 
   const submit = () => {
@@ -1035,108 +1435,312 @@ function AgentView({
       outputCostPerMtok: Number(outputCost) || 0,
       sessionCapUsd: Number(sessionCap),
       dailyCapUsd: Number(dailyCap),
+      autonomy,
+      maxSteps: Math.max(1, Number(maxSteps) || 8),
+      maxTokens: maxTokens.trim() ? Number(maxTokens) || null : null,
+      verifyOnComplete: autonomy === "automate" ? true : verifyOnComplete,
+      verifyGate: verifyGate.trim() || "G3",
     });
   };
 
   return (
-    <div className="grid grid-cols-[1fr_310px] gap-5">
-      <Panel
-        title="Agent session"
-        subtitle="BYOK streaming · exact model lock · runtime authority · read-only until PLAN approval"
-      >
-        <div className="min-h-72 rounded-xl border border-white/7 bg-black/20 p-4">
-          {!text && !busy ? (
-            <div className="grid min-h-64 place-items-center text-center">
-              <div>
-                <div className="text-sm text-slate-300">Start a trustworthy agent turn</div>
-                <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
-                  The selected model can use connected read tools. Write-capable tools remain
-                  blocked until an approved PLAN grants owned paths.
-                </p>
-              </div>
+    <div className="space-y-5">
+      {rebuildLockWarnings.length > 0 && (
+        <div className="rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[11px] leading-5 text-amber-100/85">
+          <div className="font-semibold uppercase tracking-wider text-amber-200/80">
+            Rebuild lock
+          </div>
+          <ul className="mt-1 space-y-1">
+            {rebuildLockWarnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="grid grid-cols-[1fr_310px] gap-5">
+        <Panel
+          title="Agent session"
+          subtitle={
+            devMode
+              ? "Dev/Debug: autonomy · budgets · traces · leases · ToolEffect"
+              : "BYOK streaming · autonomy dial · budgets · read-only until PLAN"
+          }
+        >
+          <div className="mb-4">
+            <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
+              Autonomy
             </div>
-          ) : (
-            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
-              {text}
-              {busy && <span className="ml-1 inline-block size-1.5 animate-pulse bg-blue-300" />}
+            <div className="grid grid-cols-4 gap-1.5">
+              {AUTONOMY_LEVELS.map((level) => {
+                const active = autonomy === level.id;
+                return (
+                  <button
+                    key={level.id}
+                    type="button"
+                    title={level.hint}
+                    onClick={() => setAutonomyPersisted(level.id)}
+                    className={`rounded-lg border px-2 py-2 text-center text-[11px] font-semibold transition ${
+                      active
+                        ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
+                        : "border-white/8 bg-white/2 text-slate-400 hover:bg-white/4"
+                    }`}
+                  >
+                    {level.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-[10px] leading-4 text-slate-500">
+              {AUTONOMY_LEVELS.find((level) => level.id === autonomy)?.hint}
+            </p>
+          </div>
+
+          <div className="min-h-72 rounded-xl border border-white/7 bg-black/20 p-4">
+            {!text && !busy ? (
+              <div className="grid min-h-64 place-items-center text-center">
+                <div>
+                  <div className="text-sm text-slate-300">Start a trustworthy agent turn</div>
+                  <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
+                    Autonomy dial is harness-enforced. Observe/Propose never expose write tools;
+                    Act/Automate still require approved owned paths or leases.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
+                {text}
+                {busy && <span className="ml-1 inline-block size-1.5 animate-pulse bg-blue-300" />}
+              </div>
+            )}
+          </div>
+
+          {activity.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {activity.map((event, index) => (
+                <div
+                  key={`${event.type}-${index}`}
+                  className="rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px]"
+                >
+                  {event.type === "tool_call" ? (
+                    <span className="text-amber-200">
+                      → {event.server}/{event.tool}
+                      {event.effect ? (
+                        <span className="ml-2 text-slate-500">{event.effect}</span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className={event.is_error ? "text-red-300" : "text-emerald-300"}>
+                      ← {event.is_error ? "error" : "ok"} {event.server}/{event.tool}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
           )}
-        </div>
 
-        {activity.length > 0 && (
-          <div className="mt-3 space-y-2">
-            {activity.map((event, index) => (
-              <div
-                key={`${event.type}-${index}`}
-                className="rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px]"
-              >
-                {event.type === "tool_call" ? (
-                  <span className="text-amber-200">
-                    → {event.server}/{event.tool}
-                  </span>
-                ) : (
-                  <span className={event.is_error ? "text-red-300" : "text-emerald-300"}>
-                    ← {event.is_error ? "error" : "ok"} {event.server}/{event.tool}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+          {verifyEvent && (
+            <div
+              className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${
+                verifyEvent.passed
+                  ? "border-emerald-400/20 bg-emerald-400/8 text-emerald-200"
+                  : "border-red-400/20 bg-red-400/8 text-red-200"
+              }`}
+            >
+              Verify-on-complete {verifyEvent.gate}: {verifyEvent.summary}
+            </div>
+          )}
 
-        {completed && (
-          <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
-            <span>{completed.result.provider}</span>
-            <span>{completed.result.model}</span>
-            <span>
-              {completed.result.usage.input_tokens} in /{" "}
-              {completed.result.usage.output_tokens} out
+          {failed && (
+            <div className="mt-3 rounded-lg border border-red-400/20 bg-red-400/8 px-3 py-2 text-[11px] text-red-200">
+              {failed.error}
+            </div>
+          )}
+
+          {completed && (
+            <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
+              <span>{completed.result.provider}</span>
+              <span>{completed.result.model}</span>
+              <span>
+                {completed.result.usage.input_tokens} in /{" "}
+                {completed.result.usage.output_tokens} out
+              </span>
+              <span>${(completed.result.cost_micros / 1_000_000).toFixed(6)}</span>
+            </div>
+          )}
+
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            rows={4}
+            className="thin-scrollbar mt-4 w-full rounded-xl border border-white/10 bg-[#101620] px-3 py-3 text-sm leading-6 text-slate-200"
+            placeholder="What should ADE help you accomplish?"
+          />
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-[10px] text-slate-600">
+              {connectedTools} MCP tool{connectedTools === 1 ? "" : "s"} available · {autonomy}
             </span>
-            <span>${(completed.result.cost_micros / 1_000_000).toFixed(6)}</span>
+            <button
+              onClick={submit}
+              disabled={busy || !prompt.trim() || !provider.trim() || !model.trim()}
+              className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
+            >
+              {busy ? "Running…" : "Run agent turn"}
+            </button>
           </div>
-        )}
+        </Panel>
 
-        <textarea
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          rows={4}
-          className="thin-scrollbar mt-4 w-full rounded-xl border border-white/10 bg-[#101620] px-3 py-3 text-sm leading-6 text-slate-200"
-          placeholder="What should ADE help you accomplish?"
-        />
-        <div className="mt-3 flex items-center justify-between">
-          <span className="text-[10px] text-slate-600">
-            {connectedTools} MCP tool{connectedTools === 1 ? "" : "s"} available
-          </span>
-          <button
-            onClick={submit}
-            disabled={busy || !prompt.trim() || !provider.trim() || !model.trim()}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
-          >
-            {busy ? "Running…" : "Run agent turn"}
-          </button>
-        </div>
-      </Panel>
+        <div className="space-y-5">
+          <Panel title="Harness budgets" subtitle="Hard stops in AgentTurnService">
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Max steps" value={maxSteps} onChange={setMaxSteps} />
+                <Field
+                  label="Max tokens"
+                  value={maxTokens}
+                  onChange={setMaxTokens}
+                  placeholder="unlimited"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
+                <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
+              </div>
+              <label className="flex items-center gap-2 text-[11px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={autonomy === "automate" ? true : verifyOnComplete}
+                  disabled={autonomy === "automate"}
+                  onChange={(event) => setVerifyOnComplete(event.target.checked)}
+                  className="accent-blue-500"
+                />
+                Verify-on-complete
+                {autonomy === "automate" ? " (required)" : ""}
+              </label>
+              <Field label="Verify gate" value={verifyGate} onChange={setVerifyGate} mono />
+            </div>
+          </Panel>
 
-      <Panel title="Provider" subtitle="Key loaded from the local OS vault">
-        <div className="space-y-3">
-          <Field label="Provider id" value={provider} onChange={setProvider} />
-          <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
-          <Field label="Exact model id" value={model} onChange={setModel} mono />
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
-            <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
-            <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
-          </div>
-          <div className="rounded-lg border border-blue-400/15 bg-blue-400/5 p-3 text-[10px] leading-5 text-blue-200/70">
-            Manage this provider in the Keys view or run{" "}
-            <span className="font-mono">ade keys set {provider}</span>. Keys never enter prompts,
-            events, or handoff capsules. Spend caps are reserved before every provider round.
-          </div>
+          <Panel title="Provider" subtitle="Key loaded from the local OS vault">
+            <div className="space-y-3">
+              <Field label="Provider id" value={provider} onChange={setProvider} />
+              <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
+              <Field label="Exact model id" value={model} onChange={setModel} mono />
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
+                <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
+              </div>
+              <div className="rounded-lg border border-blue-400/15 bg-blue-400/5 p-3 text-[10px] leading-5 text-blue-200/70">
+                Manage this provider in the Keys view or run{" "}
+                <span className="font-mono">ade keys set {provider}</span>. Spend and step caps
+                are reserved before every provider round.
+              </div>
+            </div>
+          </Panel>
+
+          <Panel title="Leases" subtitle="Active path ownership">
+            {leases.length === 0 ? (
+              <p className="text-[11px] leading-5 text-slate-500">
+                No active leases. Turns stay read-only for writes until PLAN owned paths or a
+                lease agent id is bound.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {leases.map((lease) => (
+                  <div
+                    key={lease.id}
+                    className="rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px]"
+                  >
+                    <div className="font-mono text-slate-200">{lease.path}</div>
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      {lease.mode} · agent {lease.agent_id.slice(0, 8)}
+                      {lease.protected ? " · protected" : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
         </div>
-      </Panel>
+      </div>
+
+      {devMode && (
+        <Panel title="Turn trace" subtitle="Reconstructable timeline · ToolEffect · spend">
+          {events.length === 0 ? (
+            <p className="text-[11px] text-slate-500">Run a turn to populate the trace.</p>
+          ) : (
+            <div className="thin-scrollbar max-h-80 space-y-1.5 overflow-y-auto">
+              {events.map((event, index) => (
+                <div
+                  key={`trace-${index}`}
+                  className="rounded-md border border-white/6 bg-black/25 px-3 py-1.5 font-mono text-[10px] text-slate-400"
+                >
+                  <span className="text-slate-500">{String(index + 1).padStart(2, "0")}</span>{" "}
+                  <span className="text-amber-200/90">{event.type}</span>
+                  {event.type === "started" && (
+                    <span>
+                      {" "}
+                      {event.provider}/{event.model}
+                    </span>
+                  )}
+                  {event.type === "tool_call" && (
+                    <span>
+                      {" "}
+                      {event.server}/{event.tool}
+                      {event.effect ? ` [${event.effect}]` : ""}
+                    </span>
+                  )}
+                  {event.type === "tool_result" && (
+                    <span>
+                      {" "}
+                      {event.is_error ? "error" : "ok"} {event.server}/{event.tool}
+                    </span>
+                  )}
+                  {event.type === "usage" && (
+                    <span>
+                      {" "}
+                      in={event.input_tokens} out={event.output_tokens} $
+                      {(event.cost_micros / 1_000_000).toFixed(6)}
+                    </span>
+                  )}
+                  {event.type === "spend_warning" && (
+                    <span>
+                      {" "}
+                      {event.scope} projected=
+                      {(event.projected_micros / 1_000_000).toFixed(4)}
+                    </span>
+                  )}
+                  {event.type === "verify_complete" && (
+                    <span>
+                      {" "}
+                      {event.gate} {event.passed ? "pass" : "fail"} · {event.summary}
+                    </span>
+                  )}
+                  {event.type === "completed" && (
+                    <span>
+                      {" "}
+                      tools={event.result.tool_calls} $
+                      {(event.result.cost_micros / 1_000_000).toFixed(6)}
+                    </span>
+                  )}
+                  {event.type === "failed" && <span> {event.error}</span>}
+                  {event.type === "cancelled" && <span> {event.reason}</span>}
+                  {event.type === "text_delta" && (
+                    <span> {event.text.slice(0, 80)}{event.text.length > 80 ? "…" : ""}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {(usageEvents.length > 0 || spendWarnings.length > 0) && (
+            <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
+              <span>{usageEvents.length} usage pulses</span>
+              <span>{spendWarnings.length} spend warnings</span>
+              <span>{activity.length} tool events</span>
+            </div>
+          )}
+        </Panel>
+      )}
     </div>
   );
 }
@@ -1455,17 +2059,20 @@ function Field({
   value,
   onChange,
   mono = false,
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   mono?: boolean;
+  placeholder?: string;
 }) {
   return (
     <label className="block text-[11px] text-slate-500">
       {label}
       <input
         value={value}
+        placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
         className={`mt-1.5 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200 ${
           mono ? "font-mono" : ""
@@ -1746,7 +2353,9 @@ function McpView({
         <Panel title="Connected servers" subtitle={`${servers.length} active`}>
           {servers.length === 0 ? (
             <div className="py-12 text-center text-xs text-slate-500">
-              No MCP servers connected yet.
+              {isTauri
+                ? "No MCP servers connected yet."
+                : "Browser preview cannot host MCP connections — open ADE Desktop to connect servers."}
             </div>
           ) : (
             <div className="space-y-2">

@@ -7,10 +7,17 @@ This is the canonical agent contract for the ADE project itself (dogfooding).
 1. Law/security/human direction
 2. CI, tests, schemas
 3. This AGENTS.md
-4. `.ade/rules/` scoped rules
-5. Task/issue acceptance criteria
-6. Provider/adapter files
-7. Chat memory
+4. `.ade/rules/` scoped rules (`.mdc`)
+5. `.ade/skills/` on-demand skills (`*/SKILL.md`)
+6. Task/issue acceptance criteria
+7. Provider/adapter files
+8. Chat memory
+
+## Rules & Skills
+
+- Rules: `.ade/rules/*.mdc` — always loaded into agent authority context; `globs:` + `write: deny` enforce path policy.
+- Skills: `.ade/skills/<name>/SKILL.md` — catalog always listed; full body injected when `alwaysApply: true` or the user prompt matches the skill.
+- Cursor IDE mirrors: `.cursor/rules/` and `.cursor/skills/` (for Cursor agents; ADE runtime uses `.ade/` only).
 
 ## Golden Path
 

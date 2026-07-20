@@ -1,0 +1,10 @@
+---
+description: Keep always-on context small; push procedures into skills
+---
+# Token Budget
+
+- Orchestrate cheap, implement targeted: premium/IDE model for tools, git, small edits; offload large codegen/review to FreeLLMAPI when available.
+- Always-on rules stay short; multi-step procedures belong in `.ade/skills/*/SKILL.md`.
+- One canonical source for endpoints, ports, model names; rules link — never duplicate.
+- Session hygiene: after a long task, prefer a fresh thread for unrelated work.
+- Batch independent reads with parallel tool calls.

@@ -36,10 +36,26 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("."))
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from("."));
+        // Load .env so ADE_IMPORT_ENV_KEYS + provider keys are available.
+        let _ = ade_core::config::AdeConfig::load();
+        let key_vault: Arc<dyn ade_db::secrets::ProviderKeyVault> =
+            Arc::new(ade_db::secrets::NativeProviderKeyVault);
+        match ade_db::secrets::import_env_provider_keys(key_vault.as_ref(), "local") {
+            Ok(imported) if !imported.is_empty() => {
+                tracing::info!(
+                    providers = ?imported,
+                    "imported provider keys from environment into OS vault (values not logged)"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "env provider key import skipped");
+            }
+        }
         Self {
             workspace_root,
             mcp: McpHost::new(),
-            key_vault: Arc::new(ade_db::secrets::NativeProviderKeyVault),
+            key_vault,
         }
     }
 }
@@ -74,6 +90,7 @@ pub struct DashboardSnapshot {
     pub handoff: ade_agents::handoff::HandoffMetrics,
     pub leases: Vec<ade_workflow::parallel::PathLease>,
     pub tasks: Vec<ade_workflow::tasks::AgentTask>,
+    pub rebuild_lock_warnings: Vec<String>,
 }
 
 #[tauri::command]
@@ -96,6 +113,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
         handoff,
         leases,
         tasks,
+        rebuild_lock_warnings: rebuild_lock_warnings(),
     })
 }
 
@@ -409,6 +427,11 @@ pub async fn run_agent_turn(
     daily_cap_usd: Option<f64>,
     profile: Option<String>,
     lease_agent_id: Option<String>,
+    autonomy: Option<String>,
+    max_steps: Option<u32>,
+    max_tokens: Option<u64>,
+    verify_on_complete: Option<bool>,
+    verify_gate: Option<String>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
@@ -420,6 +443,11 @@ pub async fn run_agent_turn(
             .map(|config| config.environment.to_string())
             .unwrap_or_else(|_| "local".into()),
     };
+    let autonomy = autonomy
+        .as_deref()
+        .unwrap_or("propose")
+        .parse::<ade_agents::autonomy::AutonomyLevel>()
+        .map_err(|error| error.to_string())?;
     let input_cost = ade_core::money::Money::try_from_usd_f64(input_cost_per_mtok)
         .map_err(|error| error.to_string())?;
     let output_cost = ade_core::money::Money::try_from_usd_f64(output_cost_per_mtok)
@@ -445,6 +473,22 @@ pub async fn run_agent_turn(
         spend_caps.daily =
             ade_core::money::Money::try_from_usd_f64(value).map_err(|error| error.to_string())?;
     }
+
+    let parsed_verify_gate = match verify_gate.as_deref() {
+        Some(raw) => Some(
+            raw.parse::<VerifyGate>()
+                .map_err(|error| error.to_string())?,
+        ),
+        None => None,
+    };
+    let verify_on_complete = match verify_on_complete {
+        Some(true) => Some(parsed_verify_gate.unwrap_or(VerifyGate::G3)),
+        Some(false) if !autonomy.requires_verify_on_complete() => None,
+        _ if autonomy.requires_verify_on_complete() => {
+            Some(parsed_verify_gate.unwrap_or(VerifyGate::G3))
+        }
+        _ => parsed_verify_gate,
+    };
 
     // Desktop chat starts read-only. A later explicit plan-approval action can
     // pass owned_paths; merely generating a PLAN never grants write authority.
@@ -472,7 +516,11 @@ pub async fn run_agent_turn(
     .mcp(state.mcp.clone())
     .ledger(ledger)
     .spend_caps(spend_caps)
-    .key_vault(Arc::clone(&state.key_vault));
+    .key_vault(Arc::clone(&state.key_vault))
+    .autonomy(autonomy)
+    .max_tool_rounds(max_steps.unwrap_or(8) as usize)
+    .max_tokens(max_tokens)
+    .verify_on_complete(verify_on_complete);
     if let Some(agent) = lease_agent_id {
         let agent_id = uuid::Uuid::parse_str(&agent)
             .map_err(|error| format!("invalid lease agent UUID: {error}"))?;
@@ -497,6 +545,22 @@ pub async fn run_agent_turn(
 #[tauri::command]
 pub fn list_recipes() -> Vec<StackRecipe> {
     ade_core::recipe::builtin_recipes()
+}
+
+#[tauri::command]
+pub fn list_rules(
+    state: State<'_, AppState>,
+) -> Result<Vec<ade_agents::authority::RuleFileInfo>, String> {
+    ade_agents::authority::list_rule_files(&state.workspace_root).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_skills(
+    state: State<'_, AppState>,
+) -> Result<Vec<ade_agents::skills::SkillDefinition>, String> {
+    ade_agents::skills::SkillLoader::new(&state.workspace_root)
+        .load_all()
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -553,6 +617,44 @@ fn current_branch(root: &std::path::Path) -> Option<String> {
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|branch| branch.trim().to_string())
         .filter(|branch| !branch.is_empty())
+}
+
+fn rebuild_lock_warnings() -> Vec<String> {
+    let mut warnings = Vec::new();
+    for name in ["ade-desktop-app", "ade-desktop-app.exe", "ade", "ade.exe"] {
+        if process_appears_running(name) {
+            warnings.push(format!(
+                "{name} is running — `cargo build -p ade-desktop-app` may hit access denied / os error 5. Stop the process or exclude that package."
+            ));
+            break;
+        }
+    }
+    warnings
+}
+
+fn process_appears_running(name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let stem = name.trim_end_matches(".exe");
+        let Ok(output) = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {stem}.exe"), "/NH"])
+            .output()
+        else {
+            return false;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+        stdout.contains(&format!("{stem}.exe"))
+    }
+    #[cfg(not(windows))]
+    {
+        let stem = name.trim_end_matches(".exe");
+        std::process::Command::new("pgrep")
+            .arg("-x")
+            .arg(stem)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

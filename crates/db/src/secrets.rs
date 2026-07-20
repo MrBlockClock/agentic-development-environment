@@ -162,6 +162,64 @@ fn vault_error(error: KeyringError) -> AdeError {
     AdeError::Provider(format!("OS credential vault error: {error}"))
 }
 
+/// When `ADE_IMPORT_ENV_KEYS=1` (or `true`), copy common provider env vars into the
+/// OS keychain for the given profile. Never logs secret values.
+///
+/// Supported:
+/// - `OPENAI_API_KEY` → provider `openai`
+/// - `ANTHROPIC_API_KEY` → provider `anthropic`
+/// - `ADE_<PROVIDER>_API_KEY` → provider `<provider>` (lowercased)
+///
+/// Existing vault entries are left unchanged unless `ADE_IMPORT_ENV_KEYS=force`.
+pub fn import_env_provider_keys(
+    vault: &dyn ProviderKeyVault,
+    profile: &str,
+) -> Result<Vec<String>, AdeError> {
+    let mode = std::env::var("ADE_IMPORT_ENV_KEYS")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if mode.is_empty() || mode == "0" || mode == "false" || mode == "no" {
+        return Ok(vec![]);
+    }
+    let force = mode == "force";
+
+    let mut imported = Vec::new();
+    let mut candidates: Vec<(String, String)> = Vec::new();
+
+    if let Ok(value) = std::env::var("OPENAI_API_KEY") {
+        if !value.trim().is_empty() {
+            candidates.push(("openai".into(), value));
+        }
+    }
+    if let Ok(value) = std::env::var("ANTHROPIC_API_KEY") {
+        if !value.trim().is_empty() {
+            candidates.push(("anthropic".into(), value));
+        }
+    }
+    for (key, value) in std::env::vars() {
+        let Some(rest) = key.strip_prefix("ADE_") else {
+            continue;
+        };
+        let Some(provider) = rest.strip_suffix("_API_KEY") else {
+            continue;
+        };
+        if provider.is_empty() || value.trim().is_empty() {
+            continue;
+        }
+        candidates.push((provider.to_ascii_lowercase(), value));
+    }
+
+    for (provider, value) in candidates {
+        if !force && vault.contains(profile, &provider)? {
+            continue;
+        }
+        vault.set(profile, &provider, value.trim())?;
+        imported.push(provider);
+    }
+    Ok(imported)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +258,42 @@ mod tests {
         );
         assert!(vault.delete("local", "openai").unwrap());
         assert!(!vault.contains("local", "openai").unwrap());
+    }
+
+    #[test]
+    fn import_env_keys_respects_flag_and_skips_existing() {
+        std::env::remove_var("ADE_IMPORT_ENV_KEYS");
+        std::env::set_var("OPENAI_API_KEY", "sk-test-openai");
+        let vault = InMemoryProviderKeyVault::default();
+        assert!(import_env_provider_keys(&vault, "local")
+            .unwrap()
+            .is_empty());
+
+        std::env::set_var("ADE_IMPORT_ENV_KEYS", "1");
+        let imported = import_env_provider_keys(&vault, "local").unwrap();
+        assert_eq!(imported, vec!["openai".to_string()]);
+        assert_eq!(
+            vault.get("local", "openai").unwrap().as_deref(),
+            Some("sk-test-openai")
+        );
+
+        std::env::set_var("OPENAI_API_KEY", "sk-other");
+        let again = import_env_provider_keys(&vault, "local").unwrap();
+        assert!(again.is_empty());
+        assert_eq!(
+            vault.get("local", "openai").unwrap().as_deref(),
+            Some("sk-test-openai")
+        );
+
+        std::env::set_var("ADE_IMPORT_ENV_KEYS", "force");
+        let forced = import_env_provider_keys(&vault, "local").unwrap();
+        assert_eq!(forced, vec!["openai".to_string()]);
+        assert_eq!(
+            vault.get("local", "openai").unwrap().as_deref(),
+            Some("sk-other")
+        );
+
+        std::env::remove_var("ADE_IMPORT_ENV_KEYS");
+        std::env::remove_var("OPENAI_API_KEY");
     }
 }
