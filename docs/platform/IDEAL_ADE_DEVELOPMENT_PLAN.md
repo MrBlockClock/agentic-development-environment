@@ -79,6 +79,7 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP12 | Catalog-first skill injection (T1; bodies via match/always/activate) |
 | WP13 | Shrink T0 start prompt + point at activate_skill |
 | WP14 | Rules/Skills editor activation state badges |
+| WP14b | T3: `activate_skill` loads `references/*.md` (capped) |
 
 ## I4 work packages — done
 

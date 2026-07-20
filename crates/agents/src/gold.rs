@@ -147,6 +147,7 @@ impl GoldRunner {
             "skill_catalog_mentions_name" => probe_catalog_mentions(&self.root),
             "autonomy_automate_prompt_clause" => probe_automate_clause(),
             "always_ignore_nonempty" => probe_always_ignore(),
+            "activate_includes_references" => probe_activate_refs(&self.root),
             other => Err(format!("unknown gold task kind '{other}'")),
         };
         match outcome {
@@ -395,6 +396,12 @@ fn builtin_tasks() -> Vec<GoldTask> {
             "g50",
             "Always-ignore patterns nonempty",
             "always_ignore_nonempty",
+            true,
+        ),
+        task(
+            "g51",
+            "activate_skill includes T3 references",
+            "activate_includes_references",
             true,
         ),
     ]
@@ -881,6 +888,19 @@ fn probe_always_ignore() -> Result<String, String> {
     Ok(format!("{} always-ignore patterns", patterns.len()))
 }
 
+fn probe_activate_refs(root: &Path) -> Result<String, String> {
+    let skill = SkillLoader::new(root)
+        .activate("verify-ladder")
+        .map_err(|e| e.to_string())?;
+    if !skill.body.contains("References (T3)") {
+        return Err("activated verify-ladder missing T3 references block".into());
+    }
+    if !skill.body.contains("G0") {
+        return Err("T3 gates.md content missing".into());
+    }
+    Ok("activate includes T3 references".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,8 +914,8 @@ mod tests {
             .to_path_buf();
         let report = GoldRunner::new(root).run_builtin();
         assert!(
-            report.total >= 50,
-            "expected ≥50 gold tasks, got {}",
+            report.total >= 51,
+            "expected ≥51 gold tasks, got {}",
             report.total
         );
         assert!(
