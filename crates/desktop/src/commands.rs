@@ -381,14 +381,14 @@ fn resolve_profile(profile: Option<String>) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn run_audit(state: State<'_, AppState>) -> Result<AuditReport, String> {
-    Ok(AuditRunner::new(&state.workspace_root()).run(AuditMode::EvaluateExisting))
+    Ok(AuditRunner::new(state.workspace_root()).run(AuditMode::EvaluateExisting))
 }
 
 #[tauri::command]
 pub async fn run_plan(state: State<'_, AppState>) -> Result<PlanReport, String> {
-    let audit = AuditRunner::new(&state.workspace_root()).run(AuditMode::EvaluateExisting);
+    let audit = AuditRunner::new(state.workspace_root()).run(AuditMode::EvaluateExisting);
     let plan = PlanBuilder::new().build(&audit);
-    ade_workflow::plan_enforcement::PlanEnforcer::save_plan(&state.workspace_root(), &plan)
+    ade_workflow::plan_enforcement::PlanEnforcer::save_plan(state.workspace_root(), &plan)
         .map_err(|error| error.to_string())?;
     Ok(plan)
 }
@@ -399,9 +399,9 @@ pub async fn run_execute(
     approved: bool,
     recipe: Option<String>,
 ) -> Result<ExecuteReport, String> {
-    let audit = AuditRunner::new(&state.workspace_root()).run(AuditMode::EvaluateExisting);
+    let audit = AuditRunner::new(state.workspace_root()).run(AuditMode::EvaluateExisting);
     let plan = PlanBuilder::new().build(&audit);
-    let report = ade_workflow::executor::PhaseExecutor::with_root(&state.workspace_root())
+    let report = ade_workflow::executor::PhaseExecutor::with_root(state.workspace_root())
         .execute(
             &plan,
             &ExecuteOptions {
@@ -414,7 +414,7 @@ pub async fn run_execute(
     let mut capsule =
         ade_core::handoff::HandoffCapsule::from_execute("Continue approved ADE plan", &report);
     capsule.branch = current_branch(&state.workspace_root());
-    ade_agents::handoff::HandoffManager::new(&state.workspace_root())
+    ade_agents::handoff::HandoffManager::new(state.workspace_root())
         .save_capsule(&capsule)
         .map_err(|error| error.to_string())?;
     Ok(report)
@@ -427,13 +427,13 @@ pub async fn run_verify(
     through: bool,
 ) -> Result<Vec<VerifyResult>, String> {
     let gate: VerifyGate = gate.parse()?;
-    let runner = VerifyRunner::with_root(&state.workspace_root());
+    let runner = VerifyRunner::with_root(state.workspace_root());
     let results = if through {
         runner.run_through(gate).await
     } else {
         vec![runner.run_gate(gate).await]
     };
-    let manager = ade_agents::handoff::HandoffManager::new(&state.workspace_root());
+    let manager = ade_agents::handoff::HandoffManager::new(state.workspace_root());
     let mut capsule = manager.load_latest().unwrap_or_else(|_| {
         ade_core::handoff::HandoffCapsule::new(
             "Continue after workspace verification",
@@ -501,7 +501,7 @@ pub async fn mcp_call_tool(
     tool: String,
     arguments: serde_json::Value,
 ) -> Result<McpToolCallResult, String> {
-    ade_agents::authority::AuthorityEnforcer::load(&state.workspace_root(), Vec::<String>::new())
+    ade_agents::authority::AuthorityEnforcer::load(state.workspace_root(), Vec::<String>::new())
         .and_then(|policy| policy.authorize_human_tool(&server, &tool, &arguments))
         .map_err(|error| error.to_string())?;
     state
@@ -660,7 +660,7 @@ pub fn list_recipes() -> Vec<StackRecipe> {
 pub fn list_rules(
     state: State<'_, AppState>,
 ) -> Result<Vec<ade_agents::authority::RuleFileInfo>, String> {
-    ade_agents::authority::list_rule_files(&state.workspace_root())
+    ade_agents::authority::list_rule_files(state.workspace_root())
         .map_err(|error| error.to_string())
 }
 
@@ -668,7 +668,7 @@ pub fn list_rules(
 pub fn list_skills(
     state: State<'_, AppState>,
 ) -> Result<Vec<ade_agents::skills::SkillDefinition>, String> {
-    ade_agents::skills::SkillLoader::new(&state.workspace_root())
+    ade_agents::skills::SkillLoader::new(state.workspace_root())
         .load_all()
         .map_err(|error| error.to_string())
 }
@@ -677,14 +677,14 @@ pub fn list_skills(
 pub fn guided_wins_status(
     state: State<'_, AppState>,
 ) -> Result<ade_core::guided::GuidedWinsState, String> {
-    ade_core::guided::load_wins(&state.workspace_root()).map_err(|error| error.to_string())
+    ade_core::guided::load_wins(state.workspace_root()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn guided_understand_project(
     state: State<'_, AppState>,
 ) -> Result<ade_core::guided::UnderstandResult, String> {
-    ade_core::guided::write_understand_project(&state.workspace_root())
+    ade_core::guided::write_understand_project(state.workspace_root())
         .map_err(|error| error.to_string())
 }
 
@@ -699,7 +699,7 @@ pub fn guided_mark_win(
         "improve_ade" | "improve-ade" | "improve" => ade_core::guided::GuidedWinId::ImproveAde,
         other => return Err(format!("unknown guided win '{other}'")),
     };
-    ade_core::guided::mark_win(&state.workspace_root(), win).map_err(|error| error.to_string())
+    ade_core::guided::mark_win(state.workspace_root(), win).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -720,7 +720,7 @@ pub fn preview_recipe_scaffold(
     });
     let context = ade_core::agents_contract::AgentsContractContext::new(name)
         .with_root(state.workspace_root().display().to_string());
-    ade_core::scaffold::RecipeScaffold::plan(&state.workspace_root(), &recipe, &context, force)
+    ade_core::scaffold::RecipeScaffold::plan(state.workspace_root(), &recipe, &context, force)
         .map_err(|error| error.to_string())
 }
 
@@ -742,7 +742,7 @@ pub fn initialize_recipe(
     });
     let context = ade_core::agents_contract::AgentsContractContext::new(name)
         .with_root(state.workspace_root().display().to_string());
-    ade_core::scaffold::RecipeScaffold::apply(&state.workspace_root(), &recipe, &context, force)
+    ade_core::scaffold::RecipeScaffold::apply(state.workspace_root(), &recipe, &context, force)
         .map_err(|error| error.to_string())
 }
 
