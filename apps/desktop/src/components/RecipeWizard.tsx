@@ -69,15 +69,15 @@ export function RecipeWizard({
 
   const recipe = recipes.find((item) => item.id === selected);
   return (
-    <div className="grid grid-cols-[1fr_360px] gap-5">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_360px]">
       <section className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5 shadow-[0_12px_45px_rgba(0,0,0,0.15)]">
         <div className="mb-5">
           <h2 className="text-sm font-semibold">Stack recipes</h2>
           <p className="mt-1 text-[11px] text-slate-600">
-            Choose a safe starting contract for this workspace
+            Pick a starting contract for this workspace
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {recipes.map((item) => (
             <button
               key={item.id}
@@ -100,7 +100,7 @@ export function RecipeWizard({
         <div className="mb-5">
           <h2 className="text-sm font-semibold">{recipe?.name ?? "Recipe setup"}</h2>
           <p className="mt-1 text-[11px] text-slate-600">
-            Transactional bootstrap with rollback journal under .ade/scaffold
+            Preview files, then initialize
           </p>
         </div>
         {recipe ? (
@@ -165,7 +165,7 @@ export function RecipeWizard({
                 onChange={(event) => setForce(event.target.checked)}
                 className="mt-1 size-3.5 accent-red-400"
               />
-              Replace an existing AGENTS.md. Leave off to preserve repository authority.
+              Replace existing AGENTS.md (keep off to preserve authority)
             </label>
             <button
               onClick={() => onInitialize({ recipe: recipe.id, projectName, force })}

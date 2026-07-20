@@ -7,17 +7,19 @@ This is the canonical agent contract for the ADE project itself (dogfooding).
 1. Law/security/human direction
 2. CI, tests, schemas
 3. This AGENTS.md
-4. `.ade/rules/` scoped rules (`.mdc`)
-5. `.ade/skills/` on-demand skills (`*/SKILL.md`)
+4. Global guidance (`<ade-home>/guidance/rules`) + `.ade/rules/` (workspace wins body; deny-writes union)
+5. Global + `.ade/skills/` on-demand skills (`*/SKILL.md`)
 6. Task/issue acceptance criteria
 7. Provider/adapter files
 8. Chat memory
 
 ## Rules & Skills
 
-- Rules: `.ade/rules/*.mdc` — always loaded into agent authority context; `globs:` + `write: deny` enforce path policy.
-- Skills: `.ade/skills/<name>/SKILL.md` — catalog always listed; full body injected when `alwaysApply: true` or the user prompt matches the skill.
-- Cursor IDE mirrors: `.cursor/rules/` and `.cursor/skills/` (for Cursor agents; ADE runtime uses `.ade/` only).
+- Rules: Global guidance + `.ade/rules/*.mdc` — merged into agent authority; workspace stem wins prompt body; `globs:` + `write: deny` union across scopes.
+- Skills: Global + `.ade/skills/<name>/SKILL.md` — catalogs merge; full body when `alwaysApply: true`, match, or `activate_skill`.
+- Profiles: `.ade/profiles/*.toml` and Global profiles filter `pack:`-tagged items (`active-profile.txt`).
+- Cursor IDE mirrors: `.cursor/rules/` and `.cursor/skills/` (for Cursor agents; ADE runtime uses Global + `.ade/`).
+- Atlas / Plan Map: Full/Debug views for authority+work graph and Trust Route (AUDIT→PLAN→EXECUTE→VERIFY).
 
 ## Golden Path
 

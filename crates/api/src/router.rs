@@ -22,7 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
 use std::convert::Infallible;
@@ -223,6 +223,9 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/recipes", get(list_recipes))
         .route("/rules", get(list_rules))
         .route("/skills", get(list_skills))
+        .route("/guidance/profiles", get(list_guidance_profiles))
+        .route("/guidance/active-profile", get(get_active_guidance_profile).post(set_active_guidance_profile))
+        .route("/guidance/global-audit", get(run_global_audit))
         .route("/leases", get(list_leases))
         .route("/tasks", get(list_tasks))
         .route("/tasks/claim", post(claim_task))
@@ -337,6 +340,7 @@ async fn list_recipes() -> Json<Vec<StackRecipe>> {
 async fn list_rules(
     State(state): State<ApiState>,
 ) -> ApiResult<Vec<ade_agents::authority::RuleFileInfo>> {
+    let _ = ade_core::guidance::ensure_guidance_dirs();
     ade_agents::authority::list_rule_files(state.workspace_root())
         .map(Json)
         .map_err(map_ade_error)
@@ -345,10 +349,41 @@ async fn list_rules(
 async fn list_skills(
     State(state): State<ApiState>,
 ) -> ApiResult<Vec<ade_agents::skills::SkillDefinition>> {
+    let _ = ade_core::guidance::ensure_guidance_dirs();
     ade_agents::skills::SkillLoader::new(state.workspace_root())
         .load_all()
         .map(Json)
         .map_err(map_ade_error)
+}
+
+async fn list_guidance_profiles(
+    State(state): State<ApiState>,
+) -> ApiResult<Vec<ade_core::guidance::GuidanceProfile>> {
+    ade_core::guidance::load_profiles(state.workspace_root())
+        .map(Json)
+        .map_err(map_ade_error)
+}
+
+async fn get_active_guidance_profile() -> ApiResult<Option<String>> {
+    Ok(Json(ade_core::guidance::read_active_profile_id()))
+}
+
+#[derive(Deserialize)]
+struct ActiveProfileBody {
+    id: Option<String>,
+}
+
+async fn set_active_guidance_profile(
+    Json(body): Json<ActiveProfileBody>,
+) -> ApiResult<Option<String>> {
+    ade_core::guidance::write_active_profile_id(body.id.as_deref()).map_err(map_ade_error)?;
+    Ok(Json(ade_core::guidance::read_active_profile_id()))
+}
+
+async fn run_global_audit(State(state): State<ApiState>) -> Json<ade_core::guidance::GlobalAuditReport> {
+    Json(ade_core::guidance::run_global_audit(Some(
+        state.workspace_root().as_path(),
+    )))
 }
 
 async fn list_leases(State(state): State<ApiState>) -> ApiResult<Vec<PathLease>> {

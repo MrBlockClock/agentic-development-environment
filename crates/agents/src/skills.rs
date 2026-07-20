@@ -1,4 +1,4 @@
-//! Discover and select `.ade/skills/*/SKILL.md` for agent prompt injection.
+//! Discover and select Global + workspace skills for agent prompt injection.
 //!
 //! Progressive disclosure (Ideal I3):
 //! - T1: skill catalog (names + short descriptions) always in the system prompt
@@ -6,9 +6,10 @@
 
 use ade_core::error::AdeError;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// A skill loaded from `.ade/skills/<name>/SKILL.md`.
+/// A skill loaded from Global guidance or `.ade/skills/<name>/SKILL.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillDefinition {
     pub name: String,
@@ -16,9 +17,18 @@ pub struct SkillDefinition {
     pub always_apply: bool,
     pub body: String,
     pub source: String,
+    /// `global` or `workspace`.
+    #[serde(default = "default_workspace_scope")]
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
 }
 
-/// Lists and selects skills under the workspace `.ade/skills` tree.
+fn default_workspace_scope() -> String {
+    "workspace".into()
+}
+
+/// Lists and selects skills under Global + workspace `.ade/skills` trees.
 #[derive(Debug, Clone, Default)]
 pub struct SkillLoader {
     root: PathBuf,
@@ -34,27 +44,31 @@ impl SkillLoader {
     }
 
     pub fn load_all(&self) -> Result<Vec<SkillDefinition>, AdeError> {
-        let dir = self.skills_dir();
-        if !dir.is_dir() {
-            return Ok(vec![]);
+        let mut by_name: BTreeMap<String, SkillDefinition> = BTreeMap::new();
+
+        for skill in load_skills_from_dir(
+            &ade_core::guidance::global_skills_dir(),
+            None,
+            "global",
+        )? {
+            merge_skill_into(&mut by_name, skill);
         }
-        let mut dirs = std::fs::read_dir(&dir)?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect::<Vec<_>>();
-        dirs.sort();
-        let mut skills = Vec::new();
-        for skill_dir in dirs {
-            let skill_md = skill_dir.join("SKILL.md");
-            if !skill_md.is_file() {
-                continue;
-            }
-            let content = std::fs::read_to_string(&skill_md)?;
-            if let Some(skill) = parse_skill(&self.root, &skill_md, &content) {
-                skills.push(skill);
-            }
+        for skill in load_skills_from_dir(&self.skills_dir(), Some(&self.root), "workspace")? {
+            merge_skill_into(&mut by_name, skill);
         }
+
+        let active = ade_core::guidance::read_active_profile_id().and_then(|id| {
+            ade_core::guidance::load_profiles(&self.root)
+                .ok()?
+                .into_iter()
+                .find(|p| p.id == id)
+        });
+
+        let mut skills: Vec<SkillDefinition> = by_name.into_values().collect();
+        skills.retain(|skill| {
+            ade_core::guidance::pack_allowed(skill.pack.as_deref(), active.as_ref(), false)
+        });
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(skills)
     }
 
@@ -70,10 +84,12 @@ impl SkillLoader {
             .into_iter()
             .find(|skill| skill.name.eq_ignore_ascii_case(needle))
             .ok_or_else(|| {
-                AdeError::NotFound(format!("skill '{needle}' not found under .ade/skills"))
+                AdeError::NotFound(format!(
+                    "skill '{needle}' not found under Global or .ade/skills"
+                ))
             })?;
-        if let Some(dir) = Path::new(&skill.source).parent() {
-            let refs = load_skill_references(&self.root.join(dir))?;
+        if let Some(dir) = resolve_skill_dir(&self.root, &skill) {
+            let refs = load_skill_references(&dir)?;
             if !refs.is_empty() {
                 skill.body.push_str("\n\n## References (T3)\n\n");
                 skill.body.push_str(&refs);
@@ -89,20 +105,77 @@ impl SkillLoader {
     }
 }
 
+fn merge_skill_into(by_name: &mut BTreeMap<String, SkillDefinition>, incoming: SkillDefinition) {
+    let key = incoming.name.to_ascii_lowercase();
+    match by_name.get_mut(&key) {
+        None => {
+            by_name.insert(key, incoming);
+        }
+        Some(existing) => {
+            let always = existing.always_apply || incoming.always_apply;
+            if incoming.scope == "workspace" {
+                *existing = incoming;
+                existing.always_apply = always;
+            } else {
+                existing.always_apply = always;
+            }
+        }
+    }
+}
+
+fn resolve_skill_dir(workspace: &Path, skill: &SkillDefinition) -> Option<PathBuf> {
+    if skill.scope == "global" {
+        Some(ade_core::guidance::global_skills_dir().join(&skill.name))
+    } else {
+        Path::new(&skill.source)
+            .parent()
+            .map(|p| workspace.join(p))
+    }
+}
+
+fn load_skills_from_dir(
+    dir: &Path,
+    strip_root: Option<&Path>,
+    scope: &str,
+) -> Result<Vec<SkillDefinition>, AdeError> {
+    if !dir.is_dir() {
+        return Ok(vec![]);
+    }
+    let mut dirs = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    dirs.sort();
+    let mut skills = Vec::new();
+    for skill_dir in dirs {
+        let skill_md = skill_dir.join("SKILL.md");
+        if !skill_md.is_file() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&skill_md)?;
+        if let Some(skill) = parse_skill(strip_root, &skill_md, &content, scope) {
+            skills.push(skill);
+        }
+    }
+    Ok(skills)
+}
+
 pub fn catalog_prompt(skills: &[SkillDefinition]) -> String {
     let catalog = skills
         .iter()
         .map(|skill| {
             format!(
-                "- {}: {}",
+                "- {} [{}]: {}",
                 skill.name,
+                skill.scope,
                 truncate_chars(&skill.description, 160)
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "AVAILABLE SKILLS (.ade/skills) — T1 catalog. Call ade__activate_skill with {{\"name\"}} to load a full body when needed beyond match/always-on:\n{catalog}"
+        "AVAILABLE SKILLS (Global + .ade/skills) — T1 catalog. Call ade__activate_skill with {{\"name\"}} to load a full body when needed beyond match/always-on:\n{catalog}"
     )
 }
 
@@ -143,7 +216,12 @@ fn load_skill_references(skill_dir: &Path) -> Result<String, AdeError> {
     Ok(out)
 }
 
-fn parse_skill(root: &Path, path: &Path, content: &str) -> Option<SkillDefinition> {
+fn parse_skill(
+    strip_root: Option<&Path>,
+    path: &Path,
+    content: &str,
+    scope: &str,
+) -> Option<SkillDefinition> {
     let (header, body) = split_frontmatter(content);
     let name = header_value(header, "name")
         .filter(|value| !value.is_empty())
@@ -165,18 +243,23 @@ fn parse_skill(root: &Path, path: &Path, content: &str) -> Option<SkillDefinitio
             ))
         )
     });
-    let source = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
-        .replace('\\', "/");
+    let source = if let Some(root) = strip_root {
+        path.strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    } else {
+        format!("global/skills/{name}/SKILL.md")
+    };
     Some(SkillDefinition {
         name,
         description,
         always_apply,
         body: body.trim().to_string(),
         source,
+        scope: scope.into(),
+        pack: ade_core::guidance::frontmatter_pack(content),
     })
 }
 

@@ -47,3 +47,50 @@ select:focus-visible {
   scrollbar-color: #283447 transparent;
   scrollbar-width: thin;
 }
+
+/* Hover + focus + tap tooltips (desktop + mobile) */
+.ade-hint-bubble {
+  pointer-events: none;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.4rem);
+  z-index: 40;
+  width: max-content;
+  max-width: min(16rem, 70vw);
+  transform: translateX(-50%) translateY(0.15rem);
+  border-radius: 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #101820;
+  padding: 0.45rem 0.6rem;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #cbd5e1;
+  opacity: 0;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.ade-hint:hover .ade-hint-bubble,
+.ade-hint:focus-within .ade-hint-bubble,
+.ade-hint:active .ade-hint-bubble {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+@media (max-width: 767px) {
+  .ade-hint-bubble {
+    left: 0;
+    transform: translateX(0) translateY(0.15rem);
+  }
+
+  .ade-hint:hover .ade-hint-bubble,
+  .ade-hint:focus-within .ade-hint-bubble,
+  .ade-hint:active .ade-hint-bubble {
+    transform: translateX(0) translateY(0);
+  }
+}

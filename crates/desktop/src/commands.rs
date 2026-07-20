@@ -660,6 +660,7 @@ pub fn list_recipes() -> Vec<StackRecipe> {
 pub fn list_rules(
     state: State<'_, AppState>,
 ) -> Result<Vec<ade_agents::authority::RuleFileInfo>, String> {
+    let _ = ade_core::guidance::ensure_guidance_dirs();
     ade_agents::authority::list_rule_files(state.workspace_root())
         .map_err(|error| error.to_string())
 }
@@ -668,9 +669,36 @@ pub fn list_rules(
 pub fn list_skills(
     state: State<'_, AppState>,
 ) -> Result<Vec<ade_agents::skills::SkillDefinition>, String> {
+    let _ = ade_core::guidance::ensure_guidance_dirs();
     ade_agents::skills::SkillLoader::new(state.workspace_root())
         .load_all()
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn list_guidance_profiles(
+    state: State<'_, AppState>,
+) -> Result<Vec<ade_core::guidance::GuidanceProfile>, String> {
+    ade_core::guidance::load_profiles(&state.workspace_root()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_active_guidance_profile() -> Result<Option<String>, String> {
+    Ok(ade_core::guidance::read_active_profile_id())
+}
+
+#[tauri::command]
+pub fn set_active_guidance_profile(id: Option<String>) -> Result<Option<String>, String> {
+    ade_core::guidance::write_active_profile_id(id.as_deref()).map_err(|error| error.to_string())?;
+    Ok(ade_core::guidance::read_active_profile_id())
+}
+
+#[tauri::command]
+pub fn run_global_audit(
+    state: State<'_, AppState>,
+) -> Result<ade_core::guidance::GlobalAuditReport, String> {
+    let root = state.workspace_root();
+    Ok(ade_core::guidance::run_global_audit(Some(root.as_path())))
 }
 
 #[tauri::command]

@@ -325,9 +325,18 @@ pub struct RuleFileInfo {
     pub globs: Vec<String>,
     pub deny_writes: bool,
     pub content: String,
+    /// `global` or `workspace`.
+    #[serde(default = "default_workspace_scope")]
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
 }
 
-/// Public listing of `.ade/rules/*.mdc` for desktop/API surfaces.
+fn default_workspace_scope() -> String {
+    "workspace".into()
+}
+
+/// Public listing of merged Global + workspace `.ade/rules/*.mdc`.
 pub fn list_rule_files(root: impl AsRef<Path>) -> Result<Vec<RuleFileInfo>, AdeError> {
     let root = root.as_ref();
     Ok(load_scoped_rules(root)?
@@ -344,6 +353,8 @@ pub fn list_rule_files(root: impl AsRef<Path>) -> Result<Vec<RuleFileInfo>, AdeE
                 globs: rule.patterns,
                 deny_writes: rule.deny_writes,
                 content: rule.content,
+                scope: rule.scope,
+                pack: rule.pack,
             }
         })
         .collect())
@@ -355,6 +366,10 @@ struct ScopedRule {
     patterns: Vec<String>,
     deny_writes: bool,
     content: String,
+    scope: String,
+    pack: Option<String>,
+    /// Stem used for conflict resolution (workspace wins).
+    stem: String,
 }
 
 impl ScopedRule {
@@ -368,7 +383,60 @@ impl ScopedRule {
 }
 
 fn load_scoped_rules(root: &Path) -> Result<Vec<ScopedRule>, AdeError> {
-    let rules_dir = root.join(".ade").join("rules");
+    let mut by_stem: BTreeMap<String, ScopedRule> = BTreeMap::new();
+
+    // Global first; workspace overwrites prompt body but deny union kept via merge_rule.
+    for rule in load_rules_from_dir(
+        &ade_core::guidance::global_rules_dir(),
+        None,
+        "global",
+    )? {
+        merge_rule_into(&mut by_stem, rule);
+    }
+    for rule in load_rules_from_dir(&root.join(".ade").join("rules"), Some(root), "workspace")? {
+        merge_rule_into(&mut by_stem, rule);
+    }
+
+    let active = active_guidance_profile(root);
+    let mut rules: Vec<ScopedRule> = by_stem.into_values().collect();
+    rules.retain(|rule| {
+        ade_core::guidance::pack_allowed(rule.pack.as_deref(), active.as_ref(), rule.deny_writes)
+    });
+    rules.sort_by(|a, b| a.source.cmp(&b.source));
+    Ok(rules)
+}
+
+fn active_guidance_profile(workspace: &Path) -> Option<ade_core::guidance::GuidanceProfile> {
+    let id = ade_core::guidance::read_active_profile_id()?;
+    ade_core::guidance::load_profiles(workspace)
+        .ok()?
+        .into_iter()
+        .find(|p| p.id == id)
+}
+
+fn merge_rule_into(by_stem: &mut BTreeMap<String, ScopedRule>, incoming: ScopedRule) {
+    match by_stem.get_mut(&incoming.stem) {
+        None => {
+            by_stem.insert(incoming.stem.clone(), incoming);
+        }
+        Some(existing) => {
+            // Workspace wins body; deny-writes union.
+            let deny = existing.deny_writes || incoming.deny_writes;
+            if incoming.scope == "workspace" {
+                *existing = incoming;
+                existing.deny_writes = deny;
+            } else {
+                existing.deny_writes = deny;
+            }
+        }
+    }
+}
+
+fn load_rules_from_dir(
+    rules_dir: &Path,
+    strip_root: Option<&Path>,
+    scope: &str,
+) -> Result<Vec<ScopedRule>, AdeError> {
     if !rules_dir.is_dir() {
         return Ok(vec![]);
     }
@@ -394,15 +462,26 @@ fn load_scoped_rules(root: &Path) -> Result<Vec<ScopedRule>, AdeError> {
                     "write: deny" | "read_only: true" | "readonly: true"
                 )
             });
-            Ok(ScopedRule {
-                source: path
-                    .strip_prefix(root)
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let source = if let Some(root) = strip_root {
+                path.strip_prefix(root)
                     .unwrap_or(&path)
                     .display()
-                    .to_string(),
+                    .to_string()
+            } else {
+                format!("global/rules/{}", path.file_name().and_then(|n| n.to_str()).unwrap_or(&stem))
+            };
+            Ok(ScopedRule {
+                source,
                 patterns,
                 deny_writes,
+                pack: ade_core::guidance::frontmatter_pack(&content),
                 content,
+                scope: scope.into(),
+                stem,
             })
         })
         .collect()

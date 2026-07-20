@@ -27,6 +27,9 @@ const httpReads: Record<string, string> = {
   list_recipes: "/api/recipes",
   list_rules: "/api/rules",
   list_skills: "/api/skills",
+  list_guidance_profiles: "/api/guidance/profiles",
+  get_active_guidance_profile: "/api/guidance/active-profile",
+  run_global_audit: "/api/guidance/global-audit",
 };
 
 /**
@@ -98,6 +101,13 @@ export async function invoke<T>(
         gate: String(args?.gate ?? "G0"),
         through: Boolean(args?.through),
       }),
+    });
+  }
+  if (command === "set_active_guidance_profile") {
+    return http<T>("/api/guidance/active-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: args?.id ?? null }),
     });
   }
   const route = httpReads[command];

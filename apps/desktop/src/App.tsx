@@ -8,18 +8,84 @@ import {
   type StackRecipe,
 } from "./components/RecipeWizard";
 import { RulesEditor } from "./components/RulesEditor";
+import { PlanMap } from "./components/PlanMap";
+import { AtlasView } from "./components/AtlasView";
+import { Chip, ChipRow, Disclosure, Hint } from "./components/ui";
 
 const DEV_MODE_KEY = "ade_dev_mode";
 const AUTONOMY_KEY = "ade_autonomy_level";
 const SURFACE_MODE_KEY = "ade_surface_mode";
+const AGENT_PROVIDER_KEY = "ade_agent_provider";
+const AGENT_BASE_URL_KEY = "ade_agent_base_url";
+const AGENT_MODEL_KEY = "ade_agent_model";
+const NAV_OPEN_KEY = "ade_nav_open";
 
 type AutonomyLevel = "observe" | "propose" | "act" | "automate";
 type SurfaceMode = "guided" | "power" | "dev";
 
-const SURFACE_MODES: { id: SurfaceMode; label: string }[] = [
-  { id: "guided", label: "Simple" },
-  { id: "power", label: "Advanced" },
-  { id: "dev", label: "Developer" },
+const SURFACE_MODES: { id: SurfaceMode; label: string; hint: string }[] = [
+  {
+    id: "guided",
+    label: "Simple",
+    hint: "Do work: Home, Agent, Keys, Verify, Recipes. Suggest or Apply only.",
+  },
+  {
+    id: "power",
+    label: "Full",
+    hint: "All views + Observe→Automate. Turn on Debug for budgets and traces.",
+  },
+  {
+    id: "dev",
+    label: "Debug",
+    hint: "Same as Full, with traces, leases, and harness open.",
+  },
+];
+
+const PROVIDER_PRESETS: {
+  id: string;
+  baseUrl: string;
+  models: string[];
+}[] = [
+  {
+    id: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    models: ["gpt-4.1-mini", "gpt-4.1", "o4-mini"],
+  },
+  {
+    id: "anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    models: ["claude-sonnet-4-5", "claude-opus-4"],
+  },
+  {
+    id: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    models: ["openai/gpt-4.1-mini", "anthropic/claude-sonnet-4"],
+  },
+];
+
+const DEFAULT_MODEL = "gpt-4.1-mini";
+
+const PROMPT_PRESETS: {
+  label: string;
+  prompt: string;
+  autonomy: "propose" | "act";
+}[] = [
+  {
+    label: "Explain repo",
+    prompt: "Summarize what this workspace is for and the safest next change.",
+    autonomy: "propose",
+  },
+  {
+    label: "Find bug risk",
+    prompt: "Scan for the top 3 likely bugs or missing tests. Suggest-only; no edits.",
+    autonomy: "propose",
+  },
+  {
+    label: "Small fix",
+    prompt:
+      "Propose one small, verify-gated fix inside PLAN owned paths, then apply if approved.",
+    autonomy: "act",
+  },
 ];
 
 const AUTONOMY_LEVELS: { id: AutonomyLevel; label: string; hint: string }[] = [
@@ -42,6 +108,12 @@ const VERIFY_GATE_LABELS: Record<string, string> = {
 
 function verifyGateLabel(gate: string): string {
   return VERIFY_GATE_LABELS[gate] ?? gate;
+}
+
+function workspaceLeaf(path: string | undefined | null): string {
+  if (!path) return "Locating workspace…";
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
 }
 
 function readAutonomy(): AutonomyLevel {
@@ -75,8 +147,9 @@ const navGroups: NavGroup[] = [
     title: "Setup",
     items: [
       { id: "Recipes", label: "Recipes", icon: "▦" },
-      { id: "Rules", label: "Rules", icon: "☰" },
-      { id: "Plan", label: "Plan", icon: "◇" },
+      { id: "Rules", label: "Guidance", icon: "☰" },
+      { id: "Atlas", label: "Atlas", icon: "◈" },
+      { id: "Plan", label: "Plan Map", icon: "◇" },
     ],
   },
   {
@@ -98,12 +171,18 @@ const navGroups: NavGroup[] = [
 
 function navGroupsForSurface(mode: SurfaceMode): NavGroup[] {
   if (mode !== "guided") return navGroups;
-  return navGroups
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => GUIDED_NAV_IDS.has(item.id)),
-    }))
-    .filter((group) => group.items.length > 0);
+  // Flat work rail — no Setup/Trust grouping noise in Simple.
+  const order = ["Home", "Agent", "Keys", "Verify", "Recipes"];
+  const byId = new Map(
+    navGroups.flatMap((group) => group.items).map((item) => [item.id, item]),
+  );
+  return [
+    {
+      items: order
+        .map((id) => byId.get(id))
+        .filter((item): item is NavItem => Boolean(item)),
+    },
+  ];
 }
 
 function readDevMode(): boolean {
@@ -134,11 +213,15 @@ type PlanPhase = {
   title: string;
   owned_paths: string[];
   gates: string[];
+  depends_on?: string[];
 };
 
 type PlanReport = {
   phases: PlanPhase[];
   requires_human: string[];
+  score_before?: number;
+  score_max?: number;
+  audit_root?: string;
 };
 
 type HandoffPromptSection = {
@@ -318,6 +401,12 @@ function App() {
   const [activeView, setActiveView] = useState("Home");
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>(readSurfaceMode);
   const [devMode, setDevMode] = useState(() => readDevMode() || readSurfaceMode() === "dev");
+  const [navOpen, setNavOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    // Simple: full-width canvas by default; Full keeps last preference.
+    if (readSurfaceMode() === "guided") return false;
+    return window.localStorage.getItem(NAV_OPEN_KEY) === "1";
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [gate, setGate] = useState("G3");
@@ -335,6 +424,8 @@ function App() {
   const [recipePlanError, setRecipePlanError] = useState<string | null>(null);
   const [recipeResult, setRecipeResult] = useState<ScaffoldResult | null>(null);
   const [homePrompt, setHomePrompt] = useState("");
+  const [agentAutoSubmit, setAgentAutoSubmit] = useState(false);
+  const [pendingImproveWin, setPendingImproveWin] = useState(false);
   const [guidedWins, setGuidedWins] = useState<GuidedWinsState>({
     understand: false,
     verify: false,
@@ -351,6 +442,11 @@ function App() {
     });
   };
 
+  const setNavOpenPersisted = (open: boolean) => {
+    setNavOpen(open);
+    window.localStorage.setItem(NAV_OPEN_KEY, open ? "1" : "0");
+  };
+
   const setSurfaceModePersisted = (mode: SurfaceMode) => {
     setSurfaceMode(mode);
     window.localStorage.setItem(SURFACE_MODE_KEY, mode);
@@ -358,11 +454,25 @@ function App() {
       setDevMode(true);
       window.localStorage.setItem(DEV_MODE_KEY, "1");
     }
+    if (mode === "power") {
+      setDevMode(false);
+      window.localStorage.setItem(DEV_MODE_KEY, "0");
+    }
     if (mode === "guided") {
+      setDevMode(false);
+      window.localStorage.setItem(DEV_MODE_KEY, "0");
+      setNavOpenPersisted(false);
       const allowed = GUIDED_NAV_IDS;
       setActiveView((current) => (allowed.has(current) ? current : "Home"));
     }
   };
+
+  useEffect(() => {
+    if (surfaceMode === "guided" && devMode) {
+      setDevMode(false);
+      window.localStorage.setItem(DEV_MODE_KEY, "0");
+    }
+  }, [surfaceMode, devMode]);
 
   const visibleNav = useMemo(() => navGroupsForSurface(surfaceMode), [surfaceMode]);
 
@@ -449,13 +559,33 @@ function App() {
           // non-fatal: verify still succeeded
         }
       }
-      if (!options?.stayOnHome) {
+      if (
+        !options?.stayOnHome &&
+        activeView !== "Verify" &&
+        activeView !== "Home" &&
+        activeView !== "Agent"
+      ) {
         setActiveView("Verify");
       }
     } catch (reason) {
       setError(String(reason));
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const runAudit = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await invoke("run_audit");
+      await invoke("run_plan");
+      await refresh();
+      setActiveView("Plan");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -476,11 +606,11 @@ function App() {
   const startImproveAde = () => {
     const prompt =
       "Improve ADE itself in this workspace: propose a small, verify-gated change that advances Ideal ADE I4 activation (guided wins / self-build). Stay inside owned_paths from PLAN. Run verify after.";
+    window.localStorage.setItem(AUTONOMY_KEY, "act");
     setHomePrompt(prompt);
+    setPendingImproveWin(true);
+    setAgentAutoSubmit(true);
     setActiveView("Agent");
-    void invoke<GuidedWinsState>("guided_mark_win", { win: "improve_ade" })
-      .then(setGuidedWins)
-      .catch(() => undefined);
   };
 
   const openAdeOnItself = async () => {
@@ -621,8 +751,20 @@ function App() {
         ownedPaths: input.ownedPaths,
         onEvent,
       });
+      if (pendingImproveWin) {
+        try {
+          const wins = await invoke<GuidedWinsState>("guided_mark_win", {
+            win: "improve_ade",
+          });
+          setGuidedWins(wins);
+        } catch {
+          // non-fatal
+        }
+        setPendingImproveWin(false);
+      }
     } catch (reason) {
       setError(String(reason));
+      setPendingImproveWin(false);
     } finally {
       setAgentBusy(false);
     }
@@ -673,66 +815,100 @@ function App() {
 
   return (
     <div className="flex h-screen overflow-hidden text-slate-100">
-      <aside className="flex w-58 shrink-0 flex-col border-r border-white/7 bg-[#0b0f16]/95 px-3 py-4">
-        <div className="flex items-center gap-3 px-3 pb-4">
-          <div className="grid size-10 place-items-center rounded-xl border border-blue-400/35 bg-gradient-to-br from-blue-500/25 to-cyan-500/10 text-base font-black tracking-tight text-blue-200">
+      {navOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          className={`fixed inset-0 z-20 bg-black/50 ${
+            surfaceMode === "guided" ? "" : "md:hidden"
+          }`}
+          onClick={() => setNavOpenPersisted(false)}
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-30 flex w-[15.5rem] shrink-0 flex-col border-r border-white/7 bg-[#0b0f16] px-3 py-4 transition-transform ${
+          surfaceMode === "guided"
+            ? navOpen
+              ? "translate-x-0"
+              : "-translate-x-full"
+            : `md:static md:translate-x-0 ${navOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`
+        }`}
+      >
+        <div className="flex items-center gap-2.5 px-2 pb-3">
+          <div className="grid size-8 place-items-center rounded-lg border border-blue-400/35 bg-gradient-to-br from-blue-500/25 to-cyan-500/10 text-xs font-black tracking-tight text-blue-200">
             ADE
           </div>
-          <div>
-            <div className="text-base font-semibold tracking-wide text-slate-50">ADE</div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-              Agent Development
-            </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold tracking-wide text-slate-50">ADE</div>
           </div>
+          <button
+            type="button"
+            className={`grid size-8 place-items-center rounded-lg border border-white/10 text-slate-400 ${
+              surfaceMode === "guided" ? "" : "md:hidden"
+            }`}
+            aria-label="Close menu"
+            onClick={() => setNavOpenPersisted(false)}
+          >
+            ✕
+          </button>
         </div>
 
-        <div className="mb-5 grid grid-cols-3 gap-1 rounded-lg border border-white/8 bg-black/20 p-1">
-          {SURFACE_MODES.map((mode) => (
-            <button
-              key={mode.id}
-              type="button"
-              onClick={() => setSurfaceModePersisted(mode.id)}
-              className={`rounded-md px-1.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide transition ${
-                surfaceMode === mode.id
-                  ? "bg-blue-500/25 text-blue-100"
-                  : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              {mode.label}
-            </button>
-          ))}
-        </div>
-        <p className="mb-4 px-1 text-[10px] leading-4 text-slate-600">
-          {surfaceMode === "guided"
-            ? "Simple hides advanced checks and budgets."
-            : surfaceMode === "dev"
-              ? "Developer shows traces, leases, and harness detail."
-              : "Advanced shows full autonomy and verify gates."}
-        </p>
+        {surfaceMode !== "guided" ? (
+          <div
+            className="mb-4 grid grid-cols-3 gap-1 rounded-lg border border-white/8 bg-black/20 p-1"
+            title="Simple = do work. Full = all tools. Debug = Full + traces."
+          >
+            {SURFACE_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                title={mode.hint}
+                onClick={() => {
+                  setSurfaceModePersisted(mode.id);
+                  setNavOpenPersisted(false);
+                }}
+                className={`rounded-md px-1 py-1.5 text-[11px] font-medium tracking-tight transition ${
+                  surfaceMode === mode.id
+                    ? "bg-blue-500/25 text-blue-100"
+                    : "text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="mb-3 px-2 text-[10px] uppercase tracking-wider text-slate-600">
+            Simple
+          </p>
+        )}
 
-        <nav className="space-y-4">
+        <nav className="thin-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto">
           {visibleNav.map((group) => (
             <div key={group.title ?? "primary"}>
-              {group.title && (
-                <div className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+              {group.title && surfaceMode !== "guided" && (
+                <div className="mb-0.5 px-3 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600">
                   {group.title}
                 </div>
               )}
-              <div className="space-y-1">
+              <div className="space-y-px">
                 {group.items.map((item) => {
                   const needsDesktop = Boolean(item.desktopOnly) && !isTauri;
                   return (
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => setActiveView(item.id)}
-                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                      onClick={() => {
+                        setActiveView(item.id);
+                        setNavOpenPersisted(false);
+                      }}
+                      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] transition ${
                         activeView === item.id
                           ? "bg-blue-500/12 text-blue-200"
                           : "text-slate-400 hover:bg-white/4 hover:text-slate-200"
                       }`}
                     >
-                      <span className="w-4 text-center text-base">{item.icon}</span>
+                      <span className="w-4 text-center text-sm opacity-80">{item.icon}</span>
                       <span className="flex-1">{item.label}</span>
                       {needsDesktop && (
                         <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200/90">
@@ -747,131 +923,106 @@ function App() {
           ))}
         </nav>
 
-        <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-          System
-        </div>
-        <div className="mt-3 space-y-1 text-xs text-slate-500">
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span className="size-1.5 rounded-full bg-emerald-400" />
-            {isTauri ? "Desktop runtime" : "Browser + local API"}
-          </div>
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span className="size-1.5 rounded-full bg-blue-400" />
-            Key vault {isTauri ? "ready" : "via Desktop"}
-          </div>
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span
-              className={`size-1.5 rounded-full ${
-                mcpServers.length > 0 ? "bg-emerald-400" : "bg-violet-400"
+        <div className="mt-3 border-t border-white/6 pt-3">
+          {surfaceMode === "guided" && (
+            <button
+              type="button"
+              onClick={() => setSurfaceModePersisted("power")}
+              className="mb-1 w-full rounded-lg px-3 py-2 text-left text-[11px] text-slate-500 hover:bg-white/4 hover:text-slate-300"
+            >
+              Full mode…
+            </button>
+          )}
+          {surfaceMode === "power" && (
+            <button
+              type="button"
+              onClick={toggleDevMode}
+              title="Opens harness budgets, leases, and turn traces"
+              className={`mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${
+                devMode
+                  ? "bg-amber-400/10 text-amber-200"
+                  : "text-slate-500 hover:bg-white/4 hover:text-slate-300"
               }`}
-            />
-            {mcpServers.length > 0
-              ? `${mcpServers.length} MCP server${mcpServers.length === 1 ? "" : "s"}`
-              : "MCP host idle"}
-          </div>
-          <div className="flex items-center gap-2 px-3 py-2 text-slate-400">
-            <span
-              className={`size-1.5 rounded-full ${
-                surfaceMode === "dev"
-                  ? "bg-amber-400"
-                  : surfaceMode === "guided"
-                    ? "bg-blue-400"
-                    : "bg-violet-400"
-              }`}
-            />
-            Surface:{" "}
-            {SURFACE_MODES.find((mode) => mode.id === surfaceMode)?.label ?? surfaceMode}
-          </div>
-          <button
-            type="button"
-            onClick={toggleDevMode}
-            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
-              devMode
-                ? "bg-amber-400/10 text-amber-200"
-                : "hover:bg-white/4 hover:text-slate-300"
-            }`}
-          >
-            <span
-              className={`size-1.5 rounded-full ${devMode ? "bg-amber-400" : "bg-slate-600"}`}
-            />
-            Dev/Debug {devMode ? "on" : "off"}
-          </button>
+            >
+              <span
+                className={`size-1.5 rounded-full ${devMode ? "bg-amber-400" : "bg-slate-600"}`}
+              />
+              Debug panels {devMode ? "on" : "off"}
+            </button>
+          )}
+          {surfaceMode === "dev" && (
+            <div className="mb-1 flex items-center gap-2 px-3 py-1.5 text-xs text-amber-200/80">
+              <span className="size-1.5 rounded-full bg-amber-400" />
+              Debug surface
+            </div>
+          )}
+          {surfaceMode !== "guided" && (
+            <div className="px-3 py-1.5 text-[10px] leading-4 text-slate-600">
+              {isTauri ? "Desktop" : "Browser preview"}
+              {mcpServers.length > 0 ? ` · ${mcpServers.length} MCP` : ""}
+            </div>
+          )}
         </div>
-
-        {surfaceMode !== "guided" && (
-          <div className="mt-auto rounded-xl border border-white/7 bg-white/2.5 p-3">
-            <div className="text-[10px] uppercase tracking-wider text-slate-600">
-              Phase router
-            </div>
-            <div className="mt-2 flex items-center gap-1.5 text-[11px]">
-              <span className="rounded bg-emerald-400/10 px-1.5 py-1 text-emerald-300">
-                AUDIT
-              </span>
-              <span className="text-slate-700">→</span>
-              <span className="rounded bg-blue-400/10 px-1.5 py-1 text-blue-300">
-                PLAN
-              </span>
-              <span className="text-slate-700">→</span>
-              <span className="rounded bg-violet-400/10 px-1.5 py-1 text-violet-300">
-                EXECUTE
-              </span>
-            </div>
-          </div>
-        )}
-        {surfaceMode === "guided" && <div className="mt-auto" />}
       </aside>
 
       <main className="thin-scrollbar min-w-0 flex-1 overflow-y-auto">
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-white/7 bg-[#080b11]/90 px-7 backdrop-blur-xl">
-          <div>
-            <h1 className="text-sm font-semibold">
-              {activeView}
-              {devMode && (
-                <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
-                  Dev
-                </span>
-              )}
-            </h1>
-            <p className="mt-0.5 max-w-[62vw] truncate text-[11px] text-slate-500">
-              {dashboard?.workspace_root ?? "Locating workspace…"}
-              {dashboard?.is_dogfood ? (
-                <span className="ml-2 rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-200">
-                  Dogfood
-                </span>
-              ) : null}
-              {!isTauri && " · browser preview"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {surfaceMode === "guided" ? (
-              <button
-                onClick={() => void runVerify({ stayOnHome: activeView === "Home" })}
-                disabled={verifying}
-                className="rounded-lg bg-blue-500 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50"
-              >
-                {verifying ? "Checking…" : "Check work"}
-              </button>
-            ) : (
-              <>
-                <select
-                  value={gate}
-                  onChange={(event) => setGate(event.target.value)}
-                  className="rounded-lg border border-white/10 bg-[#101620] px-2.5 py-2 text-xs text-slate-300"
+        <header className="sticky top-0 z-10 flex h-12 items-center justify-between gap-2 border-b border-white/7 bg-[#080b11]/90 px-3 backdrop-blur-xl sm:h-14 sm:px-5">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className={`grid size-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/2.5 text-slate-300 ${
+                surfaceMode === "guided" ? "" : "md:hidden"
+              }`}
+              aria-label="Open menu"
+              onClick={() => setNavOpenPersisted(true)}
+            >
+              ☰
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold leading-tight">
+                {surfaceMode === "guided" && activeView === "Home" ? "ADE" : activeView}
+                {devMode && surfaceMode !== "guided" && (
+                  <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                    Debug
+                  </span>
+                )}
+              </h1>
+              {surfaceMode !== "guided" && (
+                <p
+                  className="mt-0.5 max-w-[36vw] truncate text-[10px] text-slate-500 sm:max-w-[52vw]"
+                  title={dashboard?.workspace_root ?? undefined}
                 >
-                  {["G0", "G1", "G2", "G3", "G4", "G5"].map((item) => (
-                    <option key={item} value={item}>
-                      {item} · {verifyGateLabel(item)}
-                    </option>
-                  ))}
-                </select>
+                  {workspaceLeaf(dashboard?.workspace_root)}
+                  {dashboard?.is_dogfood ? " · dogfood" : ""}
+                  {!isTauri && " · browser"}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {surfaceMode !== "guided" && (
+              <div className="flex items-center overflow-hidden rounded-lg border border-white/10">
                 <button
                   onClick={() => void runVerify()}
                   disabled={verifying}
-                  className="rounded-lg bg-blue-500 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50"
+                  className="bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50"
                 >
-                  {verifying ? "Verifying…" : `Run through ${gate}`}
+                  {verifying ? "…" : "Check"}
                 </button>
-              </>
+                <select
+                  value={gate}
+                  onChange={(event) => setGate(event.target.value)}
+                  title="Verify through gate"
+                  aria-label="Verify through gate"
+                  className="border-l border-white/10 bg-[#101620] px-1.5 py-1.5 text-[11px] text-slate-300"
+                >
+                  {["G0", "G1", "G2", "G3", "G4", "G5"].map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
             <button
               onClick={() => void refresh()}
@@ -884,7 +1035,16 @@ function App() {
           </div>
         </header>
 
-        <div className="mx-auto max-w-[1400px] p-7">
+        <div
+          className={`mx-auto max-w-[1400px] p-4 ${
+            surfaceMode === "guided" ? "sm:p-7" : "sm:p-5"
+          }`}
+        >
+          {!isTauri && (
+            <div className="mb-5 rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[12px] leading-5 text-amber-100/90">
+              Chat and keys need the Desktop app. This browser view is for status and checks.
+            </div>
+          )}
           {error && (
             <div className="mb-5 rounded-xl border border-red-400/20 bg-red-400/7 px-4 py-3 text-xs text-red-200">
               {error}
@@ -906,7 +1066,6 @@ function App() {
                   verifying={verifying}
                   guidedWins={guidedWins}
                   lastUnderstandPath={lastUnderstandPath}
-                  verifyResults={verifyResults}
                   devMode={devMode}
                   simpleMode={surfaceMode === "guided"}
                   onOpenAgent={() => setActiveView("Agent")}
@@ -919,6 +1078,13 @@ function App() {
                   onOpenAdeOnItself={() => void openAdeOnItself()}
                   onRunAgent={() => {
                     if (!homePrompt.trim()) return;
+                    setAgentAutoSubmit(true);
+                    setActiveView("Agent");
+                  }}
+                  onApplyPreset={(preset) => {
+                    window.localStorage.setItem(AUTONOMY_KEY, preset.autonomy);
+                    setHomePrompt(preset.prompt);
+                    setAgentAutoSubmit(true);
                     setActiveView("Agent");
                   }}
                 />
@@ -939,6 +1105,9 @@ function App() {
                   busy={agentBusy}
                   connectedTools={mcpTools.length}
                   initialPrompt={homePrompt}
+                  autoSubmit={agentAutoSubmit}
+                  onAutoSubmitHandled={() => setAgentAutoSubmit(false)}
+                  sharedVerifyGate={gate}
                   devMode={devMode}
                   simpleMode={surfaceMode === "guided"}
                   leases={dashboard.leases}
@@ -951,13 +1120,32 @@ function App() {
                   onRun={(input) => void runAgentTurn(input)}
                 />
               )}
-              {activeView === "Keys" && <KeysView />}
+              {activeView === "Keys" && (
+                <KeysView
+                  simpleMode={surfaceMode === "guided"}
+                  onContinueToAgent={() => setActiveView("Agent")}
+                />
+              )}
               {activeView === "Audit" && <AuditView audit={dashboard.audit} />}
               {activeView === "Plan" && (
-                <PlanView
+                <PlanMap
                   plan={dashboard.plan}
+                  scorePercent={scorePercent}
+                  verifyResults={verifyResults}
                   executing={executing}
                   onExecute={() => void executePlan()}
+                  onRunAudit={() => void runAudit()}
+                  onRunVerify={() => void runVerify()}
+                />
+              )}
+              {activeView === "Atlas" && (
+                <AtlasView
+                  auditFindings={dashboard.audit.findings}
+                  planPhases={dashboard.plan.phases}
+                  verifyGates={verifyResults.map((r) => r.gate)}
+                  handoffs={dashboard.handoff.recent}
+                  onOpenGuidance={() => setActiveView("Rules")}
+                  onOpenPlan={() => setActiveView("Plan")}
                 />
               )}
               {activeView === "Verify" && (
@@ -1009,7 +1197,6 @@ function HomeView({
   verifying,
   guidedWins,
   lastUnderstandPath,
-  verifyResults,
   devMode,
   simpleMode = false,
   onOpenAgent,
@@ -1021,6 +1208,7 @@ function HomeView({
   onImproveAde,
   onOpenAdeOnItself,
   onRunAgent,
+  onApplyPreset,
 }: {
   dashboard: DashboardSnapshot;
   scorePercent: number;
@@ -1031,7 +1219,6 @@ function HomeView({
   verifying: boolean;
   guidedWins: GuidedWinsState;
   lastUnderstandPath: string | null;
-  verifyResults: VerifyResult[];
   devMode: boolean;
   simpleMode?: boolean;
   onOpenAgent: () => void;
@@ -1043,15 +1230,11 @@ function HomeView({
   onImproveAde: () => void;
   onOpenAdeOnItself: () => void;
   onRunAgent: () => void;
+  onApplyPreset: (preset: (typeof PROMPT_PRESETS)[number]) => void;
 }) {
   const latestHandoff = dashboard.handoff.recent[0];
   const winsDone =
     Number(guidedWins.understand) + Number(guidedWins.verify) + Number(guidedWins.improve_ade);
-  const lastVerifyPass =
-    verifyResults.length > 0 &&
-    verifyResults.every(
-      (result) => result.passed || result.status === "unavailable" || result.status === "skipped",
-    );
   const nextWin = !guidedWins.understand
     ? "Learn this project"
     : !guidedWins.verify
@@ -1088,211 +1271,177 @@ function HomeView({
   ];
 
   return (
-    <div className="space-y-6">
-      {!isTauri && (
-        <div className="rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[12px] leading-5 text-amber-100/90">
-          Chat and keys need the Desktop app. This browser view is for status and checks.
-        </div>
-      )}
-
-      <section className="relative overflow-hidden rounded-2xl border border-white/8 bg-[#0c121c] px-7 py-8">
-        <div className="max-w-2xl">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-300/90">
-            Agent Development Environment
-          </div>
-          <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-50">ADE</h2>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">
-            Tell ADE what to do. Start with these three steps.
-          </p>
-          <p className="mt-2 text-xs text-slate-500">
-            Progress {winsDone}/3
-            {lastUnderstandPath ? " · saved notes ready" : ""}
-            {lastVerifyPass ? " · last check passed" : ""}
-            {dashboard.is_dogfood ? " · working on ADE itself" : ""}
-          </p>
-          {!dashboard.is_dogfood && dashboard.ade_source_root && (
-            <button
-              type="button"
-              onClick={onOpenAdeOnItself}
-              className="mt-4 rounded-lg border border-blue-400/30 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-100 hover:bg-blue-500/25"
-            >
-              Open ADE on itself
-            </button>
-          )}
-          {dashboard.is_dogfood && (
-            <p className="mt-3 text-[11px] text-emerald-300/80">
-              Working in the ADE repo ·{" "}
-              <span className="font-mono text-emerald-200/70">{dashboard.workspace_root}</span>
+    <div className="mx-auto max-w-3xl space-y-5">
+      <section className="rounded-2xl border border-white/8 bg-[#0c121c] px-5 py-5 sm:px-6 sm:py-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">ADE</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {simpleMode ? "Tell ADE what to do." : "Composer first. Sidebar for the rest."}
             </p>
-          )}
-        </div>
-
-        <div className="mt-6 rounded-xl border border-white/8 bg-black/20 px-4 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-            Getting started
           </div>
-          <ol className="mt-2 space-y-2 text-[12px] leading-5 text-slate-300">
-            <li className="flex flex-wrap items-center gap-2">
-              <span className="text-slate-500">1.</span>
-              <span>Add an API key</span>
-              <button
-                type="button"
-                onClick={onOpenKeys}
-                className="rounded border border-white/10 px-2 py-0.5 text-[10px] font-semibold text-blue-200 hover:bg-white/5"
-              >
-                Open Keys
-              </button>
-              {!isTauri && (
-                <span className="text-[10px] text-amber-200/80">(Desktop required)</span>
-              )}
-            </li>
-            <li className="flex flex-wrap items-center gap-2">
-              <span className="text-slate-500">2.</span>
-              <span>
-                {nextWin ? (
-                  <>
-                    Next: <span className="text-slate-100">{nextWin}</span>
-                  </>
-                ) : (
-                  "All three starter steps done — ask ADE for the next task"
-                )}
-              </span>
-            </li>
-            <li className="flex gap-2">
-              <span className="text-slate-500">3.</span>
-              <span>Agent won’t edit files until you allow it.</span>
-            </li>
-          </ol>
+          <p className="text-[11px] text-slate-500">
+            {simpleMode
+              ? `${winsDone}/3 ready`
+              : `${scorePercent}% ready`}
+            {dashboard.is_dogfood ? " · dogfood" : ""}
+          </p>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-stretch">
           <textarea
             value={prompt}
             onChange={(event) => onPromptChange(event.target.value)}
-            rows={3}
+            rows={simpleMode ? 4 : 3}
             placeholder="Describe what you want help with…"
-            className="min-h-[88px] flex-1 resize-y rounded-xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-slate-200 outline-none ring-blue-400/30 placeholder:text-slate-600 focus:ring-2"
+            className={`w-full flex-1 resize-y rounded-xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-slate-200 outline-none ring-blue-400/30 placeholder:text-slate-600 focus:ring-2 ${
+              simpleMode ? "min-h-[110px]" : "min-h-[88px]"
+            }`}
           />
-          <div className="flex shrink-0 flex-col gap-2">
-            <button
-              type="button"
-              onClick={onRunAgent}
-              disabled={!prompt.trim() || agentBusy || !isTauri}
-              className="rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
-            >
-              {isTauri ? "Ask ADE" : "Ask ADE (Desktop)"}
-            </button>
-            <button
-              type="button"
-              onClick={onOpenAgent}
-              className="rounded-xl border border-white/10 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5"
-            >
-              Open Agent
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onRunAgent}
+            disabled={!prompt.trim() || agentBusy || !isTauri}
+            className="shrink-0 rounded-xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50 sm:min-w-[7.5rem]"
+          >
+            {agentBusy ? "…" : isTauri ? "Go" : "Desktop"}
+          </button>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          {starters.map((starter) => (
-            <button
-              key={starter.id}
-              type="button"
-              disabled={starter.busy}
-              onClick={starter.onClick}
-              className={`rounded-xl border px-4 py-3 text-left transition disabled:opacity-60 ${
-                starter.done
-                  ? "border-emerald-400/30 bg-emerald-500/10 hover:bg-emerald-500/15"
-                  : "border-white/8 bg-white/3 hover:border-blue-400/30 hover:bg-blue-500/8"
-              }`}
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {PROMPT_PRESETS.map((item) => (
+            <Chip
+              key={item.label}
+              onClick={() => onApplyPreset(item)}
+              title={`${item.autonomy === "act" ? "Apply" : "Suggest"} · ${item.prompt}`}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-slate-200">{starter.title}</div>
-                {starter.done ? (
-                  <span className="text-[10px] uppercase tracking-wide text-emerald-300">done</span>
-                ) : starter.busy ? (
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">…</span>
-                ) : null}
-              </div>
-              <p className="mt-1 text-xs leading-5 text-slate-500">{starter.detail}</p>
-            </button>
+              {item.label}
+            </Chip>
           ))}
         </div>
 
-        {guidedWins.understand && lastUnderstandPath && (
-          <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-500/8 px-4 py-3 text-xs text-emerald-100/90">
-            Saved project notes at <span className="font-mono">{lastUnderstandPath}</span>.
+        {simpleMode && (
+          <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-white/6 pt-4">
+            <button
+              type="button"
+              onClick={onOpenKeys}
+              className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-semibold text-slate-300 hover:bg-white/5"
+            >
+              {isTauri ? "Add API key" : "Add API key (Desktop)"}
+            </button>
+            {nextWin ? (
+              <button
+                type="button"
+                disabled={understandBusy || verifying || agentBusy}
+                onClick={() => {
+                  if (!guidedWins.understand) onUnderstand();
+                  else if (!guidedWins.verify) onVerifyHome();
+                  else onImproveAde();
+                }}
+                className="rounded-lg bg-blue-500/90 px-3 py-2 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+              >
+                Next: {nextWin}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onOpenAgent}
+                className="rounded-lg border border-blue-400/30 px-3 py-2 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/10"
+              >
+                Open Agent
+              </button>
+            )}
+          </div>
+        )}
+
+        {simpleMode && (
+          <Disclosure
+            title="Guided steps"
+            summary={`${winsDone}/3`}
+            subtitle="Optional path — Learn, Check, then a small safe change"
+            defaultOpen={winsDone < 3}
+            storageKey="ade_home_guided_steps"
+            className="mt-4"
+          >
+            <div className="space-y-2">
+              {starters.map((starter) => (
+                <button
+                  key={starter.id}
+                  type="button"
+                  disabled={starter.busy}
+                  onClick={starter.onClick}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition disabled:opacity-60 ${
+                    starter.done
+                      ? "border-emerald-400/25 bg-emerald-500/8"
+                      : "border-white/8 bg-white/3 hover:border-blue-400/30"
+                  }`}
+                >
+                  <div>
+                    <div className="text-[12px] font-medium text-slate-200">{starter.title}</div>
+                    <div className="text-[10px] text-slate-500">{starter.detail}</div>
+                  </div>
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {starter.done ? "done" : starter.busy ? "…" : "run"}
+                  </span>
+                </button>
+              ))}
+              {guidedWins.understand && lastUnderstandPath && (
+                <p className="pt-1 font-mono text-[10px] text-emerald-200/70">
+                  {lastUnderstandPath}
+                </p>
+              )}
+            </div>
+          </Disclosure>
+        )}
+
+        {!dashboard.is_dogfood && dashboard.ade_source_root && (
+          <button
+            type="button"
+            onClick={onOpenAdeOnItself}
+            className="mt-4 text-[11px] font-semibold text-blue-200/80 hover:text-blue-100"
+          >
+            Open ADE on itself →
+          </button>
+        )}
+
+        {!simpleMode && (
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/6 pt-3 text-[11px] text-slate-500">
+            <button
+              type="button"
+              onClick={onOpenHealth}
+              className="font-medium text-slate-300 hover:text-blue-200"
+            >
+              {scorePercent}% ready
+            </button>
+            <span className="text-slate-700">·</span>
+            <button
+              type="button"
+              onClick={onOpenHealth}
+              className="hover:text-slate-300"
+              title={
+                latestHandoff
+                  ? `${latestHandoff.turn_status ?? "capsule"} · ${latestHandoff.id}`
+                  : undefined
+              }
+            >
+              {dashboard.handoff.capsule_count} handoff
+              {dashboard.handoff.capsule_count === 1 ? "" : "s"}
+            </button>
+            <span className="text-slate-700">·</span>
+            <button type="button" onClick={onOpenRecipes} className="hover:text-slate-300">
+              Recipes
+            </button>
           </div>
         )}
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-3">
-        <button
-          type="button"
-          onClick={simpleMode ? onOpenAgent : onOpenHealth}
-          className="rounded-xl border border-white/7 bg-white/2.5 px-4 py-3 text-left hover:bg-white/4"
-        >
-          <div className="text-[10px] uppercase tracking-wider text-slate-600">
-            {simpleMode ? "Next" : "Readiness"}
-          </div>
-          <div className="mt-1 text-lg font-semibold text-slate-100">
-            {simpleMode ? (nextWin ?? "Ask ADE") : `${scorePercent}%`}
-          </div>
-          <div className="mt-1 text-[11px] text-slate-500">
-            {simpleMode ? "Continue in Agent" : "Open Trust → Health"}
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenHealth}
-          className="rounded-xl border border-white/7 bg-white/2.5 px-4 py-3 text-left hover:bg-white/4"
-        >
-          <div className="text-[10px] uppercase tracking-wider text-slate-600">Handoff</div>
-          <div className="mt-1 text-lg font-semibold text-slate-100">
-            {dashboard.handoff.capsule_count}
-          </div>
-          <div className="mt-1 truncate text-[11px] text-slate-500">
-            {latestHandoff
-              ? `${latestHandoff.turn_status ?? "capsule"} · ${latestHandoff.id}`
-              : "No capsules yet"}
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenRecipes}
-          className="rounded-xl border border-white/7 bg-white/2.5 px-4 py-3 text-left hover:bg-white/4"
-        >
-          <div className="text-[10px] uppercase tracking-wider text-slate-600">Setup</div>
-          <div className="mt-1 text-lg font-semibold text-slate-100">Recipes</div>
-          <div className="mt-1 text-[11px] text-slate-500">Bootstrap or re-apply stack</div>
-        </button>
-      </section>
-
       {devMode && (
-        <section className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs text-amber-100/90">
-          <div className="font-semibold uppercase tracking-wider text-amber-200/80">
-            Dev/Debug
-          </div>
-          <p className="mt-1 leading-5 text-amber-100/70">
-            Workspace: <span className="font-mono">{dashboard.workspace_root}</span>
-            {" · "}
-            leases {dashboard.leases.length}
-            {" · "}
-            open tasks{" "}
-            {
-              dashboard.tasks.filter(
-                (task) => !["completed", "failed", "cancelled"].includes(task.status),
-              ).length
-            }
-            {" · "}
-            guided {winsDone}/3
-          </p>
-          {(dashboard.rebuild_lock_warnings?.length ?? 0) > 0 && (
-            <ul className="mt-2 space-y-1 text-amber-100/80">
-              {(dashboard.rebuild_lock_warnings ?? []).map((warning) => (
-                <li key={warning}>⚠ {warning}</li>
-              ))}
-            </ul>
-          )}
+        <section className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] text-amber-100/80">
+          <span className="font-mono text-amber-100/70">{dashboard.workspace_root}</span>
+          <span className="text-amber-100/50">
+            {" "}
+            · leases {dashboard.leases.length} · guided {winsDone}/3
+          </span>
         </section>
       )}
     </div>
@@ -1315,57 +1464,117 @@ function Overview({
   devMode?: boolean;
 }) {
   const passed = verifyResults.filter((result) => result.passed).length;
+  const openTasks = dashboard.tasks.filter(
+    (task) => !["completed", "failed", "cancelled"].includes(task.status),
+  ).length;
+  const [globalAudit, setGlobalAudit] = useState<{
+    ok: boolean;
+    checks: { id: string; label: string; passed: boolean; detail: string }[];
+  } | null>(null);
+
+  useEffect(() => {
+    void invoke<{
+      ok: boolean;
+      checks: { id: string; label: string; passed: boolean; detail: string }[];
+    }>("run_global_audit")
+      .then(setGlobalAudit)
+      .catch(() => setGlobalAudit(null));
+  }, [dashboard.workspace_root]);
+
   return (
-    <div className="space-y-5">
-      {devMode && (
-        <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-2 text-[11px] text-amber-100/80">
-          Trust → Health (former Overview). Dev mode: score {dashboard.audit.score}/
-          {dashboard.audit.score_max}, leases {dashboard.leases.length}.
+    <div className="space-y-4">
+      {globalAudit && (
+        <div
+          className={`rounded-lg border px-3 py-2 text-[11px] ${
+            globalAudit.ok
+              ? "border-emerald-400/20 bg-emerald-400/5 text-emerald-100/85"
+              : "border-amber-400/25 bg-amber-400/8 text-amber-100/90"
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold">
+              Machine · {globalAudit.ok ? "ADE ready" : "ADE attention"}
+            </span>
+            <button
+              type="button"
+              className="text-[10px] text-slate-400 hover:text-slate-200"
+              onClick={() =>
+                void invoke<typeof globalAudit>("run_global_audit").then(setGlobalAudit)
+              }
+            >
+              Re-check
+            </button>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-slate-400">
+            {globalAudit.checks.map((check) => (
+              <span key={check.id} title={check.detail}>
+                {check.passed ? "✓" : "!"} {check.label}
+              </span>
+            ))}
+          </div>
         </div>
       )}
-      <section className="grid grid-cols-7 gap-4">
-        <MetricCard label="Readiness score" value={`${scorePercent}%`} accent="blue" />
+      {devMode && (
+        <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-1.5 text-[11px] text-amber-100/80">
+          Health · score {dashboard.audit.score}/{dashboard.audit.score_max} · leases{" "}
+          {dashboard.leases.length}
+        </div>
+      )}
+      <section
+        className={`grid gap-2 ${
+          devMode
+            ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7"
+            : "grid-cols-2 sm:grid-cols-4"
+        }`}
+      >
+        <MetricCard dense label="Ready" value={`${scorePercent}%`} accent="blue" />
         <MetricCard
-          label="Audit blockers"
+          dense
+          label="Blockers"
           value={String(dashboard.audit.blockers.length)}
           accent={dashboard.audit.blockers.length ? "red" : "green"}
         />
         <MetricCard
-          label="Planned phases"
-          value={String(dashboard.plan.phases.length)}
-          accent="violet"
-        />
-        <MetricCard
-          label="Verify gates"
-          value={verifyResults.length ? `${passed}/${verifyResults.length}` : "Not run"}
+          dense
+          label="Verify"
+          value={verifyResults.length ? `${passed}/${verifyResults.length}` : "—"}
           accent={verifyResults.length && passed === verifyResults.length ? "green" : "slate"}
         />
         <MetricCard
-          label="Handoff capsules"
+          dense
+          label="Handoffs"
           value={String(dashboard.handoff.capsule_count)}
           accent={dashboard.handoff.invalid_capsule_count ? "red" : "green"}
         />
-        <MetricCard
-          label="Active leases"
-          value={String(dashboard.leases.length)}
-          accent={dashboard.leases.length ? "violet" : "slate"}
-        />
-        <MetricCard
-          label="Open tasks"
-          value={String(
-            dashboard.tasks.filter(
-              (task) => !["completed", "failed", "cancelled"].includes(task.status),
-            ).length,
-          )}
-          accent={dashboard.tasks.some((task) => task.status === "running") ? "blue" : "slate"}
-        />
+        {devMode && (
+          <>
+            <MetricCard
+              dense
+              label="Phases"
+              value={String(dashboard.plan.phases.length)}
+              accent="violet"
+            />
+            <MetricCard
+              dense
+              label="Leases"
+              value={String(dashboard.leases.length)}
+              accent={dashboard.leases.length ? "violet" : "slate"}
+            />
+            <MetricCard
+              dense
+              label="Tasks"
+              value={String(openTasks)}
+              accent={dashboard.tasks.some((task) => task.status === "running") ? "blue" : "slate"}
+            />
+          </>
+        )}
       </section>
 
-      <section className="grid grid-cols-[1.4fr_1fr] gap-5">
-        <Panel title="Environment health" subtitle="Live L0–L11 audit assessment">
-          <div className="flex gap-7">
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <Panel title="Environment" subtitle="L0–L11 audit" dense>
+          <div className="flex gap-5">
             <div
-              className="score-ring grid size-32 shrink-0 place-items-center rounded-full p-2"
+              className="score-ring grid size-24 shrink-0 place-items-center rounded-full p-1.5 sm:size-28"
               style={
                 {
                   "--score-angle": `${scorePercent * 3.6}deg`,
@@ -1374,14 +1583,14 @@ function Overview({
             >
               <div className="grid size-full place-items-center rounded-full bg-[#0d121a] text-center">
                 <div>
-                  <div className="text-2xl font-semibold">{scorePercent}%</div>
+                  <div className="text-xl font-semibold sm:text-2xl">{scorePercent}%</div>
                   <div className="text-[10px] text-slate-500">
                     {dashboard.audit.score}/{dashboard.audit.score_max}
                   </div>
                 </div>
               </div>
             </div>
-            <div className="min-w-0 flex-1 space-y-3">
+            <div className="min-w-0 flex-1 space-y-2.5">
               {dashboard.audit.findings.slice(0, 6).map((finding) => (
                 <FindingBar key={finding.layer} finding={finding} />
               ))}
@@ -1389,7 +1598,7 @@ function Overview({
           </div>
         </Panel>
 
-        <Panel title="Current plan" subtitle="Human-gated execution scope">
+        <Panel title="Plan" subtitle="Execution scope" dense>
           {dashboard.plan.phases.length === 0 ? (
             <div className="flex h-44 flex-col items-center justify-center text-center">
               <div className="grid size-10 place-items-center rounded-full bg-emerald-400/10 text-emerald-300">
@@ -1420,65 +1629,60 @@ function Overview({
         </Panel>
       </section>
 
-      <Panel
-        title="Multi-agent ownership"
-        subtitle="Active durable leases; observe leases never grant write scope"
-      >
-        {dashboard.leases.length === 0 ? (
-          <p className="text-xs text-slate-500">
-            No active leases. Agent turns remain read-only unless explicit PLAN owned paths are
-            supplied.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {dashboard.leases.map((lease) => (
-              <div
-                key={lease.id}
-                className="grid grid-cols-[1fr_110px_1fr_130px] items-center gap-3 border-b border-white/5 py-2 text-[11px]"
-              >
-                <span className="font-mono text-slate-300">{lease.path}</span>
-                <span
-                  className={
-                    lease.mode === "exclusive" || lease.mode === "strong"
-                      ? "text-violet-300"
-                      : lease.mode === "cooperative"
-                        ? "text-blue-300"
-                        : "text-slate-500"
-                  }
+      {devMode && (
+        <Panel title="Leases" subtitle="Durable path ownership" dense>
+          {dashboard.leases.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              No active leases. Writes need PLAN owned paths or a bound lease.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {dashboard.leases.map((lease) => (
+                <div
+                  key={lease.id}
+                  className="grid grid-cols-[1fr_110px_1fr_130px] items-center gap-3 border-b border-white/5 py-2 text-[11px]"
                 >
-                  {lease.mode}
-                  {lease.protected ? " · protected" : ""}
-                </span>
-                <span className="truncate font-mono text-slate-600">{lease.agent_id}</span>
-                <span className="text-right text-slate-600">
-                  {new Date(lease.expires_at).toLocaleTimeString()}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Panel>
+                  <span className="font-mono text-slate-300">{lease.path}</span>
+                  <span
+                    className={
+                      lease.mode === "exclusive" || lease.mode === "strong"
+                        ? "text-violet-300"
+                        : lease.mode === "cooperative"
+                          ? "text-blue-300"
+                          : "text-slate-500"
+                    }
+                  >
+                    {lease.mode}
+                    {lease.protected ? " · protected" : ""}
+                  </span>
+                  <span className="truncate font-mono text-slate-600">{lease.agent_id}</span>
+                  <span className="text-right text-slate-600">
+                    {new Date(lease.expires_at).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      )}
 
-      <Panel
-        title="Coordinated task queue"
-        subtitle="Dependency-aware claims acquire durable path leases before agent work starts"
-      >
-        {dashboard.tasks.length === 0 ? (
-          <p className="text-xs text-slate-500">
-            No queued tasks. Use <span className="font-mono">ade task enqueue --approve</span> to
-            add lease-backed work.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {dashboard.tasks.slice(-8).map((task) => (
-              <div
-                key={task.id}
-                className="grid grid-cols-[90px_1fr_150px_120px] items-center gap-3 border-b border-white/5 py-2 text-[11px]"
-              >
-                <span
-                  className={
-                    task.status === "running"
-                      ? "text-blue-300"
+      {devMode && (
+        <Panel title="Task queue" subtitle="Lease-backed claims" dense>
+          {dashboard.tasks.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              No queued tasks. Use <span className="font-mono">ade task enqueue --approve</span>.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {dashboard.tasks.slice(-8).map((task) => (
+                <div
+                  key={task.id}
+                  className="grid grid-cols-[90px_1fr_150px_120px] items-center gap-3 border-b border-white/5 py-2 text-[11px]"
+                >
+                  <span
+                    className={
+                      task.status === "running"
+                        ? "text-blue-300"
                       : task.status === "completed"
                         ? "text-emerald-300"
                         : task.status === "failed"
@@ -1501,84 +1705,84 @@ function Overview({
           </div>
         )}
       </Panel>
+      )}
 
-      <Panel title="Continuity health" subtitle="Aggregate metadata only; capsule text stays local">
-        <div className="grid grid-cols-4 gap-6">
+      <Panel title="Continuity" subtitle="Handoff metadata only" dense>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div>
             <div className="text-[10px] uppercase tracking-wider text-slate-600">
-              Latest score snapshot
+              Score
             </div>
-            <div className="mt-2 text-lg font-semibold text-slate-200">
+            <div className="mt-1 text-base font-semibold text-slate-200">
               {dashboard.handoff.latest_score_before !== null
                 ? dashboard.handoff.latest_score_after !== null
                   ? `${dashboard.handoff.latest_score_before} → ${dashboard.handoff.latest_score_after}`
                   : String(dashboard.handoff.latest_score_before)
-                : "Not measured"}
+                : "—"}
               {dashboard.handoff.latest_score_max !== null
                 ? ` / ${dashboard.handoff.latest_score_max}`
                 : ""}
             </div>
             {dashboard.handoff.latest_score_delta !== null && (
               <div
-                className={`mt-1 text-[10px] ${
+                className={`mt-0.5 text-[10px] ${
                   dashboard.handoff.latest_score_delta >= 0
                     ? "text-emerald-400"
                     : "text-red-400"
                 }`}
               >
                 {dashboard.handoff.latest_score_delta >= 0 ? "+" : ""}
-                {dashboard.handoff.latest_score_delta} points
+                {dashboard.handoff.latest_score_delta} pts
               </div>
             )}
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-slate-600">
-              Prompt compaction
+              Context
             </div>
-            <div className="mt-2 text-lg font-semibold text-slate-200">
+            <div className="mt-1 text-base font-semibold text-slate-200">
               {dashboard.handoff.latest_context_status
                 ? dashboard.handoff.latest_context_status
                 : dashboard.handoff.latest_bytes
                   ? `${dashboard.handoff.latest_compaction_percent}%`
-                  : "Not measured"}
+                  : "—"}
             </div>
-            <div className="mt-1 text-[10px] text-slate-600">
+            <div className="mt-0.5 text-[10px] text-slate-600">
               {dashboard.handoff.latest_context_tokens !== null
-                ? `${dashboard.handoff.latest_context_tokens} assembled tokens · `
+                ? `${dashboard.handoff.latest_context_tokens} tok · `
                 : ""}
-              {dashboard.handoff.latest_summary_chars} summary chars /{" "}
-              {dashboard.handoff.latest_bytes} capsule bytes
+              {dashboard.handoff.latest_summary_chars} / {dashboard.handoff.latest_bytes} B
             </div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-slate-600">
-              Latest state
+              State
             </div>
-            <div className="mt-2 text-lg font-semibold capitalize text-slate-200">
-              {dashboard.handoff.latest_status?.replaceAll("_", " ") ?? "No handoff"}
+            <div className="mt-1 text-base font-semibold capitalize text-slate-200">
+              {dashboard.handoff.latest_status?.replaceAll("_", " ") ?? "None"}
             </div>
-            <div className="mt-1 truncate text-[10px] text-slate-600">
-              {dashboard.handoff.latest_created_at ?? "No timestamp"}
+            <div className="mt-0.5 truncate text-[10px] text-slate-600">
+              {dashboard.handoff.latest_created_at ?? "—"}
             </div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-slate-600">
-              Archive health
+              Archive
             </div>
-            <div className="mt-2 text-lg font-semibold text-slate-200">
+            <div className="mt-1 text-base font-semibold text-slate-200">
               {dashboard.handoff.invalid_capsule_count === 0 ? "Valid" : "Attention"}
             </div>
-            <div className="mt-1 text-[10px] text-slate-600">
+            <div className="mt-0.5 text-[10px] text-slate-600">
               {dashboard.handoff.invalid_capsule_count} invalid ·{" "}
-              {dashboard.handoff.total_bytes.toLocaleString()} bytes stored
+              {dashboard.handoff.total_bytes.toLocaleString()} B
             </div>
           </div>
         </div>
 
-        {dashboard.handoff.latest_context_sections.length > 0 && (
-          <div className="mt-5 space-y-2">
+        {devMode && dashboard.handoff.latest_context_sections.length > 0 && (
+          <div className="mt-4 space-y-2">
             <div className="text-[10px] uppercase tracking-wider text-slate-600">
-              Assembled prompt sections
+              Prompt sections
             </div>
             {dashboard.handoff.latest_context_sections.map((section) => {
               const maxTokens = Math.max(
@@ -1675,6 +1879,9 @@ function AgentView({
   connectedTools,
   onRun,
   initialPrompt = "",
+  autoSubmit = false,
+  onAutoSubmitHandled,
+  sharedVerifyGate = "G3",
   devMode = false,
   simpleMode = false,
   leases = [],
@@ -1685,6 +1892,9 @@ function AgentView({
   busy: boolean;
   connectedTools: number;
   initialPrompt?: string;
+  autoSubmit?: boolean;
+  onAutoSubmitHandled?: () => void;
+  sharedVerifyGate?: string;
   devMode?: boolean;
   simpleMode?: boolean;
   leases?: PathLease[];
@@ -1709,9 +1919,18 @@ function AgentView({
   }) => void;
 }) {
   const [prompt, setPrompt] = useState(initialPrompt);
-  const [provider, setProvider] = useState("openai");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [model, setModel] = useState("");
+  const [provider, setProvider] = useState(() => {
+    if (typeof window === "undefined") return "openai";
+    return window.localStorage.getItem(AGENT_PROVIDER_KEY) || "openai";
+  });
+  const [baseUrl, setBaseUrl] = useState(() => {
+    if (typeof window === "undefined") return "https://api.openai.com/v1";
+    return window.localStorage.getItem(AGENT_BASE_URL_KEY) || "https://api.openai.com/v1";
+  });
+  const [model, setModel] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_MODEL;
+    return window.localStorage.getItem(AGENT_MODEL_KEY) || DEFAULT_MODEL;
+  });
   const [inputCost, setInputCost] = useState("0");
   const [outputCost, setOutputCost] = useState("0");
   const [sessionCap, setSessionCap] = useState("1");
@@ -1720,8 +1939,18 @@ function AgentView({
   const [maxSteps, setMaxSteps] = useState("8");
   const [maxTokens, setMaxTokens] = useState("");
   const [verifyOnComplete, setVerifyOnComplete] = useState(false);
-  const [verifyGate, setVerifyGate] = useState("G3");
+  const [verifyGate, setVerifyGate] = useState(sharedVerifyGate);
   const [approveOwnedPaths, setApproveOwnedPaths] = useState(false);
+
+  const mutating = autonomy === "act" || autonomy === "automate";
+  // Budgets/leases/traces stay behind Debug panels (Full) or Debug surface.
+  const showDebugHarness = !simpleMode && devMode;
+
+  useEffect(() => {
+    if (sharedVerifyGate.trim()) {
+      setVerifyGate(sharedVerifyGate);
+    }
+  }, [sharedVerifyGate]);
 
   useEffect(() => {
     if (initialPrompt.trim()) {
@@ -1732,25 +1961,92 @@ function AgentView({
   const setAutonomyPersisted = (level: AutonomyLevel) => {
     setAutonomy(level);
     window.localStorage.setItem(AUTONOMY_KEY, level);
+    if (level === "act" || level === "automate") {
+      setApproveOwnedPaths(true);
+    } else {
+      setApproveOwnedPaths(false);
+    }
   };
+
+  useEffect(() => {
+    window.localStorage.setItem(AGENT_PROVIDER_KEY, provider);
+  }, [provider]);
+  useEffect(() => {
+    window.localStorage.setItem(AGENT_BASE_URL_KEY, baseUrl);
+  }, [baseUrl]);
+  useEffect(() => {
+    window.localStorage.setItem(AGENT_MODEL_KEY, model);
+  }, [model]);
+
+  useEffect(() => {
+    if (mutating) {
+      setApproveOwnedPaths(true);
+    }
+  }, [mutating, planOwnedPaths.length]);
 
   useEffect(() => {
     if (simpleMode && (autonomy === "observe" || autonomy === "automate")) {
       setAutonomyPersisted(autonomy === "automate" ? "act" : "propose");
+    } else if (simpleMode && autonomy !== "propose" && autonomy !== "act") {
+      setAutonomyPersisted("propose");
     }
-  }, [simpleMode, autonomy]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot remap when entering Simple
+  }, [simpleMode]);
 
   useEffect(() => {
     if (autonomy === "automate") {
       setVerifyOnComplete(true);
     }
+    if (simpleMode && mutating) {
+      setVerifyOnComplete(true);
+    }
     if (autonomy === "observe" || autonomy === "propose") {
       setApproveOwnedPaths(false);
+      if (simpleMode) {
+        setVerifyOnComplete(false);
+      }
     }
-  }, [autonomy]);
+  }, [autonomy, simpleMode, mutating]);
 
-  const mutating = autonomy === "act" || autonomy === "automate";
-  const showAdvancedHarness = !simpleMode || devMode;
+  const buildTurnInput = () => ({
+    prompt: prompt.trim(),
+    provider: provider.trim(),
+    baseUrl: baseUrl.trim(),
+    model: model.trim(),
+    inputCostPerMtok: Number(inputCost) || 0,
+    outputCostPerMtok: Number(outputCost) || 0,
+    sessionCapUsd: Number(sessionCap),
+    dailyCapUsd: Number(dailyCap),
+    autonomy,
+    maxSteps: Math.max(1, Number(maxSteps) || 8),
+    maxTokens: maxTokens.trim() ? Number(maxTokens) || null : null,
+    verifyOnComplete: autonomy === "automate" ? true : verifyOnComplete,
+    verifyGate: verifyGate.trim() || "G3",
+    approveOwnedPaths: mutating ? approveOwnedPaths : false,
+    ownedPaths: mutating && approveOwnedPaths ? planOwnedPaths : [],
+  });
+
+  const submit = () => {
+    onRun(buildTurnInput());
+  };
+
+  useEffect(() => {
+    if (!autoSubmit) return;
+    onAutoSubmitHandled?.();
+    const nextPrompt = (initialPrompt.trim() || prompt).trim();
+    if (!nextPrompt || !provider.trim() || !model.trim() || busy || !isTauri) {
+      return;
+    }
+    if (initialPrompt.trim()) {
+      setPrompt(initialPrompt);
+    }
+    onRun({
+      ...buildTurnInput(),
+      prompt: nextPrompt,
+    });
+    // Intentionally one-shot when autoSubmit flips true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSubmit]);
 
   const text = events
     .filter((event): event is Extract<AgentEvent, { type: "text_delta" }> =>
@@ -1780,34 +2076,9 @@ function AgentView({
       event.type === "spend_warning",
   );
 
-  const submit = () => {
-    onRun({
-      prompt: prompt.trim(),
-      provider: provider.trim(),
-      baseUrl: baseUrl.trim(),
-      model: model.trim(),
-      inputCostPerMtok: Number(inputCost) || 0,
-      outputCostPerMtok: Number(outputCost) || 0,
-      sessionCapUsd: Number(sessionCap),
-      dailyCapUsd: Number(dailyCap),
-      autonomy,
-      maxSteps: Math.max(1, Number(maxSteps) || 8),
-      maxTokens: maxTokens.trim() ? Number(maxTokens) || null : null,
-      verifyOnComplete: autonomy === "automate" ? true : verifyOnComplete,
-      verifyGate: verifyGate.trim() || "G3",
-      approveOwnedPaths: mutating ? approveOwnedPaths : false,
-      ownedPaths: mutating && approveOwnedPaths ? planOwnedPaths : [],
-    });
-  };
-
   return (
     <div className="space-y-5">
-      {!isTauri && (
-        <div className="rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[12px] leading-5 text-amber-100/90">
-          Chat and keys need the Desktop app. This browser view is for status and checks.
-        </div>
-      )}
-      {rebuildLockWarnings.length > 0 && showAdvancedHarness && (
+      {rebuildLockWarnings.length > 0 && !simpleMode && (
         <div className="rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[11px] leading-5 text-amber-100/85">
           <div className="font-semibold uppercase tracking-wider text-amber-200/80">
             Rebuild lock
@@ -1820,83 +2091,59 @@ function AgentView({
         </div>
       )}
 
-      <div className="grid grid-cols-[1fr_310px] gap-5">
+      <div className={`grid grid-cols-1 gap-4 ${simpleMode ? "" : "lg:grid-cols-[1fr_280px]"}`}>
         <Panel
-          title="Agent session"
+          title={simpleMode ? "Agent session" : "Agent"}
           subtitle={
             simpleMode
-              ? "Describe a task. ADE suggests by default and only edits when you allow it."
-              : devMode
-                ? "Dev/Debug: autonomy · budgets · traces · leases · ToolEffect"
-                : "BYOK streaming · autonomy dial · budgets · read-only until PLAN"
+              ? undefined
+              : connectedTools > 0
+                ? `${connectedTools} MCP · ${autonomy}`
+                : autonomy
           }
+          dense={!simpleMode}
         >
           <div className="mb-4">
             {simpleMode ? (
               <>
-                <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
+                <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500">
                   How should ADE help?
+                  <Hint text="Suggest only never writes. Apply changes edits PLAN owned paths automatically." />
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setAutonomyPersisted("propose")}
-                    className={`rounded-lg border px-3 py-3 text-left transition ${
+                    className={`rounded-lg border px-3 py-2.5 text-left transition ${
                       autonomy === "propose" || autonomy === "observe"
                         ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
                         : "border-white/8 bg-white/2 text-slate-400 hover:bg-white/4"
                     }`}
                   >
                     <div className="text-[12px] font-semibold">Suggest only</div>
-                    <div className="mt-1 text-[10px] leading-4 text-slate-500">
-                      Plans and ideas — no file edits
-                    </div>
+                    <div className="mt-0.5 text-[10px] text-slate-500">No file edits</div>
                   </button>
                   <button
                     type="button"
                     onClick={() => setAutonomyPersisted("act")}
-                    className={`rounded-lg border px-3 py-3 text-left transition ${
+                    className={`rounded-lg border px-3 py-2.5 text-left transition ${
                       mutating
                         ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
                         : "border-white/8 bg-white/2 text-slate-400 hover:bg-white/4"
                     }`}
                   >
                     <div className="text-[12px] font-semibold">Apply changes</div>
-                    <div className="mt-1 text-[10px] leading-4 text-slate-500">
-                      Can edit files after you allow it
-                    </div>
+                    <div className="mt-0.5 text-[10px] text-slate-500">Edit planned files</div>
                   </button>
                 </div>
-                {mutating && (
-                  <label className="mt-3 flex items-start gap-2 rounded-lg border border-white/8 bg-white/2 px-3 py-2 text-[11px] text-slate-300">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={approveOwnedPaths}
-                      onChange={(event) => setApproveOwnedPaths(event.target.checked)}
-                    />
-                    <span>
-                      Allow editing the files ADE planned
-                      <span className="mt-0.5 block text-[10px] text-slate-500">
-                        {planOwnedPaths.length > 0
-                          ? `${planOwnedPaths.length} path${planOwnedPaths.length === 1 ? "" : "s"} ready`
-                          : "ADE will build a short plan of allowed folders first."}
-                      </span>
-                      {!approveOwnedPaths && (
-                        <span className="mt-1 block text-[10px] text-amber-200/80">
-                          Without this, ADE stays read-only.
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                )}
               </>
             ) : (
               <>
-                <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
                   Autonomy
+                  <Hint text="Observe=read-only. Propose=plan only. Act=owned paths. Automate=caps + verify." />
                 </div>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-4 gap-1">
                   {AUTONOMY_LEVELS.map((level) => {
                     const active = autonomy === level.id;
                     return (
@@ -1905,7 +2152,7 @@ function AgentView({
                         type="button"
                         title={level.hint}
                         onClick={() => setAutonomyPersisted(level.id)}
-                        className={`rounded-lg border px-2 py-2 text-center text-[11px] font-semibold transition ${
+                        className={`rounded-md border px-1.5 py-1.5 text-center text-[11px] font-semibold transition ${
                           active
                             ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
                             : "border-white/8 bg-white/2 text-slate-400 hover:bg-white/4"
@@ -1916,11 +2163,8 @@ function AgentView({
                     );
                   })}
                 </div>
-                <p className="mt-2 text-[10px] leading-4 text-slate-500">
-                  {AUTONOMY_LEVELS.find((level) => level.id === autonomy)?.hint}
-                </p>
                 {mutating && (
-                  <label className="mt-3 flex items-start gap-2 rounded-lg border border-white/8 bg-white/2 px-3 py-2 text-[11px] text-slate-300">
+                  <label className="mt-2 flex items-start gap-2 rounded-md border border-white/8 bg-white/2 px-2.5 py-1.5 text-[11px] text-slate-300">
                     <input
                       type="checkbox"
                       className="mt-0.5"
@@ -1928,37 +2172,139 @@ function AgentView({
                       onChange={(event) => setApproveOwnedPaths(event.target.checked)}
                     />
                     <span>
-                      Approve write scope from PLAN
+                      Approve PLAN writes
                       <span className="mt-0.5 block text-[10px] text-slate-500">
                         {planOwnedPaths.length > 0
-                          ? `${planOwnedPaths.length} path${planOwnedPaths.length === 1 ? "" : "s"}: ${planOwnedPaths.slice(0, 4).join(", ")}${planOwnedPaths.length > 4 ? "…" : ""}`
-                          : "No paths on dashboard plan yet — approving will build/save PLAN and use its owned_paths."}
+                          ? `${planOwnedPaths.length}: ${planOwnedPaths.slice(0, 3).join(", ")}${planOwnedPaths.length > 3 ? "…" : ""}`
+                          : "Builds PLAN owned_paths if missing"}
                       </span>
-                      {!approveOwnedPaths && (
-                        <span className="mt-1 block text-[10px] text-amber-200/80">
-                          Without approval, Act/Automate stays read-only (writes denied).
-                        </span>
-                      )}
                     </span>
                   </label>
                 )}
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-white/7 bg-black/15 px-2.5 py-1.5 text-[11px] text-slate-400">
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={autonomy === "automate" ? true : verifyOnComplete}
+                      disabled={autonomy === "automate"}
+                      onChange={(event) => setVerifyOnComplete(event.target.checked)}
+                      className="accent-blue-500"
+                    />
+                    Verify after
+                    {autonomy === "automate" ? " (req)" : ""}
+                  </label>
+                  <select
+                    value={verifyGate}
+                    onChange={(event) => setVerifyGate(event.target.value)}
+                    title="Verify gate"
+                    className="rounded border border-white/10 bg-[#101620] px-1.5 py-0.5 text-[11px] text-slate-300"
+                  >
+                    {["G0", "G1", "G2", "G3", "G4", "G5"].map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </>
             )}
           </div>
 
-          <div className="min-h-72 rounded-xl border border-white/7 bg-black/20 p-4">
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {PROMPT_PRESETS.map((item) => (
+              <Chip
+                key={item.label}
+                onClick={() => {
+                  setAutonomyPersisted(item.autonomy);
+                  setPrompt(item.prompt);
+                }}
+                title={`${item.autonomy === "act" ? "Apply" : "Suggest"} · ${item.prompt}`}
+              >
+                {item.label}
+              </Chip>
+            ))}
+          </div>
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            rows={simpleMode ? 4 : 3}
+            className="thin-scrollbar w-full rounded-xl border border-white/10 bg-[#101620] px-3 py-2.5 text-sm leading-6 text-slate-200"
+            placeholder="What should ADE help you accomplish?"
+          />
+          <div className="mb-4 mt-2.5 flex items-center justify-between gap-3">
+            <span className="text-[10px] text-slate-600">
+              {simpleMode
+                ? autonomy === "propose" || autonomy === "observe"
+                  ? "Suggest only"
+                  : "Apply changes"
+                : `${provider} · ${model || DEFAULT_MODEL}`}
+            </span>
+            <button
+              onClick={submit}
+              disabled={
+                busy || !prompt.trim() || !provider.trim() || !model.trim() || !isTauri
+              }
+              className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
+            >
+              {busy
+                ? "…"
+                : isTauri
+                  ? "Go"
+                  : "Desktop"}
+            </button>
+          </div>
+
+          {simpleMode && (
+            <Disclosure
+              title="Model"
+              summary={`${provider} · ${model || DEFAULT_MODEL}`}
+              hint="Key stays in Keys. Expand to change provider or model."
+              defaultOpen={false}
+              storageKey="ade_agent_model_open"
+              className="mb-5"
+            >
+              <div className="space-y-3">
+                <ChipRow label="Provider">
+                  {PROVIDER_PRESETS.map((preset) => (
+                    <Chip
+                      key={preset.id}
+                      active={provider === preset.id}
+                      onClick={() => {
+                        setProvider(preset.id);
+                        setBaseUrl(preset.baseUrl);
+                        if (
+                          !model.trim() ||
+                          !PROVIDER_PRESETS.some((p) => p.models.includes(model))
+                        ) {
+                          setModel(preset.models[0] ?? DEFAULT_MODEL);
+                        }
+                      }}
+                    >
+                      {preset.id}
+                    </Chip>
+                  ))}
+                </ChipRow>
+                <ChipRow label="Model">
+                  {(
+                    PROVIDER_PRESETS.find((preset) => preset.id === provider)?.models ?? [
+                      DEFAULT_MODEL,
+                    ]
+                  ).map((id) => (
+                    <Chip key={id} active={model === id} onClick={() => setModel(id)}>
+                      {id}
+                    </Chip>
+                  ))}
+                </ChipRow>
+              </div>
+            </Disclosure>
+          )}
+
+          <div className="min-h-40 rounded-xl border border-white/7 bg-black/20 p-4">
             {!text && !busy ? (
-              <div className="grid min-h-64 place-items-center text-center">
-                <div>
-                  <div className="text-sm text-slate-300">
-                    {simpleMode ? "What do you want help with?" : "Start a trustworthy agent turn"}
-                  </div>
-                  <p className="mt-2 max-w-md text-xs leading-5 text-slate-600">
-                    {simpleMode
-                      ? "Type a request below. ADE suggests changes by default and won’t edit files until you allow it."
-                      : "Autonomy dial is harness-enforced. Observe/Propose never expose write tools; Act/Automate still require approved owned paths or leases."}
-                  </p>
-                </div>
+              <div className="grid min-h-32 place-items-center text-center">
+                <p className="max-w-sm text-xs leading-5 text-slate-600">
+                  Responses appear here after you Go.
+                </p>
               </div>
             ) : (
               <div className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
@@ -1967,6 +2313,7 @@ function AgentView({
               </div>
             )}
           </div>
+
 
           {activity.length > 0 && (
             <div className="mt-3 space-y-2">
@@ -2027,7 +2374,7 @@ function AgentView({
             </div>
           )}
 
-          {completed && (
+          {completed && !simpleMode && (
             <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500">
               <span>{completed.result.provider}</span>
               <span>{completed.result.model}</span>
@@ -2038,139 +2385,140 @@ function AgentView({
               <span>${(completed.result.cost_micros / 1_000_000).toFixed(6)}</span>
             </div>
           )}
-
-          <textarea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            rows={4}
-            className="thin-scrollbar mt-4 w-full rounded-xl border border-white/10 bg-[#101620] px-3 py-3 text-sm leading-6 text-slate-200"
-            placeholder="What should ADE help you accomplish?"
-          />
-          <div className="mt-3 flex items-center justify-between">
-            <span className="text-[10px] text-slate-600">
-              {simpleMode
-                ? autonomy === "propose" || autonomy === "observe"
-                  ? "Suggest only"
-                  : "Apply changes"
-                : `${connectedTools} MCP tool${connectedTools === 1 ? "" : "s"} · ${autonomy}`}
-            </span>
-            <button
-              onClick={submit}
-              disabled={
-                busy || !prompt.trim() || !provider.trim() || !model.trim() || !isTauri
-              }
-              className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
-            >
-              {busy ? "Working…" : isTauri ? (simpleMode ? "Ask ADE" : "Run agent turn") : "Desktop required"}
-            </button>
-          </div>
         </Panel>
 
-        <div className="space-y-5">
-          {showAdvancedHarness && (
-            <Panel title="Harness budgets" subtitle="Hard stops in AgentTurnService">
+        {!simpleMode && (
+          <div className="space-y-3">
+            {showDebugHarness && (
+              <Disclosure
+                title="Budgets"
+                subtitle="Step, token, and dollar caps"
+                hint="Reserved before each provider round."
+                summary={`${maxSteps} steps · $${sessionCap}/$${dailyCap}`}
+                defaultOpen={false}
+                storageKey="ade_harness_open"
+              >
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Max steps" value={maxSteps} onChange={setMaxSteps} />
+                    <Field
+                      label="Max tokens"
+                      value={maxTokens}
+                      onChange={setMaxTokens}
+                      placeholder="unlimited"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
+                    <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
+                  </div>
+                </div>
+              </Disclosure>
+            )}
+
+            <Disclosure
+              title="Model"
+              subtitle="Key from local vault"
+              hint="Presets set provider + base URL. Expand for exact ids."
+              summary={`${provider} · ${model || DEFAULT_MODEL}`}
+              defaultOpen={false}
+              storageKey="ade_agent_model_open"
+            >
               <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Max steps" value={maxSteps} onChange={setMaxSteps} />
-                  <Field
-                    label="Max tokens"
-                    value={maxTokens}
-                    onChange={setMaxTokens}
-                    placeholder="unlimited"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
-                  <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
-                </div>
-                <label className="flex items-center gap-2 text-[11px] text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={autonomy === "automate" ? true : verifyOnComplete}
-                    disabled={autonomy === "automate"}
-                    onChange={(event) => setVerifyOnComplete(event.target.checked)}
-                    className="accent-blue-500"
-                  />
-                  Verify-on-complete
-                  {autonomy === "automate" ? " (required)" : ""}
-                </label>
-                <Field label="Verify gate" value={verifyGate} onChange={setVerifyGate} mono />
-              </div>
-            </Panel>
-          )}
-
-          <Panel
-            title={simpleMode ? "Model" : "Provider"}
-            subtitle={
-              simpleMode
-                ? "Your key stays in the OS vault (Keys)"
-                : "Key loaded from the local OS vault"
-            }
-          >
-            <div className="space-y-3">
-              <Field label="Provider id" value={provider} onChange={setProvider} />
-              {!simpleMode && (
-                <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
-              )}
-              <Field
-                label={simpleMode ? "Model" : "Exact model id"}
-                value={model}
-                onChange={setModel}
-                mono
-              />
-              {!simpleMode && (
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
-                  <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
-                </div>
-              )}
-              <div className="rounded-lg border border-blue-400/15 bg-blue-400/5 p-3 text-[10px] leading-5 text-blue-200/70">
-                {simpleMode ? (
-                  <>
-                    Add your API key under <span className="font-semibold">Keys</span>, then pick
-                    the exact model name your provider expects.
-                  </>
-                ) : (
-                  <>
-                    Manage this provider in the Keys view or run{" "}
-                    <span className="font-mono">ade keys set {provider}</span>. Spend and step caps
-                    are reserved before every provider round.
-                  </>
-                )}
-              </div>
-            </div>
-          </Panel>
-
-          {showAdvancedHarness && (
-            <Panel title="Leases" subtitle="Active path ownership">
-              {leases.length === 0 ? (
-                <p className="text-[11px] leading-5 text-slate-500">
-                  No active leases. Turns stay read-only for writes until PLAN owned paths or a
-                  lease agent id is bound.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {leases.map((lease) => (
-                    <div
-                      key={lease.id}
-                      className="rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px]"
+                <ChipRow label="Provider">
+                  {PROVIDER_PRESETS.map((preset) => (
+                    <Chip
+                      key={preset.id}
+                      active={provider === preset.id}
+                      onClick={() => {
+                        setProvider(preset.id);
+                        setBaseUrl(preset.baseUrl);
+                        if (
+                          !model.trim() ||
+                          !PROVIDER_PRESETS.some((p) => p.models.includes(model))
+                        ) {
+                          setModel(preset.models[0] ?? DEFAULT_MODEL);
+                        }
+                      }}
                     >
-                      <div className="font-mono text-slate-200">{lease.path}</div>
-                      <div className="mt-1 text-[10px] text-slate-500">
-                        {lease.mode} · agent {lease.agent_id.slice(0, 8)}
-                        {lease.protected ? " · protected" : ""}
-                      </div>
-                    </div>
+                      {preset.id}
+                    </Chip>
                   ))}
-                </div>
-              )}
-            </Panel>
-          )}
-        </div>
+                </ChipRow>
+                <ChipRow label="Model">
+                  {(
+                    PROVIDER_PRESETS.find((preset) => preset.id === provider)?.models ?? [
+                      DEFAULT_MODEL,
+                    ]
+                  ).map((id) => (
+                    <Chip key={id} active={model === id} onClick={() => setModel(id)}>
+                      {id}
+                    </Chip>
+                  ))}
+                </ChipRow>
+                <Field label="Provider id" value={provider} onChange={setProvider} />
+                <Disclosure
+                  title="Base URL and pricing"
+                  subtitle="Usually leave defaults"
+                  defaultOpen={false}
+                  storageKey="ade_agent_pricing_open"
+                >
+                  <div className="space-y-3">
+                    <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
+                      <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
+                    </div>
+                  </div>
+                </Disclosure>
+                <Field label="Exact model id" value={model} onChange={setModel} mono />
+              </div>
+            </Disclosure>
+
+            {showDebugHarness && (
+              <Disclosure
+                title="Leases"
+                subtitle="Path ownership"
+                hint="Empty means PLAN paths only."
+                summary={leases.length ? String(leases.length) : "none"}
+                defaultOpen={false}
+                storageKey="ade_leases_open"
+              >
+                {leases.length === 0 ? (
+                  <p className="text-[11px] leading-5 text-slate-500">
+                    No active leases. Writes need PLAN owned paths or a bound lease.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {leases.map((lease) => (
+                      <div
+                        key={lease.id}
+                        className="rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px]"
+                      >
+                        <div className="font-mono text-slate-200">{lease.path}</div>
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          {lease.mode} · agent {lease.agent_id.slice(0, 8)}
+                          {lease.protected ? " · protected" : ""}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Disclosure>
+            )}
+          </div>
+        )}
       </div>
 
       {devMode && (
-        <Panel title="Turn trace" subtitle="Reconstructable timeline · ToolEffect · spend">
+        <Disclosure
+          title="Turn trace"
+          subtitle="Timeline · ToolEffect · spend"
+          hint="Debug event stream."
+          defaultOpen={false}
+          className="mt-4"
+          storageKey="ade_turn_trace_open"
+        >
           {events.length === 0 ? (
             <p className="text-[11px] text-slate-500">Run a turn to populate the trace.</p>
           ) : (
@@ -2231,7 +2579,11 @@ function AgentView({
                   {event.type === "failed" && <span> {event.error}</span>}
                   {event.type === "cancelled" && <span> {event.reason}</span>}
                   {event.type === "text_delta" && (
-                    <span> {event.text.slice(0, 80)}{event.text.length > 80 ? "…" : ""}</span>
+                    <span>
+                      {" "}
+                      {event.text.slice(0, 80)}
+                      {event.text.length > 80 ? "…" : ""}
+                    </span>
                   )}
                 </div>
               ))}
@@ -2244,18 +2596,33 @@ function AgentView({
               <span>{activity.length} tool events</span>
             </div>
           )}
-        </Panel>
+        </Disclosure>
       )}
     </div>
   );
 }
 
-function KeysView() {
-  const [provider, setProvider] = useState("openai");
+function KeysView({
+  simpleMode = false,
+  onContinueToAgent,
+}: {
+  simpleMode?: boolean;
+  onContinueToAgent?: () => void;
+}) {
+  const [provider, setProvider] = useState(() => {
+    if (typeof window === "undefined") return "openai";
+    return window.localStorage.getItem(AGENT_PROVIDER_KEY) || "openai";
+  });
   const [profile, setProfile] = useState("local");
   const [secret, setSecret] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState(() => {
+    if (typeof window === "undefined") return "https://api.openai.com/v1";
+    return window.localStorage.getItem(AGENT_BASE_URL_KEY) || "https://api.openai.com/v1";
+  });
+  const [model, setModel] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_MODEL;
+    return window.localStorage.getItem(AGENT_MODEL_KEY) || DEFAULT_MODEL;
+  });
   const [inputCostPerMtok, setInputCostPerMtok] = useState("");
   const [outputCostPerMtok, setOutputCostPerMtok] = useState("");
   const [maxCostUsd, setMaxCostUsd] = useState("0.05");
@@ -2264,6 +2631,7 @@ function KeysView() {
   const [smoke, setSmoke] = useState<ProviderKeySmokeResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [showLiveValidation, setShowLiveValidation] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     if (!provider.trim() || !profile.trim()) return;
@@ -2286,7 +2654,21 @@ function KeysView() {
     void refreshStatus();
   }, [refreshStatus]);
 
-  const save = async () => {
+  useEffect(() => {
+    window.localStorage.setItem(AGENT_PROVIDER_KEY, provider.trim() || "openai");
+  }, [provider]);
+  useEffect(() => {
+    if (baseUrl.trim()) {
+      window.localStorage.setItem(AGENT_BASE_URL_KEY, baseUrl.trim());
+    }
+  }, [baseUrl]);
+  useEffect(() => {
+    if (model.trim()) {
+      window.localStorage.setItem(AGENT_MODEL_KEY, model.trim());
+    }
+  }, [model]);
+
+  const save = async (andContinue: boolean) => {
     if (!secret.trim()) return;
     setBusy(true);
     setMessage(null);
@@ -2299,7 +2681,11 @@ function KeysView() {
       setSecret("");
       setStatus(result);
       setSmoke(null);
+      window.localStorage.setItem(AGENT_PROVIDER_KEY, result.provider);
       setMessage(`${result.provider} credential saved to the OS vault.`);
+      if (andContinue) {
+        onContinueToAgent?.();
+      }
     } catch (reason) {
       setMessage(String(reason));
     } finally {
@@ -2376,15 +2762,36 @@ function KeysView() {
   };
 
   return (
-    <div className="grid grid-cols-[1fr_340px] gap-5">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_340px]">
       <Panel
         title="Provider credentials"
         subtitle="Stored only in the native OS credential vault"
       >
-        <div className="grid max-w-2xl grid-cols-2 gap-3">
+        <ChipRow
+          label="Common providers"
+          hint="Fills provider id and base URL for Agent + live smoke."
+        >
+          {PROVIDER_PRESETS.map((preset) => (
+            <Chip
+              key={preset.id}
+              active={provider === preset.id}
+              onClick={() => {
+                setProvider(preset.id);
+                setBaseUrl(preset.baseUrl);
+                setModel(preset.models[0] ?? DEFAULT_MODEL);
+                setStatus(null);
+                setSmoke(null);
+              }}
+            >
+              {preset.id}
+            </Chip>
+          ))}
+        </ChipRow>
+        <div className="mt-3 grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+            <span className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
               Provider
+              <Hint text="Must match the vault entry Agent will load." />
             </span>
             <input
               value={provider}
@@ -2431,8 +2838,24 @@ function KeysView() {
         </label>
 
         <div className="mt-5 max-w-2xl rounded-xl border border-white/10 p-4">
-          <div className="text-xs font-semibold text-slate-300">Live credential validation</div>
-          <p className="mt-1 text-[10px] leading-5 text-slate-500">
+          <button
+            type="button"
+            onClick={() => setShowLiveValidation((open) => !open)}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <div>
+              <div className="text-xs font-semibold text-slate-300">Live credential validation</div>
+              <p className="mt-1 text-[10px] leading-5 text-slate-500">
+                Optional one-call smoke with a spend cap. Safe preflight below is free.
+              </p>
+            </div>
+            <span className="text-[10px] font-semibold text-blue-200/80">
+              {showLiveValidation ? "Hide" : "Show"}
+            </span>
+          </button>
+          {showLiveValidation && (
+            <>
+          <p className="mt-3 text-[10px] leading-5 text-slate-500">
             Sends one 16-token-max agent turn. Current pricing is required so ADE can reject the
             request before network access if its worst-case estimate exceeds your cap.
           </p>
@@ -2476,23 +2899,42 @@ function KeysView() {
           >
             Run capped live smoke
           </button>
+            </>
+          )}
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
           <button
-            onClick={() => void save()}
+            onClick={() => void save(simpleMode)}
             disabled={busy || !provider.trim() || !profile.trim() || !secret.trim()}
             className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
           >
-            {status?.configured ? "Replace key" : "Save key"}
+            {simpleMode
+              ? status?.configured
+                ? "Replace key & go to Agent"
+                : "Save key & go to Agent"
+              : status?.configured
+                ? "Replace key"
+                : "Save key"}
           </button>
-          <button
-            onClick={() => void refreshStatus()}
-            disabled={busy || !provider.trim() || !profile.trim()}
-            className="rounded-lg border border-white/10 px-4 py-2 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50"
-          >
-            Check status
-          </button>
+          {status?.configured && (
+            <button
+              onClick={() => onContinueToAgent?.()}
+              disabled={busy}
+              className="rounded-lg border border-blue-400/30 px-4 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-400/5 disabled:opacity-50"
+            >
+              Continue to Agent
+            </button>
+          )}
+          {!simpleMode && (
+            <button
+              onClick={() => void refreshStatus()}
+              disabled={busy || !provider.trim() || !profile.trim()}
+              className="rounded-lg border border-white/10 px-4 py-2 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50"
+            >
+              Check status
+            </button>
+          )}
           <button
             onClick={() => void runSmoke()}
             disabled={busy || !provider.trim() || !profile.trim()}
@@ -2618,55 +3060,6 @@ function AuditView({ audit }: { audit: AuditReport }) {
   );
 }
 
-function PlanView({
-  plan,
-  executing,
-  onExecute,
-}: {
-  plan: PlanReport;
-  executing: boolean;
-  onExecute: () => void;
-}) {
-  return (
-    <Panel title="PLAN report" subtitle={`${plan.phases.length} approved-scope phase(s)`}>
-      {plan.phases.length === 0 ? (
-        <div className="py-20 text-center text-sm text-slate-500">
-          No remediation phases were generated by the current audit.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {plan.phases.map((phase, index) => (
-            <div key={phase.id} className="rounded-xl border border-white/7 bg-white/2 p-4">
-              <div className="flex items-start gap-4">
-                <div className="grid size-7 shrink-0 place-items-center rounded-full bg-blue-400/10 text-xs text-blue-300">
-                  {index + 1}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">{phase.title}</div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {phase.owned_paths.map((path) => (
-                      <span key={path} className="rounded bg-white/5 px-2 py-1 font-mono text-[10px] text-slate-400">
-                        {path}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-          <button
-            onClick={onExecute}
-            disabled={executing}
-            className="rounded-lg bg-violet-500 px-4 py-2.5 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
-          >
-            {executing ? "Executing approved paths…" : "Approve and execute plan"}
-          </button>
-        </div>
-      )}
-    </Panel>
-  );
-}
-
 function VerifyView({
   results,
   onRun,
@@ -2696,7 +3089,7 @@ function VerifyView({
             onClick={onRun}
             className="mt-4 rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold"
           >
-            {simpleMode ? "Run checks" : "Run verification"}
+            Check work
           </button>
         </div>
       ) : (
@@ -2773,7 +3166,7 @@ function VerifyView({
             onClick={onRun}
             className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/5"
           >
-            {simpleMode ? "Run checks again" : "Re-run verification"}
+            Check work again
           </button>
         </div>
       )}
@@ -3144,17 +3537,23 @@ function emptyValueForType(type: string | undefined): unknown {
 function Panel({
   title,
   subtitle,
+  dense = false,
   children,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
+  dense?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5 shadow-[0_12px_45px_rgba(0,0,0,0.15)]">
-      <div className="mb-5">
+    <section
+      className={`rounded-2xl border border-white/7 bg-[#0d121a]/85 shadow-[0_12px_45px_rgba(0,0,0,0.15)] ${
+        dense ? "p-4" : "p-5"
+      }`}
+    >
+      <div className={subtitle ? (dense ? "mb-3" : "mb-5") : dense ? "mb-3" : "mb-4"}>
         <h2 className="text-sm font-semibold">{title}</h2>
-        <p className="mt-1 text-[11px] text-slate-600">{subtitle}</p>
+        {subtitle ? <p className="mt-0.5 text-[11px] text-slate-600">{subtitle}</p> : null}
       </div>
       {children}
     </section>
@@ -3165,10 +3564,12 @@ function MetricCard({
   label,
   value,
   accent,
+  dense = false,
 }: {
   label: string;
   value: string;
   accent: "blue" | "green" | "red" | "violet" | "slate";
+  dense?: boolean;
 }) {
   const colors = {
     blue: "text-blue-300",
@@ -3178,9 +3579,15 @@ function MetricCard({
     slate: "text-slate-300",
   };
   return (
-    <div className="rounded-xl border border-white/7 bg-[#0d121a]/80 px-4 py-4">
-      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{label}</div>
-      <div className={`mt-2 text-xl font-semibold ${colors[accent]}`}>{value}</div>
+    <div
+      className={`rounded-xl border border-white/7 bg-[#0d121a]/80 ${
+        dense ? "px-3 py-2.5" : "px-4 py-4"
+      }`}
+    >
+      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-600">{label}</div>
+      <div className={`mt-1 font-semibold ${dense ? "text-lg" : "text-xl"} ${colors[accent]}`}>
+        {value}
+      </div>
     </div>
   );
 }
