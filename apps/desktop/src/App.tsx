@@ -11,8 +11,16 @@ import { RulesEditor } from "./components/RulesEditor";
 
 const DEV_MODE_KEY = "ade_dev_mode";
 const AUTONOMY_KEY = "ade_autonomy_level";
+const SURFACE_MODE_KEY = "ade_surface_mode";
 
 type AutonomyLevel = "observe" | "propose" | "act" | "automate";
+type SurfaceMode = "guided" | "power" | "dev";
+
+const SURFACE_MODES: { id: SurfaceMode; label: string }[] = [
+  { id: "guided", label: "Guided" },
+  { id: "power", label: "Power" },
+  { id: "dev", label: "Dev" },
+];
 
 const AUTONOMY_LEVELS: { id: AutonomyLevel; label: string; hint: string }[] = [
   { id: "observe", label: "Observe", hint: "Read-only; explain and point" },
@@ -21,6 +29,8 @@ const AUTONOMY_LEVELS: { id: AutonomyLevel; label: string; hint: string }[] = [
   { id: "automate", label: "Automate", hint: "Caps + verify gates required" },
 ];
 
+const GUIDED_NAV_IDS = new Set(["Home", "Agent", "Recipes", "Verify"]);
+
 function readAutonomy(): AutonomyLevel {
   if (typeof window === "undefined") return "propose";
   const raw = window.localStorage.getItem(AUTONOMY_KEY);
@@ -28,6 +38,13 @@ function readAutonomy(): AutonomyLevel {
     return raw;
   }
   return "propose";
+}
+
+function readSurfaceMode(): SurfaceMode {
+  if (typeof window === "undefined") return "guided";
+  const raw = window.localStorage.getItem(SURFACE_MODE_KEY);
+  if (raw === "power" || raw === "guided" || raw === "dev") return raw;
+  return "guided";
 }
 
 type NavItem = { id: string; label: string; icon: string; desktopOnly?: boolean };
@@ -65,6 +82,16 @@ const navGroups: NavGroup[] = [
     ],
   },
 ];
+
+function navGroupsForSurface(mode: SurfaceMode): NavGroup[] {
+  if (mode !== "guided") return navGroups;
+  return navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => GUIDED_NAV_IDS.has(item.id)),
+    }))
+    .filter((group) => group.items.length > 0);
+}
 
 function readDevMode(): boolean {
   if (typeof window === "undefined") return false;
@@ -274,7 +301,8 @@ type ProviderKeySmokeResult = {
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeView, setActiveView] = useState("Home");
-  const [devMode, setDevMode] = useState(readDevMode);
+  const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>(readSurfaceMode);
+  const [devMode, setDevMode] = useState(() => readDevMode() || readSurfaceMode() === "dev");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [gate, setGate] = useState("G3");
@@ -307,6 +335,21 @@ function App() {
       return next;
     });
   };
+
+  const setSurfaceModePersisted = (mode: SurfaceMode) => {
+    setSurfaceMode(mode);
+    window.localStorage.setItem(SURFACE_MODE_KEY, mode);
+    if (mode === "dev") {
+      setDevMode(true);
+      window.localStorage.setItem(DEV_MODE_KEY, "1");
+    }
+    if (mode === "guided") {
+      const allowed = GUIDED_NAV_IDS;
+      setActiveView((current) => (allowed.has(current) ? current : "Home"));
+    }
+  };
+
+  const visibleNav = useMemo(() => navGroupsForSurface(surfaceMode), [surfaceMode]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -595,20 +638,37 @@ function App() {
   return (
     <div className="flex h-screen overflow-hidden text-slate-100">
       <aside className="flex w-58 shrink-0 flex-col border-r border-white/7 bg-[#0b0f16]/95 px-3 py-4">
-        <div className="flex items-center gap-3 px-3 pb-7">
-          <div className="grid size-9 place-items-center rounded-xl border border-blue-400/30 bg-blue-500/12 text-sm font-black text-blue-300">
-            A
+        <div className="flex items-center gap-3 px-3 pb-4">
+          <div className="grid size-10 place-items-center rounded-xl border border-blue-400/35 bg-gradient-to-br from-blue-500/25 to-cyan-500/10 text-base font-black tracking-tight text-blue-200">
+            ADE
           </div>
           <div>
-            <div className="text-sm font-semibold tracking-wide">ADE</div>
+            <div className="text-base font-semibold tracking-wide text-slate-50">ADE</div>
             <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-              Development Environment
+              Agent Development
             </div>
           </div>
         </div>
 
+        <div className="mb-5 grid grid-cols-3 gap-1 rounded-lg border border-white/8 bg-black/20 p-1">
+          {SURFACE_MODES.map((mode) => (
+            <button
+              key={mode.id}
+              type="button"
+              onClick={() => setSurfaceModePersisted(mode.id)}
+              className={`rounded-md px-1.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide transition ${
+                surfaceMode === mode.id
+                  ? "bg-blue-500/25 text-blue-100"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+
         <nav className="space-y-4">
-          {navGroups.map((group) => (
+          {visibleNav.map((group) => (
             <div key={group.title ?? "primary"}>
               {group.title && (
                 <div className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
@@ -665,6 +725,18 @@ function App() {
             {mcpServers.length > 0
               ? `${mcpServers.length} MCP server${mcpServers.length === 1 ? "" : "s"}`
               : "MCP host idle"}
+          </div>
+          <div className="flex items-center gap-2 px-3 py-2 text-slate-400">
+            <span
+              className={`size-1.5 rounded-full ${
+                surfaceMode === "dev"
+                  ? "bg-amber-400"
+                  : surfaceMode === "guided"
+                    ? "bg-blue-400"
+                    : "bg-violet-400"
+              }`}
+            />
+            Surface: {surfaceMode}
           </div>
           <button
             type="button"
@@ -927,13 +999,11 @@ function HomeView({
     <div className="space-y-6">
       <section className="relative overflow-hidden rounded-2xl border border-white/8 bg-[#0c121c] px-7 py-8">
         <div className="max-w-2xl">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-300/80">
-            ADE
+          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-300/90">
+            Agent Development Environment
           </div>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-50">
-            What should the agent do?
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
+          <h2 className="mt-3 text-3xl font-semibold tracking-tight text-slate-50">ADE</h2>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">
             Three guided first wins. Complete one without opening Audit.{" "}
             {!isTauri && (
               <span className="text-amber-200/90">

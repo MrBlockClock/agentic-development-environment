@@ -1,7 +1,7 @@
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  
-**Status:** Active · I5 complete · I6 next · 2026-07-20  
+**Status:** Active · I6 complete · Ideal spine shipped · 2026-07-20  
 **Canvas:** Ideal-ADE-development-plan.canvas.tsx  
 **Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard
 
@@ -96,6 +96,13 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP19 | Gold-set ≥10 deterministic harness tasks (+ dogfood) |
 | WP20 | `ade eval --gold` CLI + `evals/gold/manifest.json` |
 | WP21 | CI job runs gold-set and fails on regression |
+
+## I6 work packages — done
+
+| WP | Work |
+|----|------|
+| WP22 | Guided / Power / Dev surface modes (persist; Guided hides Power nav) |
+| WP23 | Brand-first Home (ADE hero) + Dev surface forces Dev/Debug chrome |
 
 ## Held
 
