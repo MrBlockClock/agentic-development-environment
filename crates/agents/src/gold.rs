@@ -579,7 +579,7 @@ fn probe_autonomy_parse() -> Result<String, String> {
         AutonomyLevel::Act,
         AutonomyLevel::Automate,
     ] {
-        let parsed = AutonomyLevel::from_str(level.as_str()).map_err(|e| e)?;
+        let parsed = AutonomyLevel::from_str(level.as_str())?;
         if parsed != level {
             return Err(format!("parse mismatch for {}", level.as_str()));
         }
@@ -667,7 +667,7 @@ fn probe_verify_gates() -> Result<String, String> {
 }
 
 fn probe_verify_parse() -> Result<String, String> {
-    let gate = VerifyGate::from_str("G3").map_err(|e| e)?;
+    let gate = VerifyGate::from_str("G3")?;
     if gate != VerifyGate::G3 {
         return Err("parse != G3".into());
     }
