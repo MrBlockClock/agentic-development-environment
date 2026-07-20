@@ -59,18 +59,27 @@ impl SkillLoader {
     }
 
     /// Load one skill by exact name (directory / frontmatter name).
+    /// On activate, also append T3 `references/*.md` (capped) under the skill dir.
     pub fn activate(&self, name: &str) -> Result<SkillDefinition, AdeError> {
         let needle = name.trim();
         if needle.is_empty() {
             return Err(AdeError::Config("skill name cannot be empty".into()));
         }
         let skills = self.load_all()?;
-        skills
+        let mut skill = skills
             .into_iter()
             .find(|skill| skill.name.eq_ignore_ascii_case(needle))
             .ok_or_else(|| {
                 AdeError::NotFound(format!("skill '{needle}' not found under .ade/skills"))
-            })
+            })?;
+        if let Some(dir) = Path::new(&skill.source).parent() {
+            let refs = load_skill_references(&self.root.join(dir))?;
+            if !refs.is_empty() {
+                skill.body.push_str("\n\n## References (T3)\n\n");
+                skill.body.push_str(&refs);
+            }
+        }
+        Ok(skill)
     }
 
     /// T1 catalog plus T2 bodies for always_apply / keyword matches.
@@ -102,6 +111,36 @@ pub fn skill_body_block(skill: &SkillDefinition) -> String {
         "SKILL {} ({})\n{}\n\n{}",
         skill.name, skill.source, skill.description, skill.body
     )
+}
+
+/// T3: load up to 4 markdown files from `references/` (each ≤4k chars).
+fn load_skill_references(skill_dir: &Path) -> Result<String, AdeError> {
+    let refs_dir = skill_dir.join("references");
+    if !refs_dir.is_dir() {
+        return Ok(String::new());
+    }
+    let mut files = std::fs::read_dir(&refs_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.truncate(4);
+    let mut out = String::new();
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("ref.md");
+        let raw = std::fs::read_to_string(&path)?;
+        let body = truncate_chars(raw.trim(), 4_000);
+        out.push_str(&format!("### {name}\n{body}\n\n"));
+    }
+    Ok(out)
 }
 
 fn parse_skill(root: &Path, path: &Path, content: &str) -> Option<SkillDefinition> {
@@ -272,6 +311,12 @@ mod tests {
             "---\nname: verify-ladder\ndescription: Run ADE verify gates G0-G5 when verifying work.\n---\n# Verify\nRun ade verify.\n",
         )
         .unwrap();
+        fs::create_dir_all(root.join(".ade/skills/verify-ladder/references")).unwrap();
+        fs::write(
+            root.join(".ade/skills/verify-ladder/references/gates.md"),
+            "G0 probe · G3 unit tests · never self-certify.\n",
+        )
+        .unwrap();
         fs::create_dir_all(root.join(".ade/skills/accidental-data-loss-prevention")).unwrap();
         fs::write(
             root.join(".ade/skills/accidental-data-loss-prevention/SKILL.md"),
@@ -334,6 +379,8 @@ mod tests {
         let skill = loader.activate("verify-ladder").unwrap();
         assert_eq!(skill.name, "verify-ladder");
         assert!(skill.body.contains("ade verify"));
+        assert!(skill.body.contains("References (T3)"));
+        assert!(skill.body.contains("G0 probe"));
         let err = loader.activate("missing-skill").unwrap_err().to_string();
         assert!(err.contains("not found"));
         let empty = loader.activate("  ").unwrap_err().to_string();
