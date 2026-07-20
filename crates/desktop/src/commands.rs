@@ -1,7 +1,7 @@
 use ade_agents::mcp::{McpHost, McpServerConfig, McpToolCallResult, McpToolInfo};
 use ade_agents::session::AgentEvent;
 use ade_core::audit::{AuditMode, AuditReport, AuditRunner};
-use ade_core::execute::{ExecuteOptions, ExecuteReport, ExecuteRunner};
+use ade_core::execute::{ExecuteOptions, ExecuteReport};
 use ade_core::plan::{PlanBuilder, PlanReport};
 use ade_core::recipe::StackRecipe;
 use ade_core::verify::{VerifyGate, VerifyResult};
@@ -283,8 +283,8 @@ pub async fn run_execute(
 ) -> Result<ExecuteReport, String> {
     let audit = AuditRunner::new(&state.workspace_root).run(AuditMode::EvaluateExisting);
     let plan = PlanBuilder::new().build(&audit);
-    let report = ExecuteRunner::new(&state.workspace_root)
-        .run(
+    let report = ade_workflow::executor::PhaseExecutor::with_root(&state.workspace_root)
+        .execute(
             &plan,
             &ExecuteOptions {
                 approved,

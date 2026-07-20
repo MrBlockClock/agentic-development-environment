@@ -1,7 +1,5 @@
 use crate::audit::{AuditFinding, AuditReport};
-use crate::error::AdeError;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
 
 pub const PLAN_SCHEMA: &str = "ade.plan.report/v1";
 
@@ -116,13 +114,9 @@ impl PlanBuilder {
         requires_human.push("Approve this plan before EXECUTE".into());
 
         let human_summary_markdown = Some(summary_markdown(audit, &phases, &requires_human));
-        let phases = match order_phases(phases.clone()) {
-            Ok(ordered) => ordered,
-            Err(error) => {
-                tracing::warn!(%error, "plan phase ordering failed; using declaration order");
-                phases
-            }
-        };
+        // Declaration order is already dependency-valid for this builder.
+        // EXECUTE still re-orders via `ade_workflow::dag::DagBuilder` as a
+        // defense-in-depth gate for loaded/hand-edited plans.
 
         PlanReport {
             schema: PLAN_SCHEMA.into(),
@@ -134,78 +128,6 @@ impl PlanBuilder {
             human_summary_markdown,
         }
     }
-}
-
-/// Topologically order plan phases by `depends_on` (Kahn). Rejects cycles and
-/// unknown dependency ids.
-pub fn order_phases(phases: Vec<PlanPhase>) -> Result<Vec<PlanPhase>, AdeError> {
-    if phases.is_empty() {
-        return Ok(phases);
-    }
-
-    let mut by_id = HashMap::new();
-    for phase in &phases {
-        if by_id.insert(phase.id.clone(), phase).is_some() {
-            return Err(AdeError::PlanValidation(format!(
-                "duplicate plan phase id '{}'",
-                phase.id
-            )));
-        }
-    }
-
-    let ids: HashSet<&str> = by_id.keys().map(String::as_str).collect();
-    let mut indegree: HashMap<&str, usize> = HashMap::new();
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
-
-    for phase in &phases {
-        indegree.entry(phase.id.as_str()).or_insert(0);
-        for dep in &phase.depends_on {
-            if !ids.contains(dep.as_str()) {
-                return Err(AdeError::PlanValidation(format!(
-                    "phase '{}' depends on unknown phase '{}'",
-                    phase.id, dep
-                )));
-            }
-            *indegree.entry(phase.id.as_str()).or_insert(0) += 1;
-            dependents
-                .entry(dep.as_str())
-                .or_default()
-                .push(phase.id.as_str());
-        }
-    }
-
-    let mut queue: VecDeque<&str> = indegree
-        .iter()
-        .filter_map(|(id, degree)| (*degree == 0).then_some(*id))
-        .collect();
-    queue
-        .make_contiguous()
-        .sort_by_key(|id| phases.iter().position(|phase| phase.id == *id).unwrap_or(0));
-
-    let mut ordered = Vec::with_capacity(phases.len());
-    while let Some(id) = queue.pop_front() {
-        ordered.push(by_id[id].clone());
-        if let Some(children) = dependents.get(id) {
-            let mut next = Vec::new();
-            for child in children {
-                if let Some(degree) = indegree.get_mut(child) {
-                    *degree = degree.saturating_sub(1);
-                    if *degree == 0 {
-                        next.push(*child);
-                    }
-                }
-            }
-            next.sort_by_key(|id| phases.iter().position(|phase| phase.id == *id).unwrap_or(0));
-            queue.extend(next);
-        }
-    }
-
-    if ordered.len() != phases.len() {
-        return Err(AdeError::PlanValidation(
-            "plan phases contain a dependency cycle".into(),
-        ));
-    }
-    Ok(ordered)
 }
 
 fn owned_paths_for_blockers(blockers: &[String]) -> Vec<String> {
@@ -294,29 +216,6 @@ mod tests {
             .requires_human
             .iter()
             .any(|r| r.contains("Approve this plan")));
-    }
-
-    #[test]
-    fn order_phases_puts_dependencies_first() {
-        let ordered = order_phases(vec![
-            PlanPhase {
-                id: "b".into(),
-                title: "b".into(),
-                owned_paths: vec![],
-                gates: vec![],
-                depends_on: vec!["a".into()],
-            },
-            PlanPhase {
-                id: "a".into(),
-                title: "a".into(),
-                owned_paths: vec![],
-                gates: vec![],
-                depends_on: vec![],
-            },
-        ])
-        .unwrap();
-        assert_eq!(ordered[0].id, "a");
-        assert_eq!(ordered[1].id, "b");
     }
 
     #[test]

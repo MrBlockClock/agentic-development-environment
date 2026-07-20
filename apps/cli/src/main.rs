@@ -724,7 +724,8 @@ async fn main() -> anyhow::Result<()> {
                 recipe_id: recipe.clone(),
                 phase_ids: phases.clone(),
             };
-            let report = ade_core::execute::ExecuteRunner::new(&root).run(&plan, &opts)?;
+            let report =
+                ade_workflow::executor::PhaseExecutor::with_root(&root).execute(&plan, &opts)?;
             println!(
                 "EXECUTE complete — score {:?} → {:?} / {} (changed {} path(s))",
                 report.score_before,
