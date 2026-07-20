@@ -24,6 +24,9 @@ pub fn run() {
             ade_desktop_crate::commands::list_recipes,
             ade_desktop_crate::commands::list_rules,
             ade_desktop_crate::commands::list_skills,
+            ade_desktop_crate::commands::guided_wins_status,
+            ade_desktop_crate::commands::guided_understand_project,
+            ade_desktop_crate::commands::guided_mark_win,
             ade_desktop_crate::commands::preview_recipe_scaffold,
             ade_desktop_crate::commands::initialize_recipe,
         ])

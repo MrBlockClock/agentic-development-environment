@@ -162,6 +162,19 @@ type AgentTask = {
   failure: string | null;
 };
 
+type GuidedWinsState = {
+  understand: boolean;
+  verify: boolean;
+  improve_ade: boolean;
+  understand_artifact?: string | null;
+};
+
+type UnderstandResult = {
+  path: string;
+  summary: string;
+  wins: GuidedWinsState;
+};
+
 type DashboardSnapshot = {
   workspace_root: string;
   audit: AuditReport;
@@ -279,6 +292,13 @@ function App() {
   const [recipePlanError, setRecipePlanError] = useState<string | null>(null);
   const [recipeResult, setRecipeResult] = useState<ScaffoldResult | null>(null);
   const [homePrompt, setHomePrompt] = useState("");
+  const [guidedWins, setGuidedWins] = useState<GuidedWinsState>({
+    understand: false,
+    verify: false,
+    improve_ade: false,
+  });
+  const [understandBusy, setUnderstandBusy] = useState(false);
+  const [lastUnderstandPath, setLastUnderstandPath] = useState<string | null>(null);
 
   const toggleDevMode = () => {
     setDevMode((prev) => {
@@ -292,8 +312,22 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      const snapshot = await invoke<DashboardSnapshot>("get_dashboard");
+      const [snapshot, wins] = await Promise.all([
+        invoke<DashboardSnapshot>("get_dashboard"),
+        invoke<GuidedWinsState>("guided_wins_status").catch(
+          (): GuidedWinsState => ({
+            understand: false,
+            verify: false,
+            improve_ade: false,
+            understand_artifact: null,
+          }),
+        ),
+      ]);
       setDashboard({ ...snapshot, tasks: snapshot.tasks ?? [] });
+      setGuidedWins(wins);
+      if (wins.understand_artifact) {
+        setLastUnderstandPath(wins.understand_artifact);
+      }
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -337,7 +371,7 @@ function App() {
     return Math.round((dashboard.audit.score / dashboard.audit.score_max) * 100);
   }, [dashboard]);
 
-  const runVerify = async () => {
+  const runVerify = async (options?: { stayOnHome?: boolean }) => {
     setVerifying(true);
     setError(null);
     try {
@@ -346,12 +380,49 @@ function App() {
         through: true,
       });
       setVerifyResults(results);
-      setActiveView("Verify");
+      const passed = results.every(
+        (result) => result.passed || result.status === "unavailable" || result.status === "skipped",
+      );
+      if (passed) {
+        try {
+          const wins = await invoke<GuidedWinsState>("guided_mark_win", { win: "verify" });
+          setGuidedWins(wins);
+        } catch {
+          // non-fatal: verify still succeeded
+        }
+      }
+      if (!options?.stayOnHome) {
+        setActiveView("Verify");
+      }
     } catch (reason) {
       setError(String(reason));
     } finally {
       setVerifying(false);
     }
+  };
+
+  const runUnderstandProject = async () => {
+    setUnderstandBusy(true);
+    setError(null);
+    try {
+      const result = await invoke<UnderstandResult>("guided_understand_project");
+      setGuidedWins(result.wins);
+      setLastUnderstandPath(result.path);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setUnderstandBusy(false);
+    }
+  };
+
+  const startImproveAde = () => {
+    const prompt =
+      "Improve ADE itself in this workspace: propose a small, verify-gated change that advances Ideal ADE I4 activation (guided wins / self-build). Stay inside owned_paths from PLAN. Run verify after.";
+    setHomePrompt(prompt);
+    setActiveView("Agent");
+    void invoke<GuidedWinsState>("guided_mark_win", { win: "improve_ade" })
+      .then(setGuidedWins)
+      .catch(() => undefined);
   };
 
   const executePlan = async () => {
@@ -693,18 +764,18 @@ function App() {
                   prompt={homePrompt}
                   onPromptChange={setHomePrompt}
                   agentBusy={agentBusy}
+                  understandBusy={understandBusy}
+                  verifying={verifying}
+                  guidedWins={guidedWins}
+                  lastUnderstandPath={lastUnderstandPath}
+                  verifyResults={verifyResults}
                   devMode={devMode}
                   onOpenAgent={() => setActiveView("Agent")}
                   onOpenHealth={() => setActiveView("Health")}
-                  onOpenVerify={() => {
-                    setActiveView("Verify");
-                    void runVerify();
-                  }}
                   onOpenRecipes={() => setActiveView("Recipes")}
-                  onStarter={(text) => {
-                    setHomePrompt(text);
-                    setActiveView("Agent");
-                  }}
+                  onUnderstand={() => void runUnderstandProject()}
+                  onVerifyHome={() => void runVerify({ stayOnHome: true })}
+                  onImproveAde={startImproveAde}
                   onRunAgent={() => {
                     if (!homePrompt.trim()) return;
                     setActiveView("Agent");
@@ -783,12 +854,18 @@ function HomeView({
   prompt,
   onPromptChange,
   agentBusy,
+  understandBusy,
+  verifying,
+  guidedWins,
+  lastUnderstandPath,
+  verifyResults,
   devMode,
   onOpenAgent,
   onOpenHealth,
-  onOpenVerify,
   onOpenRecipes,
-  onStarter,
+  onUnderstand,
+  onVerifyHome,
+  onImproveAde,
   onRunAgent,
 }: {
   dashboard: DashboardSnapshot;
@@ -796,34 +873,53 @@ function HomeView({
   prompt: string;
   onPromptChange: (value: string) => void;
   agentBusy: boolean;
+  understandBusy: boolean;
+  verifying: boolean;
+  guidedWins: GuidedWinsState;
+  lastUnderstandPath: string | null;
+  verifyResults: VerifyResult[];
   devMode: boolean;
   onOpenAgent: () => void;
   onOpenHealth: () => void;
-  onOpenVerify: () => void;
   onOpenRecipes: () => void;
-  onStarter: (text: string) => void;
+  onUnderstand: () => void;
+  onVerifyHome: () => void;
+  onImproveAde: () => void;
   onRunAgent: () => void;
 }) {
   const latestHandoff = dashboard.handoff.recent[0];
-  const dogfoodPrompt =
-    "Improve ADE itself in this workspace: propose a small, verify-gated change that advances Ideal ADE I2 (autonomy dial, budgets, traces). Stay inside owned_paths from PLAN. Run verify after.";
-  const understandPrompt =
-    "Explain how this ADE workspace is structured (crates, desktop, API). Cite concrete paths. Do not edit files.";
+  const winsDone =
+    Number(guidedWins.understand) + Number(guidedWins.verify) + Number(guidedWins.improve_ade);
+  const lastVerifyPass =
+    verifyResults.length > 0 &&
+    verifyResults.every(
+      (result) => result.passed || result.status === "unavailable" || result.status === "skipped",
+    );
+
   const starters = [
     {
+      id: "understand" as const,
       title: "Understand project",
-      detail: "Map architecture before changing anything",
-      prompt: understandPrompt,
+      detail: "Write .ade/artifacts/understand-project.md — no Audit required",
+      done: guidedWins.understand,
+      busy: understandBusy,
+      onClick: onUnderstand,
     },
     {
+      id: "verify" as const,
       title: "Run verify",
-      detail: "Execute the verify ladder through the selected gate",
-      action: "verify" as const,
+      detail: "Execute the verify ladder from Home through G3",
+      done: guidedWins.verify,
+      busy: verifying,
+      onClick: onVerifyHome,
     },
     {
+      id: "improve" as const,
       title: "Improve ADE",
-      detail: "Dogfood: use ADE to build ADE",
-      prompt: dogfoodPrompt,
+      detail: "Dogfood: open Agent on a verify-gated self-build task",
+      done: guidedWins.improve_ade,
+      busy: agentBusy,
+      onClick: onImproveAde,
     },
   ];
 
@@ -838,12 +934,17 @@ function HomeView({
             What should the agent do?
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-400">
-            Home is for work. Audit and readiness live under Trust.{" "}
+            Three guided first wins. Complete one without opening Audit.{" "}
             {!isTauri && (
               <span className="text-amber-200/90">
-                Browser preview: MCP connect and live agent turns need Desktop.
+                Browser preview: understand artifact needs Desktop or `ade serve` routes.
               </span>
             )}
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Guided wins {winsDone}/3
+            {lastUnderstandPath ? ` · artifact ${lastUnderstandPath}` : ""}
+            {lastVerifyPass ? " · last verify passed" : ""}
           </p>
         </div>
 
@@ -877,24 +978,35 @@ function HomeView({
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
           {starters.map((starter) => (
             <button
-              key={starter.title}
+              key={starter.id}
               type="button"
-              onClick={() => {
-                if ("action" in starter && starter.action === "verify") {
-                  onOpenVerify();
-                  return;
-                }
-                if ("prompt" in starter && starter.prompt) {
-                  onStarter(starter.prompt);
-                }
-              }}
-              className="rounded-xl border border-white/8 bg-white/3 px-4 py-3 text-left transition hover:border-blue-400/30 hover:bg-blue-500/8"
+              disabled={starter.busy}
+              onClick={starter.onClick}
+              className={`rounded-xl border px-4 py-3 text-left transition disabled:opacity-60 ${
+                starter.done
+                  ? "border-emerald-400/30 bg-emerald-500/10 hover:bg-emerald-500/15"
+                  : "border-white/8 bg-white/3 hover:border-blue-400/30 hover:bg-blue-500/8"
+              }`}
             >
-              <div className="text-sm font-medium text-slate-200">{starter.title}</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-slate-200">{starter.title}</div>
+                {starter.done ? (
+                  <span className="text-[10px] uppercase tracking-wide text-emerald-300">done</span>
+                ) : starter.busy ? (
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">…</span>
+                ) : null}
+              </div>
               <p className="mt-1 text-xs leading-5 text-slate-500">{starter.detail}</p>
             </button>
           ))}
         </div>
+
+        {guidedWins.understand && lastUnderstandPath && (
+          <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-500/8 px-4 py-3 text-xs text-emerald-100/90">
+            Understand win: wrote <span className="font-mono">{lastUnderstandPath}</span>. Stay on
+            Home — Audit is optional under Trust.
+          </div>
+        )}
       </section>
 
       <section className="grid gap-4 sm:grid-cols-3">
@@ -949,6 +1061,8 @@ function HomeView({
                 (task) => !["completed", "failed", "cancelled"].includes(task.status),
               ).length
             }
+            {" · "}
+            guided {winsDone}/3
           </p>
           {(dashboard.rebuild_lock_warnings?.length ?? 0) > 0 && (
             <ul className="mt-2 space-y-1 text-amber-100/80">

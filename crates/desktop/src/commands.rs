@@ -564,6 +564,35 @@ pub fn list_skills(
 }
 
 #[tauri::command]
+pub fn guided_wins_status(
+    state: State<'_, AppState>,
+) -> Result<ade_core::guided::GuidedWinsState, String> {
+    ade_core::guided::load_wins(&state.workspace_root).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn guided_understand_project(
+    state: State<'_, AppState>,
+) -> Result<ade_core::guided::UnderstandResult, String> {
+    ade_core::guided::write_understand_project(&state.workspace_root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn guided_mark_win(
+    state: State<'_, AppState>,
+    win: String,
+) -> Result<ade_core::guided::GuidedWinsState, String> {
+    let win = match win.trim().to_ascii_lowercase().as_str() {
+        "understand" => ade_core::guided::GuidedWinId::Understand,
+        "verify" => ade_core::guided::GuidedWinId::Verify,
+        "improve_ade" | "improve-ade" | "improve" => ade_core::guided::GuidedWinId::ImproveAde,
+        other => return Err(format!("unknown guided win '{other}'")),
+    };
+    ade_core::guided::mark_win(&state.workspace_root, win).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn preview_recipe_scaffold(
     state: State<'_, AppState>,
     recipe: String,

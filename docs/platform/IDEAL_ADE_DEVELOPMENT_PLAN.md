@@ -1,7 +1,7 @@
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  
-**Status:** Active · I3 complete · I4 next · 2026-07-20  
+**Status:** Active · I4 complete · I5 next · 2026-07-20  
 **Canvas:** Ideal-ADE-development-plan.canvas.tsx  
 **Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard
 
@@ -79,6 +79,15 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP12 | Catalog-first skill injection (T1; bodies via match/always/activate) |
 | WP13 | Shrink T0 start prompt + point at activate_skill |
 | WP14 | Rules/Skills editor activation state badges |
+
+## I4 work packages — done
+
+| WP | Work |
+|----|------|
+| WP15 | Understand project guided win writes `.ade/artifacts/understand-project.md` |
+| WP16 | Run verify from Home; mark win without opening Audit |
+| WP17 | Improve ADE starter opens Agent + marks self-build win |
+| WP18 | Persist guided wins in `.ade/artifacts/guided-wins.json` |
 
 ## Held
 

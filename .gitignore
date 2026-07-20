@@ -35,10 +35,14 @@ Thumbs.db
 .ade/worktrees/
 .ade/plugins/
 .ade/tasks/
+.ade/artifacts/
 **/agent-transcripts/
 
 # Per-environment data directories (local/staging/production)
 /data/
+
+# Alternate Cargo target dir used by some local shells
+ade-target/
 
 # Tauri
 apps/desktop/src-tauri/target/

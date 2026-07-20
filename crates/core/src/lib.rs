@@ -5,6 +5,7 @@ pub mod authority;
 pub mod config;
 pub mod error;
 pub mod execute;
+pub mod guided;
 pub mod handoff;
 pub mod ignore;
 pub mod layer;
