@@ -6,6 +6,21 @@ export const isTauri =
 
 const apiBase = import.meta.env.VITE_ADE_API_URL ?? "http://127.0.0.1:3210";
 
+/**
+ * TEMP (browser preview testing only): default bearer when localStorage /
+ * VITE_ADE_API_TOKEN are unset. Must match `ADE_API_TOKEN` used by `ade serve`.
+ * Remove before shipping a public build.
+ */
+const TEMP_BROWSER_API_TOKEN = "ade-local-dev";
+
+function browserApiToken(): string | null {
+  const fromStorage = window.localStorage.getItem("ade_api_token")?.trim();
+  if (fromStorage) return fromStorage;
+  const fromEnv = import.meta.env.VITE_ADE_API_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  return TEMP_BROWSER_API_TOKEN;
+}
+
 /** Read-only commands that map onto the local ADE HTTP API in browser mode. */
 const httpReads: Record<string, string> = {
   get_dashboard: "/api/state",
@@ -27,7 +42,7 @@ async function http<T>(
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string> | undefined),
   };
-  const token = window.localStorage.getItem("ade_api_token");
+  const token = browserApiToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -42,8 +57,8 @@ async function http<T>(
   }
   if (response.status === 401) {
     throw new Error(
-      "Browser mode: the local ADE API requires a bearer token. " +
-        'Set it via localStorage.setItem("ade_api_token", "<token>").',
+      "Browser mode: the local ADE API rejected the bearer token. " +
+        'Set localStorage ade_api_token to match ADE_API_TOKEN, or restart serve with ADE_API_TOKEN=ade-local-dev.',
     );
   }
   if (!response.ok) {
