@@ -810,6 +810,11 @@ function App() {
             </h1>
             <p className="mt-0.5 max-w-[62vw] truncate text-[11px] text-slate-500">
               {dashboard?.workspace_root ?? "Locating workspace…"}
+              {dashboard?.is_dogfood ? (
+                <span className="ml-2 rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-200">
+                  Dogfood
+                </span>
+              ) : null}
               {!isTauri && " · browser preview"}
             </p>
           </div>
