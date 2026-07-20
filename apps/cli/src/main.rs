@@ -175,6 +175,12 @@ enum Commands {
         /// Agent UUID whose active writable leases define tool write scope
         #[arg(long)]
         lease_agent: Option<String>,
+        /// Explicitly approve PLAN owned_paths as write scope for this turn
+        #[arg(long)]
+        approve_owned_paths: bool,
+        /// Owned path to allow (repeatable); with --approve-owned-paths, empty falls back to PLAN
+        #[arg(long = "owned-path")]
+        owned_paths: Vec<String>,
     },
 }
 
@@ -1798,6 +1804,8 @@ async fn main() -> anyhow::Result<()> {
             output_limit,
             profile,
             lease_agent,
+            approve_owned_paths,
+            owned_paths,
         } => {
             use std::io::Write;
 
@@ -1808,6 +1816,14 @@ async fn main() -> anyhow::Result<()> {
             let input_cost = ade_core::money::Money::try_from_usd_f64(*input_cost_per_mtok)?;
             let output_cost = ade_core::money::Money::try_from_usd_f64(*output_cost_per_mtok)?;
             let ledger = ade_db::usage_ledger::UsageLedgerStore::new(open_database(&config).await?);
+            let write_paths = if *approve_owned_paths {
+                resolve_cli_owned_paths(&root, owned_paths.clone())?
+            } else {
+                if !owned_paths.is_empty() {
+                    anyhow::bail!("--owned-path requires --approve-owned-paths");
+                }
+                vec![]
+            };
             let mut builder =
                 ade_agents::turn::AgentTurnBuilder::new(ade_agents::turn::AgentTurnSpec {
                     prompt: prompt.clone(),
@@ -1820,7 +1836,7 @@ async fn main() -> anyhow::Result<()> {
                     output_limit: *output_limit,
                     profile,
                     workspace_root: root.clone(),
-                    owned_paths: vec![],
+                    owned_paths: write_paths,
                     handoff_chars: 1_500,
                 })
                 .ledger(ledger);
@@ -1832,9 +1848,11 @@ async fn main() -> anyhow::Result<()> {
             let service = builder.prepare().await?;
             if !service.effective_owned_paths().is_empty() {
                 eprintln!(
-                    "lease-bound write scope: {}",
+                    "write scope: {}",
                     service.effective_owned_paths().join(", ")
                 );
+            } else {
+                eprintln!("write scope: read-only (pass --approve-owned-paths for PLAN writes)");
             }
             let mut events = service.start();
             let mut failure = None;
@@ -1980,6 +1998,48 @@ fn require_approval(approved: bool, operation: &str) -> anyhow::Result<()> {
         anyhow::bail!("{operation} mutates coordination state; rerun with --approve");
     }
     Ok(())
+}
+
+fn resolve_cli_owned_paths(
+    root: &std::path::Path,
+    provided: Vec<String>,
+) -> anyhow::Result<Vec<String>> {
+    let mut paths: Vec<String> = provided
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+    if paths.is_empty() {
+        if let Some(plan) = ade_workflow::plan_enforcement::PlanEnforcer::load_plan(root)? {
+            paths = plan
+                .phases
+                .into_iter()
+                .flat_map(|phase| phase.owned_paths)
+                .collect();
+        }
+    }
+    if paths.is_empty() {
+        let audit = ade_core::audit::AuditRunner::new(root)
+            .run(ade_core::audit::AuditMode::EvaluateExisting);
+        let plan = ade_core::plan::PlanBuilder::new().build(&audit);
+        ade_workflow::plan_enforcement::PlanEnforcer::save_plan(root, &plan)?;
+        paths = plan
+            .phases
+            .into_iter()
+            .flat_map(|phase| phase.owned_paths)
+            .collect();
+    } else if ade_workflow::plan_enforcement::PlanEnforcer::load_plan(root)?.is_none() {
+        let audit = ade_core::audit::AuditRunner::new(root)
+            .run(ade_core::audit::AuditMode::EvaluateExisting);
+        let plan = ade_core::plan::PlanBuilder::new().build(&audit);
+        ade_workflow::plan_enforcement::PlanEnforcer::save_plan(root, &plan)?;
+    }
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        anyhow::bail!("--approve-owned-paths needs PLAN owned_paths — run `ade plan` first");
+    }
+    Ok(paths)
 }
 
 fn current_branch(root: &std::path::Path) -> Option<String> {

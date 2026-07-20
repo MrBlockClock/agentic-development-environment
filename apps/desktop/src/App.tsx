@@ -1757,6 +1757,11 @@ function AgentView({
                       ? `${planOwnedPaths.length} path${planOwnedPaths.length === 1 ? "" : "s"}: ${planOwnedPaths.slice(0, 4).join(", ")}${planOwnedPaths.length > 4 ? "…" : ""}`
                       : "No paths on dashboard plan yet — approving will build/save PLAN and use its owned_paths."}
                   </span>
+                  {!approveOwnedPaths && (
+                    <span className="mt-1 block text-[10px] text-amber-200/80">
+                      Without approval, Act/Automate stays read-only (writes denied).
+                    </span>
+                  )}
                 </span>
               </label>
             )}
