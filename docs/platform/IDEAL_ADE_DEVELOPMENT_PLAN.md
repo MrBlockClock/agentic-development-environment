@@ -89,13 +89,13 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP17 | Improve ADE starter opens Agent + marks self-build win |
 | WP18 | Persist guided wins in `.ade/artifacts/guided-wins.json` |
 
-## I5 work packages
+## I5 work packages — done
 
-| WP | Work | Status |
-|----|------|--------|
-| WP19 | Gold-set ≥10 deterministic harness tasks (+ dogfood) | Shipping |
-| WP20 | `ade eval --gold` CLI + `evals/gold/manifest.json` | Shipping |
-| WP21 | CI job runs gold-set and fails on regression | Shipping |
+| WP | Work |
+|----|------|
+| WP19 | Gold-set ≥10 deterministic harness tasks (+ dogfood) |
+| WP20 | `ade eval --gold` CLI + `evals/gold/manifest.json` |
+| WP21 | CI job runs gold-set and fails on regression |
 
 ## Held
 
