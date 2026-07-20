@@ -553,6 +553,8 @@ function App() {
     maxTokens: number | null;
     verifyOnComplete: boolean;
     verifyGate: string;
+    approveOwnedPaths: boolean;
+    ownedPaths: string[];
   }) => {
     if (!isTauri) {
       setError(
@@ -583,6 +585,8 @@ function App() {
         maxTokens: input.maxTokens,
         verifyOnComplete: input.verifyOnComplete,
         verifyGate: input.verifyGate,
+        approveOwnedPaths: input.approveOwnedPaths,
+        ownedPaths: input.ownedPaths,
         onEvent,
       });
     } catch (reason) {
@@ -872,6 +876,11 @@ function App() {
                   initialPrompt={homePrompt}
                   devMode={devMode}
                   leases={dashboard.leases}
+                  planOwnedPaths={[
+                    ...new Set(
+                      dashboard.plan.phases.flatMap((phase) => phase.owned_paths),
+                    ),
+                  ]}
                   rebuildLockWarnings={dashboard.rebuild_lock_warnings ?? []}
                   onRun={(input) => void runAgentTurn(input)}
                 />
@@ -1525,6 +1534,7 @@ function AgentView({
   initialPrompt = "",
   devMode = false,
   leases = [],
+  planOwnedPaths = [],
   rebuildLockWarnings = [],
 }: {
   events: AgentEvent[];
@@ -1533,6 +1543,7 @@ function AgentView({
   initialPrompt?: string;
   devMode?: boolean;
   leases?: PathLease[];
+  planOwnedPaths?: string[];
   rebuildLockWarnings?: string[];
   onRun: (input: {
     prompt: string;
@@ -1548,6 +1559,8 @@ function AgentView({
     maxTokens: number | null;
     verifyOnComplete: boolean;
     verifyGate: string;
+    approveOwnedPaths: boolean;
+    ownedPaths: string[];
   }) => void;
 }) {
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -1563,6 +1576,7 @@ function AgentView({
   const [maxTokens, setMaxTokens] = useState("");
   const [verifyOnComplete, setVerifyOnComplete] = useState(false);
   const [verifyGate, setVerifyGate] = useState("G3");
+  const [approveOwnedPaths, setApproveOwnedPaths] = useState(false);
 
   useEffect(() => {
     if (initialPrompt.trim()) {
@@ -1574,12 +1588,17 @@ function AgentView({
     if (autonomy === "automate") {
       setVerifyOnComplete(true);
     }
+    if (autonomy === "observe" || autonomy === "propose") {
+      setApproveOwnedPaths(false);
+    }
   }, [autonomy]);
 
   const setAutonomyPersisted = (level: AutonomyLevel) => {
     setAutonomy(level);
     window.localStorage.setItem(AUTONOMY_KEY, level);
   };
+
+  const mutating = autonomy === "act" || autonomy === "automate";
 
   const text = events
     .filter((event): event is Extract<AgentEvent, { type: "text_delta" }> =>
@@ -1624,6 +1643,8 @@ function AgentView({
       maxTokens: maxTokens.trim() ? Number(maxTokens) || null : null,
       verifyOnComplete: autonomy === "automate" ? true : verifyOnComplete,
       verifyGate: verifyGate.trim() || "G3",
+      approveOwnedPaths: mutating ? approveOwnedPaths : false,
+      ownedPaths: mutating && approveOwnedPaths ? planOwnedPaths : [],
     });
   };
 
@@ -1678,6 +1699,24 @@ function AgentView({
             <p className="mt-2 text-[10px] leading-4 text-slate-500">
               {AUTONOMY_LEVELS.find((level) => level.id === autonomy)?.hint}
             </p>
+            {mutating && (
+              <label className="mt-3 flex items-start gap-2 rounded-lg border border-white/8 bg-white/2 px-3 py-2 text-[11px] text-slate-300">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={approveOwnedPaths}
+                  onChange={(event) => setApproveOwnedPaths(event.target.checked)}
+                />
+                <span>
+                  Approve write scope from PLAN
+                  <span className="mt-0.5 block text-[10px] text-slate-500">
+                    {planOwnedPaths.length > 0
+                      ? `${planOwnedPaths.length} path${planOwnedPaths.length === 1 ? "" : "s"}: ${planOwnedPaths.slice(0, 4).join(", ")}${planOwnedPaths.length > 4 ? "…" : ""}`
+                      : "No paths on dashboard plan yet — approving will build/save PLAN and use its owned_paths."}
+                  </span>
+                </span>
+              </label>
+            )}
           </div>
 
           <div className="min-h-72 rounded-xl border border-white/7 bg-black/20 p-4">

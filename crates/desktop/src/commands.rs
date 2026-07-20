@@ -432,6 +432,8 @@ pub async fn run_agent_turn(
     max_tokens: Option<u64>,
     verify_on_complete: Option<bool>,
     verify_gate: Option<String>,
+    approve_owned_paths: Option<bool>,
+    owned_paths: Option<Vec<String>>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
@@ -490,8 +492,15 @@ pub async fn run_agent_turn(
         _ => parsed_verify_gate,
     };
 
-    // Desktop chat starts read-only. A later explicit plan-approval action can
-    // pass owned_paths; merely generating a PLAN never grants write authority.
+    // Observe/Propose stay read-only. Act/Automate get write scope only when the
+    // human explicitly approves PLAN owned_paths (generating a PLAN alone never
+    // grants authority).
+    let owned_paths = resolve_turn_owned_paths(
+        &state.workspace_root,
+        autonomy,
+        approve_owned_paths.unwrap_or(false),
+        owned_paths.unwrap_or_default(),
+    )?;
     let config = ade_core::config::AdeConfig::load().map_err(|error| error.to_string())?;
     let db = ade_db::repo::AdeDatabase::open(&ade_db::repo::DbConfig::from_ade_config(&config))
         .await
@@ -510,7 +519,7 @@ pub async fn run_agent_turn(
         output_limit,
         profile,
         workspace_root: state.workspace_root.clone(),
-        owned_paths: vec![],
+        owned_paths,
         handoff_chars: 1_500,
     })
     .mcp(state.mcp.clone())
@@ -686,6 +695,75 @@ fn process_appears_running(name: &str) -> bool {
     }
 }
 
+/// Resolve write scope for a desktop agent turn.
+///
+/// Observe/Propose → always empty. Act/Automate → empty unless the human
+/// approved; then use provided paths or fall back to the saved/current PLAN.
+fn resolve_turn_owned_paths(
+    workspace_root: &std::path::Path,
+    autonomy: ade_agents::autonomy::AutonomyLevel,
+    approve_owned_paths: bool,
+    provided: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if !autonomy.allows_mutating_tools() {
+        return Ok(vec![]);
+    }
+    if !approve_owned_paths {
+        return Ok(vec![]);
+    }
+
+    let mut paths: Vec<String> = provided
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+
+    if paths.is_empty() {
+        if let Some(plan) =
+            ade_workflow::plan_enforcement::PlanEnforcer::load_plan(workspace_root)
+                .map_err(|error| error.to_string())?
+        {
+            paths = plan
+                .phases
+                .into_iter()
+                .flat_map(|phase| phase.owned_paths)
+                .collect();
+        }
+    }
+
+    if paths.is_empty() {
+        // Persist a fresh plan so risky-path enforcement has an artifact, then
+        // use its owned_paths as the write scope.
+        let audit = AuditRunner::new(workspace_root).run(AuditMode::EvaluateExisting);
+        let plan = PlanBuilder::new().build(&audit);
+        ade_workflow::plan_enforcement::PlanEnforcer::save_plan(workspace_root, &plan)
+            .map_err(|error| error.to_string())?;
+        paths = plan
+            .phases
+            .into_iter()
+            .flat_map(|phase| phase.owned_paths)
+            .collect();
+    } else if ade_workflow::plan_enforcement::PlanEnforcer::load_plan(workspace_root)
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
+        // Human approved explicit paths; still need a PLAN artifact for risky work.
+        let audit = AuditRunner::new(workspace_root).run(AuditMode::EvaluateExisting);
+        let plan = PlanBuilder::new().build(&audit);
+        ade_workflow::plan_enforcement::PlanEnforcer::save_plan(workspace_root, &plan)
+            .map_err(|error| error.to_string())?;
+    }
+
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Err(
+            "approve owned paths requires a PLAN with owned_paths — run Plan first".into(),
+        );
+    }
+    Ok(paths)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,5 +792,55 @@ mod tests {
         let vault = InMemoryProviderKeyVault::default();
         let status = key_status_for(&vault, "local", "openai").unwrap();
         assert!(!status.configured);
+    }
+
+    #[test]
+    fn propose_never_gets_owned_paths_even_if_approved() {
+        let root = std::env::temp_dir().join(format!("ade-own-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = resolve_turn_owned_paths(
+            &root,
+            ade_agents::autonomy::AutonomyLevel::Propose,
+            true,
+            vec!["crates/agents".into()],
+        )
+        .unwrap();
+        assert!(paths.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn act_without_approval_stays_empty() {
+        let root = std::env::temp_dir().join(format!("ade-own2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = resolve_turn_owned_paths(
+            &root,
+            ade_agents::autonomy::AutonomyLevel::Act,
+            false,
+            vec!["crates/agents".into()],
+        )
+        .unwrap();
+        assert!(paths.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn act_with_approval_uses_provided_paths() {
+        let root = std::env::temp_dir().join(format!("ade-own3-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "# contract\n").unwrap();
+        let paths = resolve_turn_owned_paths(
+            &root,
+            ade_agents::autonomy::AutonomyLevel::Act,
+            true,
+            vec!["crates/agents".into(), "crates/agents".into()],
+        )
+        .unwrap();
+        assert_eq!(paths, vec!["crates/agents".to_string()]);
+        assert!(
+            ade_workflow::plan_enforcement::PlanEnforcer::plan_path(&root).is_file(),
+            "approving writes should persist a PLAN artifact"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
