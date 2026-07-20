@@ -2,6 +2,9 @@ param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot)
 )
 
+# G4 CI gate: local API readiness + authenticated snapshot.
+# Fmt/clippy/tests/frontend build are covered by the Rust + Desktop CI jobs.
+
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path -LiteralPath $Root).Path
 
@@ -13,26 +16,10 @@ function Invoke-Checked([string]$Label, [scriptblock]$Command) {
     }
 }
 
-& (Join-Path $PSScriptRoot "verify-quick.ps1") -Root $root
-if ($LASTEXITCODE -ne 0) {
-    throw "verify-quick failed with exit code $LASTEXITCODE"
-}
-
 Push-Location $root
 try {
-    Invoke-Checked "workspace tests" {
-        cargo test --workspace --exclude ade-desktop-app
-    }
     Invoke-Checked "ADE CLI build" { cargo build -p ade-cli }
 
-    Push-Location (Join-Path $root "apps/desktop")
-    try {
-        Invoke-Checked "desktop production build" { npm run build }
-    } finally {
-        Pop-Location
-    }
-
-    Write-Host "==> local API integration smoke (see also scripts/verify-g4.ps1)"
     $metadata = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) {
         throw "cargo metadata failed with exit code $LASTEXITCODE"
@@ -42,6 +29,7 @@ try {
         throw "ADE CLI executable not found at $executable"
     }
 
+    Write-Host "==> local API integration smoke"
     $probe = [System.Net.Sockets.TcpListener]::new(
         [System.Net.IPAddress]::Loopback,
         0
@@ -116,4 +104,4 @@ try {
     Pop-Location
 }
 
-Write-Host "verify-full passed"
+Write-Host "verify-g4 passed"

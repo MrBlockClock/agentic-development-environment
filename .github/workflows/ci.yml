@@ -12,6 +12,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Matches .cargo/config.toml target-dir (sibling of the checkout).
+  CARGO_TERM_COLOR: always
+
 jobs:
   rust:
     name: Rust (${{ matrix.os }})
@@ -35,6 +39,14 @@ jobs:
 
       - name: Show pinned Rust toolchain
         run: rustc --version --verbose
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Share registry/target across Rust + G4 on the same OS.
+          shared-key: ade-${{ runner.os }}
+          workspaces: ". -> ../ade-target"
+          cache-on-failure: "true"
 
       - name: Check formatting
         if: runner.os == 'Linux'
@@ -68,16 +80,21 @@ jobs:
   g4:
     name: G4 integration gate
     runs-on: windows-latest
+    # Rust/desktop already cover fmt/clippy/tests/tsc/npm build; G4 is API smoke only.
+    needs: [rust, desktop]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      - name: Show pinned Rust toolchain
+        run: rustc --version --verbose
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          node-version: "22.14.0"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-      - name: Install frontend dependencies
-        working-directory: apps/desktop
-        run: npm ci
-      - name: Run canonical full verification
+          shared-key: ade-${{ runner.os }}
+          workspaces: ". -> ../ade-target"
+          cache-on-failure: "true"
+
+      - name: Run G4 API integration smoke
         shell: powershell
-        run: ./scripts/verify-full.ps1
+        run: ./scripts/verify-g4.ps1
