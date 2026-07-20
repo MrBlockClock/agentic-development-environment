@@ -204,6 +204,8 @@ type UnderstandResult = {
 
 type DashboardSnapshot = {
   workspace_root: string;
+  is_dogfood?: boolean;
+  ade_source_root?: string | null;
   audit: AuditReport;
   plan: PlanReport;
   handoff: HandoffMetrics;
@@ -466,6 +468,23 @@ function App() {
     void invoke<GuidedWinsState>("guided_mark_win", { win: "improve_ade" })
       .then(setGuidedWins)
       .catch(() => undefined);
+  };
+
+  const openAdeOnItself = async () => {
+    setError(null);
+    try {
+      const result = await invoke<{ workspace_root: string; already_dogfood: boolean }>(
+        "open_ade_on_itself",
+      );
+      await refresh();
+      if (!result.already_dogfood) {
+        setHomePrompt(
+          "ADE is now pointed at its own repo. Run Understand / Verify / Improve ADE from Home.",
+        );
+      }
+    } catch (reason) {
+      setError(String(reason));
+    }
   };
 
   const executePlan = async () => {
@@ -852,6 +871,7 @@ function App() {
                   onUnderstand={() => void runUnderstandProject()}
                   onVerifyHome={() => void runVerify({ stayOnHome: true })}
                   onImproveAde={startImproveAde}
+                  onOpenAdeOnItself={() => void openAdeOnItself()}
                   onRunAgent={() => {
                     if (!homePrompt.trim()) return;
                     setActiveView("Agent");
@@ -947,6 +967,7 @@ function HomeView({
   onUnderstand,
   onVerifyHome,
   onImproveAde,
+  onOpenAdeOnItself,
   onRunAgent,
 }: {
   dashboard: DashboardSnapshot;
@@ -966,6 +987,7 @@ function HomeView({
   onUnderstand: () => void;
   onVerifyHome: () => void;
   onImproveAde: () => void;
+  onOpenAdeOnItself: () => void;
   onRunAgent: () => void;
 }) {
   const latestHandoff = dashboard.handoff.recent[0];
@@ -1024,7 +1046,23 @@ function HomeView({
             Guided wins {winsDone}/3
             {lastUnderstandPath ? ` · artifact ${lastUnderstandPath}` : ""}
             {lastVerifyPass ? " · last verify passed" : ""}
+            {dashboard.is_dogfood ? " · dogfood on" : ""}
           </p>
+          {!dashboard.is_dogfood && dashboard.ade_source_root && (
+            <button
+              type="button"
+              onClick={onOpenAdeOnItself}
+              className="mt-4 rounded-lg border border-blue-400/30 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-100 hover:bg-blue-500/25"
+            >
+              Open ADE on itself
+            </button>
+          )}
+          {dashboard.is_dogfood && (
+            <p className="mt-3 text-[11px] text-emerald-300/80">
+              Dogfood profile active ·{" "}
+              <span className="font-mono text-emerald-200/70">{dashboard.workspace_root}</span>
+            </p>
+          )}
         </div>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">

@@ -18,7 +18,7 @@ Coexist with Cursor/Claude — do not become another IDE fork.
 | Goal | Meaning |
 |------|---------|
 | **Dogfood** | ADE workspace = ADE repo. Agent turns + verify ladder develop ADE. |
-| **Dogfood profile** | One-click “Open ADE on itself” / local profile points at repo root. |
+| **Dogfood profile** | One-click “Open ADE on itself” / local profile points at repo root. **Shipped** (Desktop command + Home CTA; persists under `%LOCALAPPDATA%/ade/workspace-root.txt`). |
 | **Dev/Debug mode** | Power chrome: turn traces, prompt budgets, ToolEffect, leases, raw verify, rebuild-lock warnings. |
 | **Self-build recipe** | Guided win: “Improve ADE” → plan → execute owned paths → verify G2/G3. |
 

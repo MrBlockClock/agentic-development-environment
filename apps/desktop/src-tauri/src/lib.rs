@@ -6,6 +6,7 @@ pub fn run() {
         .manage(ade_desktop_crate::commands::AppState::discover())
         .invoke_handler(tauri::generate_handler![
             ade_desktop_crate::commands::get_dashboard,
+            ade_desktop_crate::commands::open_ade_on_itself,
             ade_desktop_crate::commands::key_status,
             ade_desktop_crate::commands::key_set,
             ade_desktop_crate::commands::key_delete,
