@@ -30,6 +30,8 @@ impl PhaseExecutor {
         plan: &PlanReport,
         opts: &ExecuteOptions,
     ) -> Result<ExecuteReport, AdeError> {
-        ExecuteRunner::new(&self.root).run(plan, opts)
+        let mut ordered = plan.clone();
+        ordered.phases = crate::dag::DagBuilder::new().build(plan.phases.clone())?;
+        ExecuteRunner::new(&self.root).run(&ordered, opts)
     }
 }

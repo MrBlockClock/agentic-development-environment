@@ -337,7 +337,101 @@ fn build_plan(
         }
     }
 
+    items.extend(recipe_g5_scaffold_items(root, recipe));
+
     Ok(items)
+}
+
+fn recipe_g5_scaffold_items(root: &Path, recipe: &StackRecipe) -> Vec<PlanItem> {
+    use crate::recipe::RecipeG5;
+
+    let mut items = Vec::new();
+    let recipe_json = serde_json::json!({
+        "schema": "ade.recipe.meta/v1",
+        "id": recipe.id,
+        "g5": recipe.g5,
+    });
+    let recipe_meta = root.join(".ade").join("recipe.json");
+    items.push(PlanItem {
+        relative: ".ade/recipe.json".into(),
+        action: if recipe_meta.exists() {
+            ScaffoldAction::Update
+        } else {
+            ScaffoldAction::Create
+        },
+        content: Some(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&recipe_json).unwrap_or_else(|_| "{}".into())
+        )),
+    });
+
+    match recipe.g5 {
+        RecipeG5::Playwright => {
+            push_script_pair(
+                &mut items,
+                root,
+                "# G5 Playwright evidence\nnpx playwright test --reporter=line\n",
+                "npx playwright test --reporter=line\n",
+            );
+        }
+        RecipeG5::BinarySmoke
+        | RecipeG5::HttpContract
+        | RecipeG5::UpstreamTests
+        | RecipeG5::InstallSmoke
+        | RecipeG5::ParityProbes => {
+            push_script_pair(
+                &mut items,
+                root,
+                "# G5 cargo evidence\ncargo test --workspace -- --nocapture\n",
+                "cargo test --workspace -- --nocapture\n",
+            );
+        }
+        RecipeG5::PlaytestChecklist
+        | RecipeG5::ReproducibilityNote
+        | RecipeG5::DeviceChecklist
+        | RecipeG5::HardwareSignoff
+        | RecipeG5::PlanChecklist => {
+            let checklist = root.join("scripts").join("g5-checklist.md");
+            let body = format!(
+                "# G5 checklist ({})\n\n- [ ] Human reviewed acceptance criteria\n- [ ] Evidence attached or signed off\n- [ ] Replace this checklist with scripts/g5-evidence.* when automation exists\n",
+                recipe.id
+            );
+            items.push(PlanItem {
+                relative: "scripts/g5-checklist.md".into(),
+                action: if checklist.exists() {
+                    ScaffoldAction::Preserve
+                } else {
+                    ScaffoldAction::Create
+                },
+                content: if checklist.exists() { None } else { Some(body) },
+            });
+        }
+        RecipeG5::None => {}
+    }
+
+    items
+}
+
+fn push_script_pair(items: &mut Vec<PlanItem>, root: &Path, ps1: &str, sh: &str) {
+    for (relative, body) in [
+        ("scripts/g5-evidence.ps1", ps1),
+        ("scripts/g5-evidence.sh", sh),
+    ] {
+        let path = root.join(relative);
+        if path.exists() {
+            items.push(PlanItem {
+                relative: relative.into(),
+                action: ScaffoldAction::Preserve,
+                content: None,
+            });
+        } else {
+            items.push(PlanItem {
+                relative: relative.into(),
+                action: ScaffoldAction::Create,
+                content: Some(body.into()),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -481,6 +575,8 @@ mod tests {
         assert!(root.join(".cursorignore").is_file());
         assert!(root.join("rust-toolchain.toml").is_file());
         assert!(root.join(".nvmrc").is_file());
+        assert!(root.join(".ade").join("recipe.json").is_file());
+        assert!(root.join("scripts").join("g5-evidence.ps1").is_file());
         assert!(!journal_path(&root).exists());
         assert!(result
             .files

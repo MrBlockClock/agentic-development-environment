@@ -676,6 +676,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(summary) = &plan.human_summary_markdown {
                 println!("\n{summary}");
             }
+            ade_workflow::plan_enforcement::PlanEnforcer::save_plan(&root, &plan)?;
             let out = config.data_dir.join("last-plan.json");
             std::fs::create_dir_all(&config.data_dir)?;
             std::fs::write(&out, serde_json::to_string_pretty(&plan)?)?;
@@ -689,6 +690,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
             record_event(&config, "plan_run", Some(&plan.audit_root), None).await;
             println!("Wrote {}", out.display());
+            println!(
+                "Workspace plan gate: {}",
+                ade_workflow::plan_enforcement::PlanEnforcer::plan_path(&root).display()
+            );
         }
         Commands::Execute {
             approve,

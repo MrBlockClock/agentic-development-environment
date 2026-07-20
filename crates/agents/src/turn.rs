@@ -244,6 +244,11 @@ impl AgentTurnBuilder {
         };
         let authority = AuthorityEnforcer::load(&self.spec.workspace_root, owned_paths)?;
         let effective_owned_paths = authority.owned_paths();
+        ade_workflow::plan_enforcement::PlanEnforcer::new().ensure_approved_plan(
+            &self.spec.workspace_root,
+            &effective_owned_paths,
+            Some(&self.spec.prompt),
+        )?;
         let handoff_summary = match HandoffManager::new(&coordination_root).load_latest() {
             Ok(handoff) => {
                 let summary = handoff.prompt_summary(self.spec.handoff_chars);

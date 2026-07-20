@@ -188,6 +188,7 @@ fn format_verify_ladder(recipe: &StackRecipe) -> String {
     if let Some(c) = &recipe.commands.test {
         rows.push(format!("| G3 | {} |", inline_command(c)));
     }
+    rows.push(format!("| G5 | {:?} |", recipe.g5));
     rows.join("\n")
 }
 

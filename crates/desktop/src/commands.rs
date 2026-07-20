@@ -269,7 +269,10 @@ pub async fn run_audit(state: State<'_, AppState>) -> Result<AuditReport, String
 #[tauri::command]
 pub async fn run_plan(state: State<'_, AppState>) -> Result<PlanReport, String> {
     let audit = AuditRunner::new(&state.workspace_root).run(AuditMode::EvaluateExisting);
-    Ok(PlanBuilder::new().build(&audit))
+    let plan = PlanBuilder::new().build(&audit);
+    ade_workflow::plan_enforcement::PlanEnforcer::save_plan(&state.workspace_root, &plan)
+        .map_err(|error| error.to_string())?;
+    Ok(plan)
 }
 
 #[tauri::command]

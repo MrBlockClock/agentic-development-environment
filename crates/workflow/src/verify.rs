@@ -203,6 +203,67 @@ impl VerifyRunner {
             return persist_g5_evidence(&evidence_dir, result);
         }
 
+        match detect_recipe_g5(&self.root) {
+            ade_core::recipe::RecipeG5::Playwright => {
+                let has_playwright = self.root.join("playwright.config.ts").is_file()
+                    || self.root.join("playwright.config.js").is_file()
+                    || self.root.join("playwright.config.mjs").is_file()
+                    || package_json_mentions_playwright(&self.root);
+                if has_playwright {
+                    let result = self.run_commands(
+                        VerifyGate::G5,
+                        vec![CommandSpec::new(
+                            npx_command(),
+                            &["playwright", "test", "--reporter=line"],
+                        )],
+                    );
+                    return persist_g5_evidence(&evidence_dir, result);
+                }
+                return unavailable(
+                    VerifyGate::G5,
+                    "recipe G5 is Playwright but no playwright.config.* was found",
+                );
+            }
+            ade_core::recipe::RecipeG5::BinarySmoke
+            | ade_core::recipe::RecipeG5::HttpContract
+            | ade_core::recipe::RecipeG5::UpstreamTests
+            | ade_core::recipe::RecipeG5::InstallSmoke
+            | ade_core::recipe::RecipeG5::ParityProbes => {
+                if self.root.join("Cargo.toml").is_file() {
+                    let result = self.run_commands(
+                        VerifyGate::G5,
+                        vec![CommandSpec::new(
+                            "cargo",
+                            &["test", "--workspace", "--", "--nocapture"],
+                        )],
+                    );
+                    return persist_g5_evidence(&evidence_dir, result);
+                }
+                return unavailable(
+                    VerifyGate::G5,
+                    "recipe G5 expects cargo/binary evidence but Cargo.toml is missing",
+                );
+            }
+            ade_core::recipe::RecipeG5::PlaytestChecklist
+            | ade_core::recipe::RecipeG5::ReproducibilityNote
+            | ade_core::recipe::RecipeG5::DeviceChecklist
+            | ade_core::recipe::RecipeG5::HardwareSignoff
+            | ade_core::recipe::RecipeG5::PlanChecklist => {
+                let checklist = self.root.join("scripts").join("g5-checklist.md");
+                if checklist.is_file() {
+                    return unavailable(
+                        VerifyGate::G5,
+                        "recipe G5 requires human sign-off — complete scripts/g5-checklist.md then add scripts/g5-evidence.*",
+                    );
+                }
+                return unavailable(
+                    VerifyGate::G5,
+                    "recipe G5 requires human checklist/sign-off evidence (scripts/g5-checklist.md)",
+                );
+            }
+            ade_core::recipe::RecipeG5::None => {}
+        }
+
         let has_playwright = self.root.join("playwright.config.ts").is_file()
             || self.root.join("playwright.config.js").is_file()
             || self.root.join("playwright.config.mjs").is_file()
@@ -226,14 +287,12 @@ impl VerifyRunner {
                     &["test", "--workspace", "--", "--nocapture"],
                 )],
             );
-            // Binary/HTTP contract projects can use cargo tests as provisional G5
-            // when no Playwright suite exists; still persist evidence.
             return persist_g5_evidence(&evidence_dir, result);
         }
 
         unavailable(
             VerifyGate::G5,
-            "no Playwright config, scripts/g5-evidence.*, or Cargo tests found — add browser/hardware evidence",
+            "no recipe G5 profile, Playwright config, scripts/g5-evidence.*, or Cargo tests found",
         )
     }
 
@@ -318,6 +377,42 @@ impl CommandSpec {
             .current_dir(root)
             .output()
     }
+}
+
+fn detect_recipe_g5(root: &Path) -> ade_core::recipe::RecipeG5 {
+    let recipe_meta = root.join(".ade").join("recipe.json");
+    if let Ok(raw) = std::fs::read_to_string(&recipe_meta) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(g5) = value
+                .get("g5")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+            {
+                return g5;
+            }
+            if let Some(id) = value.get("id").and_then(|value| value.as_str()) {
+                if let Ok(recipe) = ade_core::recipe::builtin_recipe(id) {
+                    return recipe.g5;
+                }
+            }
+        }
+    }
+
+    if let Ok(agents) = std::fs::read_to_string(root.join("AGENTS.md")) {
+        if let Some(id) = agents
+            .lines()
+            .find_map(|line| {
+                line.split_once("stack recipe `")
+                    .and_then(|(_, rest)| rest.split('`').next())
+            })
+            .filter(|id| !id.is_empty())
+        {
+            if let Ok(recipe) = ade_core::recipe::builtin_recipe(id) {
+                return recipe.g5;
+            }
+        }
+    }
+
+    ade_core::recipe::RecipeG5::None
 }
 
 fn append_output(buffer: &mut Vec<u8>, output: &[u8]) {
@@ -490,6 +585,24 @@ mod tests {
             .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].gate, "G0");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn g5_follows_recipe_checklist_profile() {
+        let root = fixture();
+        fs::write(
+            root.join("AGENTS.md"),
+            "# Contract\n\nGenerated by ADE from stack recipe `embedded-hil` (`Embedded HIL`).\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(root.join("scripts").join("g5-checklist.md"), "# signoff\n").unwrap();
+        let result = VerifyRunner::with_root(&root)
+            .run_gate(VerifyGate::G5)
+            .await;
+        assert_eq!(result.status, VerifyStatus::Unavailable);
+        assert!(result.stderr.unwrap_or_default().contains("human sign-off"));
         let _ = fs::remove_dir_all(root);
     }
 
