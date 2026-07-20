@@ -719,9 +719,8 @@ fn resolve_turn_owned_paths(
         .collect();
 
     if paths.is_empty() {
-        if let Some(plan) =
-            ade_workflow::plan_enforcement::PlanEnforcer::load_plan(workspace_root)
-                .map_err(|error| error.to_string())?
+        if let Some(plan) = ade_workflow::plan_enforcement::PlanEnforcer::load_plan(workspace_root)
+            .map_err(|error| error.to_string())?
         {
             paths = plan
                 .phases
@@ -757,9 +756,7 @@ fn resolve_turn_owned_paths(
     paths.sort();
     paths.dedup();
     if paths.is_empty() {
-        return Err(
-            "approve owned paths requires a PLAN with owned_paths — run Plan first".into(),
-        );
+        return Err("approve owned paths requires a PLAN with owned_paths — run Plan first".into());
     }
     Ok(paths)
 }

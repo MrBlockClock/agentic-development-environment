@@ -3,8 +3,8 @@
 //! These tasks gate harness changes without live LLM spend. Expand toward 50
 //! tasks over time; dogfood/self-build probes are included.
 
-use crate::autonomy::AutonomyLevel;
 use crate::authority::{classify_tool_effect, ToolAuthRequest, ToolEffect, WriteScope};
+use crate::autonomy::AutonomyLevel;
 use crate::context::ContextBudget;
 use crate::skills::SkillLoader;
 use crate::start_prompt::StartPromptBuilder;
@@ -182,52 +182,207 @@ fn builtin_tasks() -> Vec<GoldTask> {
     vec![
         task("g01", "AGENTS.md present", "agents_md_present", true),
         task("g02", "Skills catalog loads", "skills_catalog_loads", true),
-        task("g03", "activate_skill rejects unknown", "activate_skill_missing", false),
-        task("g04", "Observe autonomy blocks writes", "autonomy_observe_blocks_write", false),
-        task("g05", "activate_skill is ReadOnly", "tool_effect_activate_skill_readonly", false),
-        task("g06", "Understand artifact guided win", "understand_artifact", true),
-        task("g07", "Guided verify win persists", "guided_mark_verify", true),
+        task(
+            "g03",
+            "activate_skill rejects unknown",
+            "activate_skill_missing",
+            false,
+        ),
+        task(
+            "g04",
+            "Observe autonomy blocks writes",
+            "autonomy_observe_blocks_write",
+            false,
+        ),
+        task(
+            "g05",
+            "activate_skill is ReadOnly",
+            "tool_effect_activate_skill_readonly",
+            false,
+        ),
+        task(
+            "g06",
+            "Understand artifact guided win",
+            "understand_artifact",
+            true,
+        ),
+        task(
+            "g07",
+            "Guided verify win persists",
+            "guided_mark_verify",
+            true,
+        ),
         task("g08", "Money USD roundtrip", "money_roundtrip", false),
-        task("g09", "Plan enforcer blocks risky without plan", "plan_enforcer_blocks_risky", true),
+        task(
+            "g09",
+            "Plan enforcer blocks risky without plan",
+            "plan_enforcer_blocks_risky",
+            true,
+        ),
         task("g10", "Verify G0 probe", "verify_g0", true),
-        task("g11", "Context budget skills cap", "context_budget_skills_cap", false),
-        task("g12", "T0 mentions activate_skill", "start_prompt_mentions_activate", false),
-        task("g13", "Propose autonomy blocks writes", "autonomy_propose_blocks_write", false),
-        task("g14", "Act autonomy allows writes", "autonomy_act_allows_write", false),
-        task("g15", "Automate requires verify-on-complete", "autonomy_automate_requires_verify", false),
-        task("g16", "Autonomy parse roundtrip", "autonomy_parse_roundtrip", false),
-        task("g17", "Autonomy parse rejects unknown", "autonomy_parse_rejects_unknown", false),
+        task(
+            "g11",
+            "Context budget skills cap",
+            "context_budget_skills_cap",
+            false,
+        ),
+        task(
+            "g12",
+            "T0 mentions activate_skill",
+            "start_prompt_mentions_activate",
+            false,
+        ),
+        task(
+            "g13",
+            "Propose autonomy blocks writes",
+            "autonomy_propose_blocks_write",
+            false,
+        ),
+        task(
+            "g14",
+            "Act autonomy allows writes",
+            "autonomy_act_allows_write",
+            false,
+        ),
+        task(
+            "g15",
+            "Automate requires verify-on-complete",
+            "autonomy_automate_requires_verify",
+            false,
+        ),
+        task(
+            "g16",
+            "Autonomy parse roundtrip",
+            "autonomy_parse_roundtrip",
+            false,
+        ),
+        task(
+            "g17",
+            "Autonomy parse rejects unknown",
+            "autonomy_parse_rejects_unknown",
+            false,
+        ),
         task("g18", "Money from USD string", "money_from_usd_str", false),
-        task("g19", "Money cost_for_tokens", "money_cost_for_tokens", false),
+        task(
+            "g19",
+            "Money cost_for_tokens",
+            "money_cost_for_tokens",
+            false,
+        ),
         task("g20", "Money saturating_add", "money_saturating_add", false),
-        task("g21", "Secret path blocks .env", "secret_path_blocks_env", true),
-        task("g22", "Secret path allows src", "secret_path_allows_src", false),
-        task("g23", ".env.example is not secret", "env_example_not_secret", false),
-        task("g24", "Canonical recipes count", "recipes_canonical_count", true),
-        task("g25", "business-saas recipe loads", "recipe_business_saas", true),
+        task(
+            "g21",
+            "Secret path blocks .env",
+            "secret_path_blocks_env",
+            true,
+        ),
+        task(
+            "g22",
+            "Secret path allows src",
+            "secret_path_allows_src",
+            false,
+        ),
+        task(
+            "g23",
+            ".env.example is not secret",
+            "env_example_not_secret",
+            false,
+        ),
+        task(
+            "g24",
+            "Canonical recipes count",
+            "recipes_canonical_count",
+            true,
+        ),
+        task(
+            "g25",
+            "business-saas recipe loads",
+            "recipe_business_saas",
+            true,
+        ),
         task("g26", "Verify gates are six", "verify_gates_six", false),
         task("g27", "VerifyGate parse G3", "verify_gate_parse_g3", false),
         task("g28", "Cargo.toml present", "cargo_toml_present", true),
         task("g29", ".ade/rules present", "ade_rules_dir", true),
         task("g30", ".ade/skills present", "ade_skills_dir", true),
         task("g31", "activate known skill", "activate_known_skill", true),
-        task("g32", "fs write_file is WorkspaceWrite", "tool_effect_fs_write", false),
-        task("g33", "fs read_file is ReadOnly", "tool_effect_fs_read", false),
-        task("g34", "shell run_command is ProcessExecution", "tool_effect_shell_process", false),
-        task("g35", "Guided improve win persists", "guided_mark_improve", true),
+        task(
+            "g32",
+            "fs write_file is WorkspaceWrite",
+            "tool_effect_fs_write",
+            false,
+        ),
+        task(
+            "g33",
+            "fs read_file is ReadOnly",
+            "tool_effect_fs_read",
+            false,
+        ),
+        task(
+            "g34",
+            "shell run_command is ProcessExecution",
+            "tool_effect_shell_process",
+            false,
+        ),
+        task(
+            "g35",
+            "Guided improve win persists",
+            "guided_mark_improve",
+            true,
+        ),
         task("g36", "Guided wins load empty", "guided_load_empty", false),
-        task("g37", "Context total allowance", "context_total_allowance", false),
-        task("g38", "T0 start prompt nonempty", "start_prompt_nonempty", false),
+        task(
+            "g37",
+            "Context total allowance",
+            "context_total_allowance",
+            false,
+        ),
+        task(
+            "g38",
+            "T0 start prompt nonempty",
+            "start_prompt_nonempty",
+            false,
+        ),
         task("g39", "AGENTS.md nonempty", "agents_md_nonempty", true),
-        task("g40", "Handoff prompt_summary", "handoff_prompt_summary", false),
-        task("g41", "Observe no mutating tools", "observe_no_mutating", false),
-        task("g42", "Propose no mutating tools", "propose_no_mutating", false),
+        task(
+            "g40",
+            "Handoff prompt_summary",
+            "handoff_prompt_summary",
+            false,
+        ),
+        task(
+            "g41",
+            "Observe no mutating tools",
+            "observe_no_mutating",
+            false,
+        ),
+        task(
+            "g42",
+            "Propose no mutating tools",
+            "propose_no_mutating",
+            false,
+        ),
         task("g43", "Act allows mutating tools", "act_mutating", false),
-        task("g44", "Automate allows mutating tools", "automate_mutating", false),
+        task(
+            "g44",
+            "Automate allows mutating tools",
+            "automate_mutating",
+            false,
+        ),
         task("g45", "VerifyGate G0 id", "verify_gate_id_g0", false),
         task("g46", "Money rejects NaN", "money_rejects_nan", false),
-        task("g47", "git push is ExternalWrite", "classify_git_push_external", false),
-        task("g48", "Skill catalog mentions a loaded skill", "skill_catalog_mentions_name", true),
+        task(
+            "g47",
+            "git push is ExternalWrite",
+            "classify_git_push_external",
+            false,
+        ),
+        task(
+            "g48",
+            "Skill catalog mentions a loaded skill",
+            "skill_catalog_mentions_name",
+            true,
+        ),
     ]
 }
 
@@ -298,7 +453,8 @@ fn probe_activate_skill_effect() -> Result<String, String> {
 }
 
 fn probe_understand() -> Result<String, String> {
-    let scratch = std::env::temp_dir().join(format!("ade-gold-understand-{}", uuid::Uuid::new_v4()));
+    let scratch =
+        std::env::temp_dir().join(format!("ade-gold-understand-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(scratch.join("crates")).map_err(|error| error.to_string())?;
     fs::write(scratch.join("Cargo.toml"), "[workspace]\nmembers=[]\n")
         .map_err(|error| error.to_string())?;
@@ -314,7 +470,8 @@ fn probe_understand() -> Result<String, String> {
 fn probe_guided_verify() -> Result<String, String> {
     let scratch = std::env::temp_dir().join(format!("ade-gold-verify-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
-    let wins = guided::mark_win(&scratch, GuidedWinId::Verify).map_err(|error| error.to_string())?;
+    let wins =
+        guided::mark_win(&scratch, GuidedWinId::Verify).map_err(|error| error.to_string())?;
     let _ = fs::remove_dir_all(&scratch);
     if !wins.verify {
         return Err("verify win not marked".into());
