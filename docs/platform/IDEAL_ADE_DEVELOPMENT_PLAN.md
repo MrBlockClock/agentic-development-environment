@@ -93,7 +93,7 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 
 | WP | Work |
 |----|------|
-| WP19 | Gold-set ≥10 deterministic harness tasks (+ dogfood); stretch ~48 builtin |
+| WP19 | Gold-set ≥10 deterministic harness tasks (+ dogfood); stretch **50** builtin |
 | WP20 | `ade eval --gold` CLI + `evals/gold/manifest.json` |
 | WP21 | CI job runs gold-set and fails on regression |
 

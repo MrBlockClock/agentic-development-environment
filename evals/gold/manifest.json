@@ -48,6 +48,8 @@
     { "id": "g45", "title": "VerifyGate G0 id", "kind": "verify_gate_id_g0", "dogfood": false },
     { "id": "g46", "title": "Money rejects NaN", "kind": "money_rejects_nan", "dogfood": false },
     { "id": "g47", "title": "git push is ExternalWrite", "kind": "classify_git_push_external", "dogfood": false },
-    { "id": "g48", "title": "Skill catalog mentions a loaded skill", "kind": "skill_catalog_mentions_name", "dogfood": true }
+    { "id": "g48", "title": "Skill catalog mentions a loaded skill", "kind": "skill_catalog_mentions_name", "dogfood": true },
+    { "id": "g49", "title": "Automate prompt clause present", "kind": "autonomy_automate_prompt_clause", "dogfood": false },
+    { "id": "g50", "title": "Always-ignore patterns nonempty", "kind": "always_ignore_nonempty", "dogfood": true }
   ]
 }

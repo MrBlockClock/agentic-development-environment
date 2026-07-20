@@ -145,6 +145,8 @@ impl GoldRunner {
             "money_rejects_nan" => probe_money_nan(),
             "classify_git_push_external" => probe_git_push_effect(),
             "skill_catalog_mentions_name" => probe_catalog_mentions(&self.root),
+            "autonomy_automate_prompt_clause" => probe_automate_clause(),
+            "always_ignore_nonempty" => probe_always_ignore(),
             other => Err(format!("unknown gold task kind '{other}'")),
         };
         match outcome {
@@ -381,6 +383,18 @@ fn builtin_tasks() -> Vec<GoldTask> {
             "g48",
             "Skill catalog mentions a loaded skill",
             "skill_catalog_mentions_name",
+            true,
+        ),
+        task(
+            "g49",
+            "Automate prompt clause present",
+            "autonomy_automate_prompt_clause",
+            false,
+        ),
+        task(
+            "g50",
+            "Always-ignore patterns nonempty",
+            "always_ignore_nonempty",
             true,
         ),
     ]
@@ -850,6 +864,23 @@ fn probe_catalog_mentions(root: &Path) -> Result<String, String> {
     Ok(format!("catalog mentions {name}"))
 }
 
+fn probe_automate_clause() -> Result<String, String> {
+    let clause = AutonomyLevel::Automate.prompt_clause();
+    if !clause.contains("verify") {
+        return Err("Automate clause missing verify".into());
+    }
+    Ok("Automate prompt clause ok".into())
+}
+
+fn probe_always_ignore() -> Result<String, String> {
+    use ade_core::ignore::always_ignore_patterns;
+    let patterns = always_ignore_patterns();
+    if patterns.is_empty() {
+        return Err("always_ignore empty".into());
+    }
+    Ok(format!("{} always-ignore patterns", patterns.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -863,8 +894,8 @@ mod tests {
             .to_path_buf();
         let report = GoldRunner::new(root).run_builtin();
         assert!(
-            report.total >= 40,
-            "expected ≥40 gold tasks, got {}",
+            report.total >= 50,
+            "expected ≥50 gold tasks, got {}",
             report.total
         );
         assert!(
