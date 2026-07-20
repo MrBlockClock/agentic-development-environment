@@ -46,6 +46,9 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --exclude ade-desktop-app
 
+      - name: Ideal ADE gold-set eval
+        run: cargo run -p ade-cli --quiet -- eval --gold
+
   desktop:
     name: Desktop frontend
     runs-on: windows-latest

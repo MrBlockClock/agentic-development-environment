@@ -1,6 +1,7 @@
 pub mod authority;
 pub mod autonomy;
 pub mod context;
+pub mod gold;
 pub mod handoff;
 pub mod ignore_enforcer;
 pub mod mcp;

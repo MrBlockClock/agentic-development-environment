@@ -1,0 +1,17 @@
+{
+  "schema": "ade.eval.gold-manifest/v1",
+  "tasks": [
+    { "id": "g01", "title": "AGENTS.md present", "kind": "agents_md_present", "dogfood": true },
+    { "id": "g02", "title": "Skills catalog loads", "kind": "skills_catalog_loads", "dogfood": true },
+    { "id": "g03", "title": "activate_skill rejects unknown", "kind": "activate_skill_missing", "dogfood": false },
+    { "id": "g04", "title": "Observe autonomy blocks writes", "kind": "autonomy_observe_blocks_write", "dogfood": false },
+    { "id": "g05", "title": "activate_skill is ReadOnly", "kind": "tool_effect_activate_skill_readonly", "dogfood": false },
+    { "id": "g06", "title": "Understand artifact guided win", "kind": "understand_artifact", "dogfood": true },
+    { "id": "g07", "title": "Guided verify win persists", "kind": "guided_mark_verify", "dogfood": true },
+    { "id": "g08", "title": "Money USD roundtrip", "kind": "money_roundtrip", "dogfood": false },
+    { "id": "g09", "title": "Plan enforcer blocks risky without plan", "kind": "plan_enforcer_blocks_risky", "dogfood": true },
+    { "id": "g10", "title": "Verify G0 probe", "kind": "verify_g0", "dogfood": true },
+    { "id": "g11", "title": "Context budget skills cap", "kind": "context_budget_skills_cap", "dogfood": false },
+    { "id": "g12", "title": "T0 mentions activate_skill", "kind": "start_prompt_mentions_activate", "dogfood": false }
+  ]
+}

@@ -1,7 +1,7 @@
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  
-**Status:** Active · I4 complete · I5 next · 2026-07-20  
+**Status:** Active · I5 complete · I6 next · 2026-07-20  
 **Canvas:** Ideal-ADE-development-plan.canvas.tsx  
 **Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard
 
@@ -89,10 +89,18 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP17 | Improve ADE starter opens Agent + marks self-build win |
 | WP18 | Persist guided wins in `.ade/artifacts/guided-wins.json` |
 
+## I5 work packages
+
+| WP | Work | Status |
+|----|------|--------|
+| WP19 | Gold-set ≥10 deterministic harness tasks (+ dogfood) | Shipping |
+| WP20 | `ade eval --gold` CLI + `evals/gold/manifest.json` | Shipping |
+| WP21 | CI job runs gold-set and fails on regression | Shipping |
+
 ## Held
 
 - SSO/SCIM/RBAC · Public EXECUTE HTTP · VS Code fork race · Signed marketplace · Cloud sync default
 
 ## Verify every phase
 
-`cargo fmt` · `clippy -D warnings` · targeted tests · `tsc --noEmit` · prefer `ade verify` through G3.
+`cargo fmt` · `clippy -D warnings` · targeted tests · `tsc --noEmit` · prefer `ade verify` through G3 · `ade eval --gold`.

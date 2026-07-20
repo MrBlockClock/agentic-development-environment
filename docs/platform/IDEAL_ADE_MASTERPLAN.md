@@ -1,7 +1,7 @@
 # Ideal ADE Masterplan
 
 **Schema:** `ade.ideal-masterplan/v1`  
-**Status:** Research-backed product plan · I4 complete · I5 next · 2026-07-20  
+**Status:** Research-backed product plan · I5 complete · I6 next · 2026-07-20  
 **Companion canvas:** Ideal-ADE-masterplan.canvas.tsx
 
 ## Positioning

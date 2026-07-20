@@ -49,6 +49,15 @@ enum Commands {
         #[arg(long)]
         through: bool,
     },
+    /// Run deterministic Ideal ADE gold-set evals (no live LLM)
+    Eval {
+        /// Run the gold-set harness probes
+        #[arg(long, default_value_t = true)]
+        gold: bool,
+        /// Workspace root (defaults to cwd)
+        #[arg(long)]
+        root: Option<String>,
+    },
     /// Manage BYOK provider keys in the OS credential vault
     Keys {
         #[command(subcommand)]
@@ -873,6 +882,30 @@ async fn main() -> anyhow::Result<()> {
 
             if results.iter().any(|result| !result.passed) {
                 anyhow::bail!("verification failed");
+            }
+        }
+        Commands::Eval { gold, root } => {
+            if !*gold {
+                anyhow::bail!("pass --gold (default) to run the Ideal ADE gold-set");
+            }
+            let root = resolve_workspace_root(root.as_deref())?;
+            let report = ade_agents::gold::GoldRunner::new(&root)
+                .run_manifest()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            println!(
+                "Gold-set {}/{} passed ({} failed)",
+                report.passed, report.total, report.failed
+            );
+            for result in &report.results {
+                let label = if result.passed { "PASS" } else { "FAIL" };
+                let dogfood = if result.dogfood { " [dogfood]" } else { "" };
+                println!(
+                    "{label} {} — {}{dogfood}: {}",
+                    result.id, result.title, result.detail
+                );
+            }
+            if !report.ok() {
+                anyhow::bail!("gold-set eval failed");
             }
         }
         Commands::Keys { action } => match action {
