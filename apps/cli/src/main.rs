@@ -181,6 +181,18 @@ enum Commands {
         /// Owned path to allow (repeatable); with --approve-owned-paths, empty falls back to PLAN
         #[arg(long = "owned-path")]
         owned_paths: Vec<String>,
+        /// Autonomy dial: observe | propose | act | automate (default propose)
+        #[arg(long, default_value = "propose")]
+        autonomy: String,
+        /// Max tool rounds for this turn
+        #[arg(long, default_value_t = 8)]
+        max_steps: u32,
+        /// Run verify after a successful turn
+        #[arg(long)]
+        verify_on_complete: bool,
+        /// Verify gate when --verify-on-complete / automate (default G3)
+        #[arg(long, default_value = "G3")]
+        verify_gate: String,
     },
 }
 
@@ -1806,6 +1818,10 @@ async fn main() -> anyhow::Result<()> {
             lease_agent,
             approve_owned_paths,
             owned_paths,
+            autonomy,
+            max_steps,
+            verify_on_complete,
+            verify_gate,
         } => {
             use std::io::Write;
 
@@ -1816,7 +1832,15 @@ async fn main() -> anyhow::Result<()> {
             let input_cost = ade_core::money::Money::try_from_usd_f64(*input_cost_per_mtok)?;
             let output_cost = ade_core::money::Money::try_from_usd_f64(*output_cost_per_mtok)?;
             let ledger = ade_db::usage_ledger::UsageLedgerStore::new(open_database(&config).await?);
+            let autonomy_level: ade_agents::autonomy::AutonomyLevel = autonomy
+                .parse()
+                .map_err(|error: String| anyhow::anyhow!(error))?;
             let write_paths = if *approve_owned_paths {
+                if !autonomy_level.allows_mutating_tools() {
+                    anyhow::bail!(
+                        "--approve-owned-paths requires --autonomy act|automate (got {autonomy})"
+                    );
+                }
                 resolve_cli_owned_paths(&root, owned_paths.clone())?
             } else {
                 if !owned_paths.is_empty() {
@@ -1824,6 +1848,15 @@ async fn main() -> anyhow::Result<()> {
                 }
                 vec![]
             };
+            let parsed_gate: ade_core::verify::VerifyGate = verify_gate
+                .parse()
+                .map_err(|error: String| anyhow::anyhow!(error))?;
+            let verify_gate_opt =
+                if *verify_on_complete || autonomy_level.requires_verify_on_complete() {
+                    Some(parsed_gate)
+                } else {
+                    None
+                };
             let mut builder =
                 ade_agents::turn::AgentTurnBuilder::new(ade_agents::turn::AgentTurnSpec {
                     prompt: prompt.clone(),
@@ -1839,7 +1872,10 @@ async fn main() -> anyhow::Result<()> {
                     owned_paths: write_paths,
                     handoff_chars: 1_500,
                 })
-                .ledger(ledger);
+                .ledger(ledger)
+                .autonomy(autonomy_level)
+                .max_tool_rounds((*max_steps).max(1) as usize)
+                .verify_on_complete(verify_gate_opt);
             if let Some(agent) = lease_agent {
                 let agent_id = uuid::Uuid::parse_str(agent)
                     .map_err(|error| anyhow::anyhow!("invalid --lease-agent uuid: {error}"))?;
@@ -1854,6 +1890,14 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 eprintln!("write scope: read-only (pass --approve-owned-paths for PLAN writes)");
             }
+            eprintln!(
+                "autonomy={} max_steps={} verify_on_complete={}",
+                autonomy_level.as_str(),
+                (*max_steps).max(1),
+                verify_gate_opt
+                    .map(|gate| gate.id().to_string())
+                    .unwrap_or_else(|| "off".into())
+            );
             let mut events = service.start();
             let mut failure = None;
             let mut final_result = None;
