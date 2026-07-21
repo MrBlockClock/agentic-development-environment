@@ -10,7 +10,13 @@ import {
 import { RulesEditor } from "./components/RulesEditor";
 import { PlanMap } from "./components/PlanMap";
 import { AtlasView } from "./components/AtlasView";
+import { BrowserApiSetup } from "./components/BrowserApiSetup";
+import {
+  CapabilityMatrix,
+  DesktopRequired,
+} from "./components/DesktopRequired";
 import { Chip, ChipRow, Disclosure, Hint } from "./components/ui";
+import { DESKTOP_REQUIRED_VIEWS } from "./capabilities";
 
 const DEV_MODE_KEY = "ade_dev_mode";
 const AUTONOMY_KEY = "ade_autonomy_level";
@@ -140,7 +146,7 @@ const navGroups: NavGroup[] = [
   {
     items: [
       { id: "Home", label: "Home", icon: "⌂" },
-      { id: "Agent", label: "Agent", icon: "✦" },
+      { id: "Agent", label: "Agent", icon: "✦", desktopOnly: true },
     ],
   },
   {
@@ -302,6 +308,8 @@ type DashboardSnapshot = {
   workspace_root: string;
   is_dogfood?: boolean;
   ade_source_root?: string | null;
+  has_recipe?: boolean;
+  has_provider_key?: boolean;
   audit: AuditReport;
   plan: PlanReport;
   handoff: HandoffMetrics;
@@ -433,6 +441,7 @@ function App() {
   });
   const [understandBusy, setUnderstandBusy] = useState(false);
   const [lastUnderstandPath, setLastUnderstandPath] = useState<string | null>(null);
+  const [browserApiProbeKey, setBrowserApiProbeKey] = useState(0);
 
   const toggleDevMode = () => {
     setDevMode((prev) => {
@@ -479,6 +488,7 @@ function App() {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setBrowserApiProbeKey((key) => key + 1);
     try {
       const [snapshot, wins] = await Promise.all([
         invoke<DashboardSnapshot>("get_dashboard"),
@@ -835,12 +845,14 @@ function App() {
         }`}
       >
         <div className="flex items-center gap-2.5 px-2 pb-3">
-          <div className="grid size-8 place-items-center rounded-lg border border-blue-400/35 bg-gradient-to-br from-blue-500/25 to-cyan-500/10 text-xs font-black tracking-tight text-blue-200">
+          <div
+            className="grid size-8 place-items-center rounded-lg border border-blue-400/35 bg-gradient-to-br from-blue-500/25 to-cyan-500/10 text-xs font-black tracking-tight text-blue-200"
+            aria-label="ADE"
+            title="ADE"
+          >
             ADE
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold tracking-wide text-slate-50">ADE</div>
-          </div>
+          <div className="min-w-0 flex-1" />
           <button
             type="button"
             className={`grid size-8 place-items-center rounded-lg border border-white/10 text-slate-400 ${
@@ -980,7 +992,7 @@ function App() {
             </button>
             <div className="min-w-0">
               <h1 className="text-sm font-semibold leading-tight">
-                {surfaceMode === "guided" && activeView === "Home" ? "ADE" : activeView}
+                {activeView}
                 {devMode && surfaceMode !== "guided" && (
                   <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
                     Debug
@@ -1041,8 +1053,16 @@ function App() {
           }`}
         >
           {!isTauri() && (
-            <div className="mb-5 rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[12px] leading-5 text-amber-100/90">
-              Chat and keys need the Desktop app. This browser view is for status and checks.
+            <div className="mb-5 space-y-3">
+              <BrowserApiSetup
+                refreshKey={browserApiProbeKey}
+                onResolved={() => {
+                  if (!dashboard) {
+                    void refresh();
+                  }
+                }}
+              />
+              <CapabilityMatrix shell="browser" />
             </div>
           )}
           {error && (
@@ -1055,6 +1075,13 @@ function App() {
             <LoadingState />
           ) : dashboard ? (
             <>
+              {DESKTOP_REQUIRED_VIEWS.has(activeView) && !isTauri() ? (
+                <DesktopRequired
+                  view={activeView}
+                  simpleMode={surfaceMode === "guided"}
+                />
+              ) : (
+                <>
               {activeView === "Home" && (
                 <HomeView
                   dashboard={dashboard}
@@ -1072,6 +1099,7 @@ function App() {
                   onOpenHealth={() => setActiveView("Health")}
                   onOpenRecipes={() => setActiveView("Recipes")}
                   onOpenKeys={() => setActiveView("Keys")}
+                  onOpenVerify={() => setActiveView("Verify")}
                   onUnderstand={() => void runUnderstandProject()}
                   onVerifyHome={() => void runVerify({ stayOnHome: true })}
                   onImproveAde={startImproveAde}
@@ -1180,6 +1208,8 @@ function App() {
                   onInitialize={(input) => void initializeRecipe(input)}
                 />
               )}
+                </>
+              )}
             </>
           ) : null}
         </div>
@@ -1204,6 +1234,7 @@ function HomeView({
   onOpenHealth,
   onOpenRecipes,
   onOpenKeys,
+  onOpenVerify,
   onUnderstand,
   onVerifyHome,
   onImproveAde,
@@ -1226,6 +1257,7 @@ function HomeView({
   onOpenHealth: () => void;
   onOpenRecipes: () => void;
   onOpenKeys: () => void;
+  onOpenVerify: () => void;
   onUnderstand: () => void;
   onVerifyHome: () => void;
   onImproveAde: () => void;
@@ -1233,14 +1265,67 @@ function HomeView({
   onRunAgent: () => void;
   onApplyPreset: (preset: (typeof PROMPT_PRESETS)[number]) => void;
 }) {
+  const [keyReady, setKeyReady] = useState(Boolean(dashboard.has_provider_key));
   const latestHandoff = dashboard.handoff.recent[0];
+  const recipeReady = Boolean(dashboard.has_recipe);
+  const verifyReady = guidedWins.verify;
+  const inBrowser = !isTauri();
+  // Browser can finish stack + verify; Keys/Agent stay a Desktop gate (not a fake done).
+  const browserSetupComplete = recipeReady && verifyReady;
+  const readinessComplete = inBrowser
+    ? browserSetupComplete
+    : keyReady && recipeReady && verifyReady;
   const winsDone =
-    Number(guidedWins.understand) + Number(guidedWins.verify) + Number(guidedWins.improve_ade);
+    Number(guidedWins.understand) +
+    Number(guidedWins.verify) +
+    (dashboard.is_dogfood ? Number(guidedWins.improve_ade) : 0);
+  const winsTotal = dashboard.is_dogfood ? 3 : 2;
+
+  useEffect(() => {
+    if (dashboard.has_provider_key) {
+      setKeyReady(true);
+      return;
+    }
+    if (!simpleMode || !isTauri()) {
+      setKeyReady(Boolean(dashboard.has_provider_key));
+      return;
+    }
+    let cancelled = false;
+    const providers = [
+      window.localStorage.getItem(AGENT_PROVIDER_KEY) || "openai",
+      ...PROVIDER_PRESETS.map((preset) => preset.id),
+    ];
+    const unique = [
+      ...new Set(providers.map((id) => id.trim().toLowerCase()).filter(Boolean)),
+    ];
+    void (async () => {
+      for (const provider of unique) {
+        try {
+          const status = await invoke<ProviderKeyStatus>("key_status", {
+            provider,
+            profile: "local",
+          });
+          if (cancelled) return;
+          if (status.configured) {
+            setKeyReady(true);
+            return;
+          }
+        } catch {
+          // keep probing
+        }
+      }
+      if (!cancelled) setKeyReady(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dashboard.has_provider_key, simpleMode]);
+
   const nextWin = !guidedWins.understand
     ? "Learn this project"
     : !guidedWins.verify
       ? "Check that things still work"
-      : !guidedWins.improve_ade
+      : dashboard.is_dogfood && !guidedWins.improve_ade
         ? "Try a small safe change"
         : null;
 
@@ -1261,33 +1346,143 @@ function HomeView({
       busy: verifying,
       onClick: onVerifyHome,
     },
+    ...(dashboard.is_dogfood
+      ? [
+          {
+            id: "improve" as const,
+            title: "Try a small safe change",
+            detail: "Open Agent with a careful, check-after change",
+            done: guidedWins.improve_ade,
+            busy: agentBusy,
+            onClick: onImproveAde,
+          },
+        ]
+      : []),
+  ];
+
+  const readinessSteps = [
     {
-      id: "improve" as const,
-      title: "Try a small safe change",
-      detail: "Open Agent with a careful, check-after change",
-      done: guidedWins.improve_ade,
-      busy: agentBusy,
-      onClick: onImproveAde,
+      id: "keys",
+      title: inBrowser ? "Add an API key (Desktop)" : "Add an API key",
+      detail: inBrowser
+        ? "BYOK vault is Desktop-only — open ADE Desktop for Keys"
+        : "BYOK so Agent can call your model",
+      done: inBrowser ? false : keyReady,
+      desktopOnly: inBrowser,
+      cta: inBrowser ? "Open Desktop path" : "Add API key",
+      onClick: onOpenKeys,
+    },
+    {
+      id: "recipe",
+      title: "Choose a stack",
+      detail: "Trust contract via Stack Fit / Recipes",
+      done: recipeReady,
+      desktopOnly: false,
+      cta: "Choose stack",
+      onClick: onOpenRecipes,
+    },
+    {
+      id: "verify",
+      title: "Check the workspace",
+      detail: "Run verify once before trusting agent work",
+      done: verifyReady,
+      desktopOnly: false,
+      cta: "Check workspace",
+      onClick: onVerifyHome,
     },
   ];
+  // In browser, prefer next actionable step that works here (skip Keys gate).
+  const nextReadiness = inBrowser
+    ? readinessSteps.find((step) => !step.done && !step.desktopOnly) ??
+      readinessSteps.find((step) => !step.done)
+    : readinessSteps.find((step) => !step.done);
+
+  const heroTitle = simpleMode
+    ? readinessComplete
+      ? inBrowser
+        ? "Browser ready"
+        : "Ready to work"
+      : "What should we do?"
+    : "Composer";
+  const heroSubtitle = simpleMode
+    ? readinessComplete
+      ? inBrowser
+        ? "Status and checks work here. Open Desktop for Keys and Agent."
+        : "Ask ADE, or open Agent for a longer session."
+      : inBrowser
+        ? "Finish stack + verify here, or open Desktop for Keys/Agent."
+        : "Finish setup, then tell ADE what to do."
+    : "Composer first. Sidebar for the rest.";
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       <section className="rounded-2xl border border-white/8 bg-[#0c121c] px-5 py-5 sm:px-6 sm:py-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">ADE</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              {simpleMode ? "Tell ADE what to do." : "Composer first. Sidebar for the rest."}
-            </p>
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">
+              {heroTitle}
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">{heroSubtitle}</p>
           </div>
           <p className="text-[11px] text-slate-500">
             {simpleMode
-              ? `${winsDone}/3 ready`
+              ? readinessComplete
+                ? `${winsDone}/${winsTotal} path`
+                : inBrowser
+                  ? `Browser setup ${[recipeReady, verifyReady].filter(Boolean).length}/2 · Keys→Desktop`
+                  : `Setup ${readinessSteps.filter((s) => s.done).length}/3`
               : `${scorePercent}% ready`}
             {dashboard.is_dogfood ? " · dogfood" : ""}
           </p>
         </div>
+
+        {simpleMode && !readinessComplete && (
+          <div className="mt-5 space-y-2 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-100/80">
+                Get ready
+              </p>
+              {nextReadiness && (
+                <button
+                  type="button"
+                  onClick={nextReadiness.onClick}
+                  className="rounded-lg bg-blue-500/90 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-400"
+                >
+                  {nextReadiness.cta}
+                </button>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              {readinessSteps.map((step) => (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={step.onClick}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition ${
+                    step.done
+                      ? "border-emerald-400/20 bg-emerald-500/8"
+                      : "border-white/8 bg-black/20 hover:border-blue-400/30"
+                  }`}
+                >
+                  <div>
+                    <div className="text-[12px] font-medium text-slate-200">{step.title}</div>
+                    <div className="text-[10px] text-slate-500">{step.detail}</div>
+                  </div>
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {step.done ? "done" : step.desktopOnly ? "Desktop" : "next"}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={onOpenVerify}
+              className="text-[10px] text-slate-500 hover:text-slate-300"
+            >
+              Open Verify view →
+            </button>
+          </div>
+        )}
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-stretch">
           <textarea
@@ -1302,12 +1497,24 @@ function HomeView({
           <button
             type="button"
             onClick={onRunAgent}
-            disabled={!prompt.trim() || agentBusy || !isTauri()}
+            disabled={
+              !prompt.trim() || agentBusy || !isTauri() || (simpleMode && !keyReady)
+            }
+            title={
+              simpleMode && !keyReady
+                ? "Add an API key before running Agent"
+                : undefined
+            }
             className="shrink-0 rounded-xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50 sm:min-w-[7.5rem]"
           >
             {agentBusy ? "…" : isTauri() ? "Go" : "Desktop"}
           </button>
         </div>
+        {simpleMode && !keyReady && (
+          <p className="mt-2 text-[11px] text-amber-200/80">
+            Add an API key before Go — Agent needs a provider credential.
+          </p>
+        )}
 
         <div className="mt-3 flex flex-wrap gap-1.5">
           {PROMPT_PRESETS.map((item) => (
@@ -1323,13 +1530,15 @@ function HomeView({
 
         {simpleMode && (
           <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-white/6 pt-4">
-            <button
-              type="button"
-              onClick={onOpenKeys}
-              className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-semibold text-slate-300 hover:bg-white/5"
-            >
-              {isTauri() ? "Add API key" : "Add API key (Desktop)"}
-            </button>
+            {!keyReady && (
+              <button
+                type="button"
+                onClick={onOpenKeys}
+                className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-semibold text-slate-300 hover:bg-white/5"
+              >
+                {isTauri() ? "Add API key" : "Add API key (Desktop)"}
+              </button>
+            )}
             {nextWin ? (
               <button
                 type="button"
@@ -1357,10 +1566,14 @@ function HomeView({
 
         {simpleMode && (
           <Disclosure
-            title="Guided steps"
-            summary={`${winsDone}/3`}
-            subtitle="Optional path — Learn, Check, then a small safe change"
-            defaultOpen={winsDone < 3}
+            title="Guided path"
+            summary={`${winsDone}/${winsTotal}`}
+            subtitle={
+              dashboard.is_dogfood
+                ? "Optional — Learn, Check, then a small safe change"
+                : "Optional — Learn this project, then Check"
+            }
+            defaultOpen={!readinessComplete || winsDone < winsTotal}
             storageKey="ade_home_guided_steps"
             className="mt-4"
           >
@@ -1441,7 +1654,7 @@ function HomeView({
           <span className="font-mono text-amber-100/70">{dashboard.workspace_root}</span>
           <span className="text-amber-100/50">
             {" "}
-            · leases {dashboard.leases.length} · guided {winsDone}/3
+            · leases {dashboard.leases.length} · guided {winsDone}/{winsTotal}
           </span>
         </section>
       )}

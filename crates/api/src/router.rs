@@ -103,6 +103,9 @@ struct ReadyHealth {
 struct ApiSnapshot {
     schema: &'static str,
     workspace_root: String,
+    has_recipe: bool,
+    /// Browser API has no OS vault; always false here. Desktop dashboard fills this.
+    has_provider_key: bool,
     audit: AuditReport,
     plan: PlanReport,
     handoff: ade_agents::handoff::HandoffMetrics,
@@ -447,6 +450,12 @@ async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot>
     Ok(Json(ApiSnapshot {
         schema: "ade.api.snapshot/v1",
         workspace_root: state.workspace_root().display().to_string(),
+        has_recipe: state
+            .workspace_root()
+            .join(".ade")
+            .join("recipe.json")
+            .is_file(),
+        has_provider_key: false,
         audit,
         plan,
         handoff,

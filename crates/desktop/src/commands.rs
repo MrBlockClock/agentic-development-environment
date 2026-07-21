@@ -145,6 +145,8 @@ pub struct DashboardSnapshot {
     pub workspace_root: String,
     pub is_dogfood: bool,
     pub ade_source_root: Option<String>,
+    pub has_recipe: bool,
+    pub has_provider_key: bool,
     pub audit: AuditReport,
     pub plan: PlanReport,
     pub handoff: ade_agents::handoff::HandoffMetrics,
@@ -177,10 +179,14 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
     let tasks = ade_workflow::tasks::TaskCoordinator::new(&workspace_root)
         .list()
         .map_err(|error| error.to_string())?;
+    let has_recipe = workspace_root.join(".ade").join("recipe.json").is_file();
+    let has_provider_key = any_provider_key_configured(state.key_vault.as_ref());
     Ok(DashboardSnapshot {
         workspace_root: workspace_root.display().to_string(),
         is_dogfood,
         ade_source_root: ade_source.map(|path| path.display().to_string()),
+        has_recipe,
+        has_provider_key,
         audit,
         plan,
         handoff,
@@ -188,6 +194,13 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
         tasks,
         rebuild_lock_warnings: rebuild_lock_warnings(),
     })
+}
+
+fn any_provider_key_configured(vault: &dyn ade_db::secrets::ProviderKeyVault) -> bool {
+    const PROVIDERS: &[&str] = &["openai", "anthropic", "openrouter", "azure-openai"];
+    PROVIDERS
+        .iter()
+        .any(|provider| vault.contains("local", provider).unwrap_or(false))
 }
 
 #[tauri::command]

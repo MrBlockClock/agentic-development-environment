@@ -25,7 +25,7 @@ pub async fn auth_middleware(State(state): State<ApiState>, req: Request, next: 
         Json(json!({
             "error": {
                 "code": "unauthorized",
-                "message": "valid bearer token required"
+                "message": "valid bearer token required (Authorization: Bearer must match ADE_API_TOKEN; EXECUTE is not available over HTTP)"
             }
         })),
     )

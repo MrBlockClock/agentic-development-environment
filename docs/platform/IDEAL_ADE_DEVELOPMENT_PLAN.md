@@ -1,7 +1,7 @@
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  
-**Status:** Active · I6 complete · Ideal spine shipped · 2026-07-20  
+**Status:** Active · Ideal spine + Guidance/Atlas/Fit shipped · **N2 done · N3 next** · 2026-07-20  
 **Canvas:** Ideal-ADE-development-plan.canvas.tsx  
 **Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard
 
@@ -108,6 +108,34 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 ## Held
 
 - SSO/SCIM/RBAC · Public EXECUTE HTTP · VS Code fork race · Signed marketplace · Cloud sync default
+
+## Next phases (post Ideal)
+
+| Phase | Name | Ships |
+|-------|------|-------|
+| **N1** | Local auth honesty | Browser token setup UX; clear 401s; never hardcode tokens; scope honesty (no EXECUTE HTTP) |
+| **N2** | Browser↔Desktop Simple path | Capability matrix; Guided funnel that does not lie |
+| **N3** | Dogfood Automate acceptance | Automate + owned paths + verify-on-complete → G3 checklist |
+| **N4** | Continuity resume | Home “Continue last handoff” → Agent |
+| **N5** | Atlas / Plan Map depth | Pan/zoom (or equiv); ≤2-click Guidance↔Atlas↔Plan |
+| **N6** | Stack Fit depth | Stronger Fit defaults/`why`; Fit smoke tests |
+| **N7** | Trust surfaces v2 | Ignore-drift UI; Spend under Trust; Audit log viewer |
+
+### N1 work packages
+
+| WP | Work | Status |
+|----|------|--------|
+| WP24 | Export browser API token helpers + typed auth errors in `ipc.ts` | Done |
+| WP25 | Browser API connection panel (save token, probe health/API, clear) | Done |
+| WP26 | Honest scope copy: reads/writes need matching `ADE_API_TOKEN`; no agent/EXECUTE over HTTP | Done |
+
+### N2 work packages
+
+| WP | Work | Status |
+|----|------|--------|
+| WP27 | Capability matrix (`capabilities.ts`) + UI disclosure | Done |
+| WP28 | DesktopRequired funnel for Agent / Keys / MCP in browser | Done |
+| WP29 | Guided Home readiness: browser finishes stack+verify; Keys stays Desktop gate | Done |
 
 ## Verify every phase
 
