@@ -1,24 +1,40 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import {
+  invoke as tauriInvoke,
+  isTauri as tauriIsTauri,
+} from "@tauri-apps/api/core";
 
-/** True when running inside the Tauri desktop shell. */
-export const isTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+/**
+ * Detect the Tauri shell at call time (not module load).
+ * A load-time const can race Tauri injection and permanently fall back to
+ * browser HTTP — which fails unless `ade serve` is running.
+ */
+export function isTauri(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    if (tauriIsTauri()) {
+      return true;
+    }
+  } catch {
+    // fall through to globals
+  }
+  const win = window as Window & {
+    isTauri?: boolean;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  return Boolean(win.isTauri) || "__TAURI_INTERNALS__" in win;
+}
 
 const apiBase = import.meta.env.VITE_ADE_API_URL ?? "http://127.0.0.1:3210";
 
-/**
- * TEMP (browser preview testing only): default bearer when localStorage /
- * VITE_ADE_API_TOKEN are unset. Must match `ADE_API_TOKEN` used by `ade serve`.
- * Remove before shipping a public build.
- */
-const TEMP_BROWSER_API_TOKEN = "ade-local-dev";
-
+/** Browser preview bearer: localStorage, then VITE_ADE_API_TOKEN (must match ADE_API_TOKEN). */
 function browserApiToken(): string | null {
   const fromStorage = window.localStorage.getItem("ade_api_token")?.trim();
   if (fromStorage) return fromStorage;
   const fromEnv = import.meta.env.VITE_ADE_API_TOKEN?.trim();
   if (fromEnv) return fromEnv;
-  return TEMP_BROWSER_API_TOKEN;
+  return null;
 }
 
 /** Read-only commands that map onto the local ADE HTTP API in browser mode. */
@@ -38,10 +54,7 @@ const httpReads: Record<string, string> = {
  */
 const browserEmptyReads = new Set(["mcp_list_servers", "mcp_list_tools"]);
 
-async function http<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string> | undefined),
   };
@@ -61,7 +74,7 @@ async function http<T>(
   if (response.status === 401) {
     throw new Error(
       "Browser mode: the local ADE API rejected the bearer token. " +
-        'Set localStorage ade_api_token to match ADE_API_TOKEN, or restart serve with ADE_API_TOKEN=ade-local-dev.',
+        "Set localStorage ade_api_token (or VITE_ADE_API_TOKEN) to match ADE_API_TOKEN on `ade serve`.",
     );
   }
   if (!response.ok) {
@@ -87,7 +100,7 @@ export async function invoke<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  if (isTauri) {
+  if (isTauri()) {
     return tauriInvoke<T>(command, args);
   }
   if (browserEmptyReads.has(command)) {

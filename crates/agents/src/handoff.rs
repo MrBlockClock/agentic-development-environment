@@ -126,11 +126,17 @@ impl HandoffManager {
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 
         let mut capsules = Vec::new();
-        for (_, id, path) in entries.into_iter().take(limit) {
+        for (_, id, path) in entries {
+            if capsules.len() >= limit {
+                break;
+            }
             let payload = std::fs::read(&path)?;
-            let capsule: HandoffCapsule = serde_json::from_slice(&payload)?;
-            validate_capsule(&capsule)?;
-            capsules.push((id, capsule));
+            match serde_json::from_slice::<HandoffCapsule>(&payload) {
+                Ok(capsule) if validate_capsule(&capsule).is_ok() => {
+                    capsules.push((id, capsule));
+                }
+                _ => continue,
+            }
         }
         Ok(capsules)
     }

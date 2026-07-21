@@ -7,8 +7,14 @@ edition = "2021"
 name = "ade_desktop_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Embed frontendDist so `ade-desktop-app.exe` works without Vite on :1420.
+# `tauri dev` disables this for HMR against devUrl.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
-tauri = { workspace = true, features = [] }
+tauri = { workspace = true }
 tauri-plugin-shell = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 serde = { workspace = true }

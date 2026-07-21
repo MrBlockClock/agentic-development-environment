@@ -718,7 +718,7 @@ function App() {
     approveOwnedPaths: boolean;
     ownedPaths: string[];
   }) => {
-    if (!isTauri) {
+    if (!isTauri()) {
       setError(
         "Agent turns require the ADE desktop app; the browser preview is read-only.",
       );
@@ -893,7 +893,7 @@ function App() {
               )}
               <div className="space-y-px">
                 {group.items.map((item) => {
-                  const needsDesktop = Boolean(item.desktopOnly) && !isTauri;
+                  const needsDesktop = Boolean(item.desktopOnly) && !isTauri();
                   return (
                     <button
                       key={item.id}
@@ -958,7 +958,7 @@ function App() {
           )}
           {surfaceMode !== "guided" && (
             <div className="px-3 py-1.5 text-[10px] leading-4 text-slate-600">
-              {isTauri ? "Desktop" : "Browser preview"}
+              {isTauri() ? "Desktop" : "Browser preview"}
               {mcpServers.length > 0 ? ` · ${mcpServers.length} MCP` : ""}
             </div>
           )}
@@ -994,7 +994,7 @@ function App() {
                 >
                   {workspaceLeaf(dashboard?.workspace_root)}
                   {dashboard?.is_dogfood ? " · dogfood" : ""}
-                  {!isTauri && " · browser"}
+                  {!isTauri() && " · browser"}
                 </p>
               )}
             </div>
@@ -1040,7 +1040,7 @@ function App() {
             surfaceMode === "guided" ? "sm:p-7" : "sm:p-5"
           }`}
         >
-          {!isTauri && (
+          {!isTauri() && (
             <div className="mb-5 rounded-xl border border-amber-400/25 bg-amber-400/8 px-4 py-3 text-[12px] leading-5 text-amber-100/90">
               Chat and keys need the Desktop app. This browser view is for status and checks.
             </div>
@@ -1302,10 +1302,10 @@ function HomeView({
           <button
             type="button"
             onClick={onRunAgent}
-            disabled={!prompt.trim() || agentBusy || !isTauri}
+            disabled={!prompt.trim() || agentBusy || !isTauri()}
             className="shrink-0 rounded-xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50 sm:min-w-[7.5rem]"
           >
-            {agentBusy ? "…" : isTauri ? "Go" : "Desktop"}
+            {agentBusy ? "…" : isTauri() ? "Go" : "Desktop"}
           </button>
         </div>
 
@@ -1328,7 +1328,7 @@ function HomeView({
               onClick={onOpenKeys}
               className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-semibold text-slate-300 hover:bg-white/5"
             >
-              {isTauri ? "Add API key" : "Add API key (Desktop)"}
+              {isTauri() ? "Add API key" : "Add API key (Desktop)"}
             </button>
             {nextWin ? (
               <button
@@ -2035,7 +2035,7 @@ function AgentView({
     if (!autoSubmit) return;
     onAutoSubmitHandled?.();
     const nextPrompt = (initialPrompt.trim() || prompt).trim();
-    if (!nextPrompt || !provider.trim() || !model.trim() || busy || !isTauri) {
+    if (!nextPrompt || !provider.trim() || !model.trim() || busy || !isTauri()) {
       return;
     }
     if (initialPrompt.trim()) {
@@ -2243,13 +2243,13 @@ function AgentView({
             <button
               onClick={submit}
               disabled={
-                busy || !prompt.trim() || !provider.trim() || !model.trim() || !isTauri
+                busy || !prompt.trim() || !provider.trim() || !model.trim() || !isTauri()
               }
               className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
             >
               {busy
                 ? "…"
-                : isTauri
+                : isTauri()
                   ? "Go"
                   : "Desktop"}
             </button>
@@ -3318,7 +3318,7 @@ function McpView({
         <Panel title="Connected servers" subtitle={`${servers.length} active`}>
           {servers.length === 0 ? (
             <div className="py-12 text-center text-xs text-slate-500">
-              {isTauri
+              {isTauri()
                 ? "No MCP servers connected yet."
                 : "Browser preview cannot host MCP connections — open ADE Desktop to connect servers."}
             </div>
