@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
+import type { TurnFailureAction, TurnFailureAdvice } from "./turnFailure";
+
+export type { TurnFailureAction, TurnFailureAdvice };
 
 export type AgentFeedEvent =
   | { type: "user_message"; text: string }
@@ -26,6 +29,13 @@ export type AgentFeedEvent =
       period_key: string;
       projected_micros: number;
       soft_cap_micros: number;
+    }
+  | {
+      type: "budget_exhausted";
+      kind: string;
+      limit: number;
+      used: number;
+      detail: string;
     }
   | { type: "verify_complete"; gate: string; passed: boolean; summary: string }
   | {
@@ -170,11 +180,27 @@ function buildSteps(events: AgentFeedEvent[]): Step[] {
       });
       return;
     }
+    if (event.type === "budget_exhausted") {
+      const label =
+        event.kind === "tool_rounds"
+          ? `Budget exhausted · ${event.used}/${event.limit} tool rounds`
+          : event.kind === "output_tokens"
+            ? `Budget exhausted · ${event.used}/${event.limit} output tokens`
+            : `Budget exhausted · ${event.detail}`;
+      steps.push({
+        kind: "note",
+        key: `budget-${index}`,
+        tone: "warn",
+        text: label,
+      });
+      return;
+    }
     if (event.type === "failed") {
+      const budget = /budget exhausted/i.test(event.error);
       steps.push({
         kind: "note",
         key: `failed-${index}`,
-        tone: "error",
+        tone: budget ? "warn" : "error",
         text: event.error,
       });
       return;
@@ -195,20 +221,32 @@ function buildSteps(events: AgentFeedEvent[]): Step[] {
 function StatusPill({
   busy,
   failed,
+  budget,
   completed,
 }: {
   busy: boolean;
   failed: boolean;
+  budget: boolean;
   completed: boolean;
 }) {
-  const label = busy ? "Running" : failed ? "Failed" : completed ? "Done" : "Idle";
+  const label = busy
+    ? "Running"
+    : budget
+      ? "Budget"
+      : failed
+        ? "Failed"
+        : completed
+          ? "Done"
+          : "Idle";
   const klass = busy
     ? "bg-blue-500/20 text-blue-100"
-    : failed
-      ? "bg-red-500/20 text-red-200"
-      : completed
-        ? "bg-emerald-500/20 text-emerald-100"
-        : "bg-white/8 text-slate-400";
+    : budget
+      ? "bg-amber-500/20 text-amber-100"
+      : failed
+        ? "bg-red-500/20 text-red-200"
+        : completed
+          ? "bg-emerald-500/20 text-emerald-100"
+          : "bg-white/8 text-slate-400";
   return (
     <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${klass}`}>
       {busy && <span className="mr-1 inline-block size-1.5 animate-pulse rounded-full bg-blue-300" />}
@@ -394,10 +432,14 @@ export function AgentActivityFeed({
   autonomySuggest = false,
   autonomyLabel,
   scopeLabel,
+  maxSteps,
   onSwitchToApply,
   onSwitchToHomeScope,
   onPrefillPrompt,
   onSelectOption,
+  failureAdvice = null,
+  failureBusy = false,
+  onFailureAction,
 }: {
   events: AgentFeedEvent[];
   busy: boolean;
@@ -407,12 +449,17 @@ export function AgentActivityFeed({
   autonomyLabel?: string;
   /** Workspace / Home shell scope (G1). */
   scopeLabel?: string;
+  /** Effort tool-round cap for live used/remaining. */
+  maxSteps?: number;
   onSwitchToApply?: () => void;
   /** Flip shell scope to Home/Desktop for organize-style goals. */
   onSwitchToHomeScope?: () => void;
   onPrefillPrompt?: (text: string) => void;
   /** Clicking a suggested option runs a turn with that text. */
   onSelectOption?: (text: string) => void;
+  failureAdvice?: TurnFailureAdvice | null;
+  failureBusy?: boolean;
+  onFailureAction?: (action: TurnFailureAction) => void;
 }): ReactNode {
   const started = [...events]
     .reverse()
@@ -428,12 +475,25 @@ export function AgentActivityFeed({
     (event): event is Extract<AgentFeedEvent, { type: "failed" }> =>
       event.type === "failed",
   );
+  const budgetExhausted = [...events].reverse().find(
+    (event): event is Extract<AgentFeedEvent, { type: "budget_exhausted" }> =>
+      event.type === "budget_exhausted",
+  );
+  const budgetStop =
+    Boolean(budgetExhausted) ||
+    Boolean(failed && /budget exhausted/i.test(failed.error));
   const usage = [...events].reverse().find(
     (event): event is Extract<AgentFeedEvent, { type: "usage" }> =>
       event.type === "usage",
   );
   const steps = buildSteps(events);
   const toolCount = steps.filter((step) => step.kind === "tool").length;
+  const roundCap =
+    typeof maxSteps === "number" && Number.isFinite(maxSteps) && maxSteps > 0
+      ? Math.floor(maxSteps)
+      : null;
+  const roundsRemaining =
+    roundCap != null ? Math.max(0, roundCap - toolCount) : null;
 
   const turns: { user?: string; events: AgentFeedEvent[] }[] = [];
   for (const event of events) {
@@ -449,7 +509,12 @@ export function AgentActivityFeed({
     <div className="space-y-4">
       {(busy || started || failed || completed || autonomyLabel || scopeLabel) && (
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
-          <StatusPill busy={busy} failed={Boolean(failed)} completed={Boolean(completed)} />
+          <StatusPill
+            busy={busy}
+            failed={Boolean(failed) && !budgetStop}
+            budget={budgetStop}
+            completed={Boolean(completed)}
+          />
           {autonomyLabel && (
             <span className="rounded bg-white/5 px-1.5 py-0.5 font-semibold text-slate-400">
               {autonomyLabel}
@@ -470,10 +535,24 @@ export function AgentActivityFeed({
                 ? "Connecting…"
                 : "Idle"}
           </span>
-          {toolCount > 0 && (
-            <span>
-              {toolCount} tool{toolCount === 1 ? "" : "s"}
+          {roundCap != null ? (
+            <span
+              title="Effort tool-round budget for this turn"
+              className={
+                busy && roundsRemaining != null && roundsRemaining <= 2
+                  ? "font-semibold text-amber-200/90"
+                  : undefined
+              }
+            >
+              {toolCount}/{roundCap} rounds
+              {busy && roundsRemaining != null ? ` · ${roundsRemaining} left` : ""}
             </span>
+          ) : (
+            toolCount > 0 && (
+              <span>
+                {toolCount} tool{toolCount === 1 ? "" : "s"}
+              </span>
+            )
           )}
           {usage && (
             <span>
@@ -565,9 +644,50 @@ export function AgentActivityFeed({
             {turnFailed && (
               <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-[12px] leading-5 text-red-100">
                 <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-200/90">
-                  Turn failed
+                  {isLatest && failureAdvice ? failureAdvice.title : "Turn failed"}
                 </div>
-                {turnFailed.error}
+                {isLatest && failureAdvice && (
+                  <p className="mb-1.5 text-[11px] leading-5 text-red-100/85">
+                    {failureAdvice.summary}
+                  </p>
+                )}
+                <p className="font-mono text-[11px] leading-5 text-red-100/75 break-words">
+                  {turnFailed.error}
+                </p>
+                {isLatest && failureAdvice && onFailureAction && !busy && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {failureAdvice.autoFix && (
+                      <button
+                        type="button"
+                        disabled={failureBusy}
+                        onClick={() => onFailureAction(failureAdvice.autoFix!)}
+                        className="rounded-md border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-40"
+                      >
+                        Fix &amp; retry
+                      </button>
+                    )}
+                    {failureAdvice.actions
+                      .filter((action) => {
+                        if (!failureAdvice.autoFix) return true;
+                        return !(
+                          action.id === failureAdvice.autoFix.id &&
+                          JSON.stringify(action) ===
+                            JSON.stringify(failureAdvice.autoFix)
+                        );
+                      })
+                      .map((action) => (
+                        <button
+                          key={`${action.id}-${"model" in action ? action.model : ""}${"providerId" in action ? action.providerId : ""}`}
+                          type="button"
+                          disabled={failureBusy}
+                          onClick={() => onFailureAction(action)}
+                          className="rounded-md border border-white/12 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/10 disabled:opacity-40"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                  </div>
+                )}
               </div>
             )}
             {turnCancelled && !turnFailed && (

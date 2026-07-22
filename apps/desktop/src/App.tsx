@@ -11,9 +11,14 @@ import { RulesEditor } from "./components/RulesEditor";
 import { PlanMap } from "./components/PlanMap";
 import { AtlasView } from "./components/AtlasView";
 import { AgentActivityFeed } from "./components/AgentActivityFeed";
+import {
+  evaluateTurnFailure,
+  failureFingerprint,
+  type TurnFailureAction,
+} from "./components/turnFailure";
 import { BrowserApiSetup } from "./components/BrowserApiSetup";
 import { BrowserView } from "./components/BrowserView";
-import { EditorView } from "./components/EditorView";
+import { EditorView, ADE_EDITOR_INTENT_KEY } from "./components/EditorView";
 import { TerminalView } from "./components/TerminalView";
 import { SettingsView } from "./components/SettingsView";
 import { WorkspacesView } from "./components/WorkspacesView";
@@ -83,11 +88,26 @@ const EFFORT_OPTIONS: {
   maxTokens: number | null;
   maxSteps: number;
 }[] = [
-  { id: "low", label: "Low", maxTokens: 4_096, maxSteps: 8 },
-  { id: "medium", label: "Med", maxTokens: 16_384, maxSteps: 16 },
+  { id: "low", label: "Low · 16", maxTokens: 4_096, maxSteps: 16 },
+  { id: "medium", label: "Med · 24", maxTokens: 16_384, maxSteps: 24 },
   // High: no cumulative kill-switch — finish the task (maxSteps still applies).
-  { id: "high", label: "High", maxTokens: null, maxSteps: 32 },
+  { id: "high", label: "High · 32", maxTokens: null, maxSteps: 32 },
 ];
+
+/** Apply/Automate/Continuity floor at Med; Suggest may stay Low. */
+function effectiveEffort(
+  autonomy: AutonomyLevel,
+  stored: EffortLevel,
+  context: "normal" | "continuity" = "normal",
+): EffortLevel {
+  if (context === "continuity") {
+    return stored === "high" ? "high" : "medium";
+  }
+  if (autonomy === "propose" || autonomy === "observe") {
+    return stored;
+  }
+  return stored === "low" ? "medium" : stored;
+}
 
 function providerSupportsEffort(providerId: string): boolean {
   return ["opencode", "openai", "anthropic", "openrouter"].includes(providerId);
@@ -438,6 +458,13 @@ type AgentEvent =
       projected_micros: number;
       soft_cap_micros: number;
     }
+  | {
+      type: "budget_exhausted";
+      kind: string;
+      limit: number;
+      used: number;
+      detail: string;
+    }
   | { type: "verify_complete"; gate: string; passed: boolean; summary: string }
   | { type: "completed"; result: AgentTurnResult }
   | { type: "failed"; error: string }
@@ -488,9 +515,12 @@ function App() {
   const [recipePlanError, setRecipePlanError] = useState<string | null>(null);
   const [recipeResult, setRecipeResult] = useState<ScaffoldResult | null>(null);
   const [homePrompt, setHomePrompt] = useState("");
+  const [agentAutoSubmit, setAgentAutoSubmit] = useState(false);
+  const [agentAutoSubmitContext, setAgentAutoSubmitContext] = useState<
+    "normal" | "continuity"
+  >("normal");
   const [planFocusPhaseId, setPlanFocusPhaseId] = useState<string | null>(null);
   const [atlasFocusNodeId, setAtlasFocusNodeId] = useState<string | null>(null);
-  const [agentAutoSubmit, setAgentAutoSubmit] = useState(false);
   const [pendingImproveWin, setPendingImproveWin] = useState(false);
   const [guidedWins, setGuidedWins] = useState<GuidedWinsState>({
     understand: false,
@@ -705,11 +735,21 @@ function App() {
         resumePrompt: string;
         goal: string;
         nextSafeCommand: string;
+        turnStatus?: string | null;
+        hostRanNext?: boolean;
+        hostExitCode?: number | null;
       }>("handoff_resume", { id: id ?? null });
       if (!resume.available || !resume.resumePrompt.trim()) {
         setError("No handoff capsule to continue yet. Run an agent turn or Check first.");
         return;
       }
+      const stored =
+        (window.localStorage.getItem(AGENT_EFFORT_KEY) as EffortLevel | null) ??
+        "medium";
+      const nextEffort = effectiveEffort("act", stored, "continuity");
+      window.localStorage.setItem(AGENT_EFFORT_KEY, nextEffort);
+      window.localStorage.setItem(AUTONOMY_KEY, "act");
+      setAgentAutoSubmitContext("continuity");
       setHomePrompt(resume.resumePrompt);
       setAgentAutoSubmit(true);
       setActiveView("Home");
@@ -1253,7 +1293,11 @@ function App() {
                     connectedTools={mcpTools.length}
                     initialPrompt={homePrompt}
                     autoSubmit={agentAutoSubmit}
-                    onAutoSubmitHandled={() => setAgentAutoSubmit(false)}
+                    autoSubmitContext={agentAutoSubmitContext}
+                    onAutoSubmitHandled={() => {
+                      setAgentAutoSubmit(false);
+                      setAgentAutoSubmitContext("normal");
+                    }}
                     sharedVerifyGate={gate}
                     devMode={debugChrome}
                     simpleMode={false}
@@ -1267,18 +1311,20 @@ function App() {
                         ...(!dashboard.has_recipe ? [".ade/recipe.json"] : []),
                       ]),
                     ]}
-                  rebuildLockWarnings={dashboard.rebuild_lock_warnings ?? []}
-                  handoffAvailable={
-                    dashboard.handoff.capsule_count > 0 ||
-                    Boolean(dashboard.handoff.latest_status)
-                  }
-                  onContinueHandoff={() => void continueLastHandoff()}
-                  onClearTranscript={() => setAgentEvents([])}
-                  tasks={dashboard.tasks ?? []}
-                  planPhaseCount={dashboard.plan.phases.length}
-                  onRefresh={() => void refresh()}
-                  onRun={(input) => void runAgentTurn(input)}
-                />
+                    rebuildLockWarnings={dashboard.rebuild_lock_warnings ?? []}
+                    handoffAvailable={
+                      dashboard.handoff.capsule_count > 0 ||
+                      Boolean(dashboard.handoff.latest_status)
+                    }
+                    handoffLatestStatus={dashboard.handoff.latest_status}
+                    onContinueHandoff={() => void continueLastHandoff()}
+                    onClearTranscript={() => setAgentEvents([])}
+                    onOpenKeys={() => setActiveView("Keys")}
+                    tasks={dashboard.tasks ?? []}
+                    planPhaseCount={dashboard.plan.phases.length}
+                    onRefresh={() => void refresh()}
+                    onRun={(input) => void runAgentTurn(input)}
+                  />
                 ) : (
                   <HomeView
                     dashboard={dashboard}
@@ -1336,6 +1382,13 @@ function App() {
                   onOpenHome={() => setActiveView("Home")}
                   onOpenWorkspaces={() => setActiveView("Workspaces")}
                   onContinueHandoff={() => void continueLastHandoff()}
+                  onReviewHandoffInEditor={() => {
+                    window.sessionStorage.setItem(
+                      ADE_EDITOR_INTENT_KEY,
+                      JSON.stringify({ mode: "handoff" }),
+                    );
+                    setActiveView("Editor");
+                  }}
                   onRefresh={() => void refresh()}
                   devMode={debugChrome}
                 />
@@ -1963,6 +2016,7 @@ function Overview({
   onOpenHome,
   onOpenWorkspaces,
   onContinueHandoff,
+  onReviewHandoffInEditor,
   onRefresh,
   devMode = false,
 }: {
@@ -1980,6 +2034,7 @@ function Overview({
   onOpenHome: () => void;
   onOpenWorkspaces: () => void;
   onContinueHandoff?: () => void;
+  onReviewHandoffInEditor?: () => void;
   onRefresh?: () => void;
   devMode?: boolean;
 }) {
@@ -2663,6 +2718,15 @@ function Overview({
             >
               Continue → Home
             </button>
+            {onReviewHandoffInEditor && (
+              <button
+                type="button"
+                onClick={onReviewHandoffInEditor}
+                className="shrink-0 rounded-md border border-amber-400/30 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25"
+              >
+                Review in Editor
+              </button>
+            )}
           </div>
         )}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -2847,6 +2911,7 @@ function AgentView({
   onRun,
   initialPrompt = "",
   autoSubmit = false,
+  autoSubmitContext = "normal",
   onAutoSubmitHandled,
   sharedVerifyGate = "G3",
   devMode = false,
@@ -2858,8 +2923,10 @@ function AgentView({
   planOwnedPaths = [],
   rebuildLockWarnings = [],
   handoffAvailable = false,
+  handoffLatestStatus = null,
   onContinueHandoff,
   onClearTranscript,
+  onOpenKeys,
   tasks = [],
   planPhaseCount = 0,
   onRefresh,
@@ -2869,6 +2936,7 @@ function AgentView({
   connectedTools: number;
   initialPrompt?: string;
   autoSubmit?: boolean;
+  autoSubmitContext?: "normal" | "continuity";
   onAutoSubmitHandled?: () => void;
   sharedVerifyGate?: string;
   devMode?: boolean;
@@ -2880,8 +2948,10 @@ function AgentView({
   planOwnedPaths?: string[];
   rebuildLockWarnings?: string[];
   handoffAvailable?: boolean;
+  handoffLatestStatus?: string | null;
   onContinueHandoff?: () => void;
   onClearTranscript?: () => void;
+  onOpenKeys?: () => void;
   tasks?: AgentTask[];
   planPhaseCount?: number;
   onRefresh?: () => void;
@@ -2981,6 +3051,219 @@ function AgentView({
   const feedBottomRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const autoFixedFailureRef = useRef<string | null>(null);
+  const [failureNote, setFailureNote] = useState<string | null>(null);
+
+  const latestFailed = useMemo(() => {
+    return [...events]
+      .reverse()
+      .find(
+        (event): event is Extract<AgentEvent, { type: "failed" }> =>
+          event.type === "failed",
+      );
+  }, [events]);
+
+  const failureAdvice = useMemo(() => {
+    if (!latestFailed || busy) return null;
+    return evaluateTurnFailure({
+      error: latestFailed.error,
+      providerId: provider,
+      model,
+      baseUrl,
+      effort,
+    });
+  }, [latestFailed, busy, provider, model, baseUrl, effort]);
+
+  const runPromptAgain = useCallback(
+    (
+      text: string,
+      overrides?: {
+        provider?: string;
+        baseUrl?: string;
+        model?: string;
+        effort?: EffortLevel;
+        maxSteps?: number;
+      },
+    ) => {
+      const trimmed = text.trim();
+      if (!trimmed || busy || !isTauri()) return;
+      const nextProvider = overrides?.provider ?? provider;
+      const nextBase = overrides?.baseUrl ?? baseUrl;
+      const nextModel = overrides?.model ?? model;
+      const nextEffort = effectiveEffort(
+        autonomy,
+        overrides?.effort ?? effort,
+        "normal",
+      );
+      if (!nextProvider.trim() || !nextModel.trim()) return;
+      setPrompt("");
+      setCurrentUser(trimmed);
+      stickToBottomRef.current = true;
+      const effortOpts = EFFORT_OPTIONS.find((item) => item.id === nextEffort);
+      const isMutating = autonomy === "act" || autonomy === "automate";
+      onRun({
+        prompt: trimmed,
+        provider: nextProvider.trim(),
+        baseUrl: nextBase.trim(),
+        model: nextModel.trim(),
+        inputCostPerMtok: Number(inputCost) || 0,
+        outputCostPerMtok: Number(outputCost) || 0,
+        sessionCapUsd: Number(sessionCap),
+        dailyCapUsd: Number(dailyCap),
+        autonomy,
+        maxSteps: overrides?.maxSteps
+          ? Math.max(1, overrides.maxSteps)
+          : maxSteps.trim()
+            ? Math.max(1, Number(maxSteps) || 32)
+            : (effortOpts?.maxSteps ?? 32),
+        maxTokens: maxTokens.trim()
+          ? Number(maxTokens) || null
+          : providerSupportsEffort(nextProvider)
+            ? (effortOpts?.maxTokens ?? null)
+            : null,
+        verifyOnComplete: autonomy === "automate" ? true : verifyOnComplete,
+        verifyGate: verifyGate.trim() || "G3",
+        approveOwnedPaths: isMutating,
+        ownedPaths: isMutating ? effectiveOwnedPaths : [],
+        leaseAgentId: isMutating ? agentId : null,
+        preferredShellCwd: preferredShellCwd(shellScope),
+        executionRoot: null,
+      });
+    },
+    [
+      busy,
+      provider,
+      baseUrl,
+      model,
+      effort,
+      inputCost,
+      outputCost,
+      sessionCap,
+      dailyCap,
+      autonomy,
+      maxSteps,
+      maxTokens,
+      verifyOnComplete,
+      verifyGate,
+      effectiveOwnedPaths,
+      agentId,
+      shellScope,
+      onRun,
+    ],
+  );
+
+  const applyFailureAction = useCallback(
+    (action: TurnFailureAction, opts?: { auto?: boolean }) => {
+      const promptText = currentUser?.trim();
+      if (action.id === "open_keys") {
+        onOpenKeys?.();
+        setFailureNote("Open Keys, fix the vault key / base URL, then retry.");
+        return;
+      }
+      if (!promptText) {
+        setFailureNote("No prompt to retry — type a message and Go again.");
+        return;
+      }
+      if (action.id === "retry") {
+        setFailureNote(opts?.auto ? "Auto-retrying same setup…" : "Retrying…");
+        runPromptAgain(promptText);
+        return;
+      }
+      if (action.id === "retry_alt_model") {
+        setModel(action.model);
+        window.localStorage.setItem(AGENT_MODEL_KEY, action.model);
+        setFailureNote(
+          opts?.auto
+            ? `Auto-fixed: switched model → ${action.model}`
+            : `Retrying with ${action.model}…`,
+        );
+        runPromptAgain(promptText, { model: action.model });
+        return;
+      }
+      if (action.id === "switch_provider") {
+        setProvider(action.providerId);
+        setBaseUrl(action.baseUrl);
+        setModel(action.model);
+        window.localStorage.setItem(AGENT_PROVIDER_KEY, action.providerId);
+        window.localStorage.setItem(AGENT_BASE_URL_KEY, action.baseUrl);
+        window.localStorage.setItem(AGENT_MODEL_KEY, action.model);
+        setFailureNote(
+          opts?.auto
+            ? `Auto-fixed: switched provider → ${action.providerId}`
+            : `Retrying on ${action.providerId}…`,
+        );
+        runPromptAgain(promptText, {
+          provider: action.providerId,
+          baseUrl: action.baseUrl,
+          model: action.model,
+        });
+        return;
+      }
+      if (action.id === "raise_steps") {
+        setEffort(action.effort);
+        window.localStorage.setItem(AGENT_EFFORT_KEY, action.effort);
+        setMaxSteps(String(action.maxSteps));
+        setFailureNote(
+          opts?.auto
+            ? `Auto-fixed: Effort → ${action.effort} (${action.maxSteps} tool rounds)`
+            : `Retrying with Effort ${action.effort} (${action.maxSteps} rounds)…`,
+        );
+        runPromptAgain(promptText, {
+          effort: action.effort,
+          maxSteps: action.maxSteps,
+        });
+        return;
+      }
+      if (action.id === "continue_handoff") {
+        setEffort(action.effort);
+        window.localStorage.setItem(AGENT_EFFORT_KEY, action.effort);
+        setMaxSteps(String(action.maxSteps));
+        setAutonomyPersisted("act");
+        setFailureNote(
+          `Continuing handoff with Effort ${action.effort} (${action.maxSteps} rounds)…`,
+        );
+        onContinueHandoff?.();
+        return;
+      }
+      if (action.id === "fix_base_url") {
+        setBaseUrl(action.baseUrl);
+        window.localStorage.setItem(AGENT_BASE_URL_KEY, action.baseUrl);
+        setFailureNote(`Updated base URL → ${action.baseUrl}`);
+        runPromptAgain(promptText, { baseUrl: action.baseUrl });
+      }
+    },
+    [currentUser, onOpenKeys, onContinueHandoff, runPromptAgain],
+  );
+
+  useEffect(() => {
+    if (!latestFailed || busy || !failureAdvice?.autoFix || !currentUser) return;
+    const key = failureFingerprint({
+      error: latestFailed.error,
+      providerId: provider,
+      model,
+      baseUrl,
+      effort,
+    });
+    if (autoFixedFailureRef.current === key) return;
+    autoFixedFailureRef.current = key;
+    applyFailureAction(failureAdvice.autoFix, { auto: true });
+  }, [
+    latestFailed,
+    busy,
+    failureAdvice,
+    currentUser,
+    provider,
+    model,
+    baseUrl,
+    effort,
+    applyFailureAction,
+  ]);
+
+  useEffect(() => {
+    if (!latestFailed) {
+      setFailureNote(null);
+    }
+  }, [latestFailed]);
 
   useEffect(() => {
     setAgentId(readOrCreateAgentId(workspaceRoot));
@@ -3186,7 +3469,9 @@ function AgentView({
     setPrompt("");
     setCurrentUser(text);
     stickToBottomRef.current = true;
-    const effortOpts = EFFORT_OPTIONS.find((item) => item.id === effort);
+    const effortOpts = EFFORT_OPTIONS.find(
+      (item) => item.id === effectiveEffort(nextAutonomy, effort),
+    );
     onRun({
       prompt: text,
       provider: provider.trim(),
@@ -3313,7 +3598,9 @@ function AgentView({
         setPrompt("");
         setCurrentUser(text);
         stickToBottomRef.current = true;
-        const effortOpts = EFFORT_OPTIONS.find((item) => item.id === effort);
+        const effortOpts = EFFORT_OPTIONS.find(
+          (item) => item.id === effectiveEffort(nextAutonomy, effort),
+        );
         onRun({
           prompt: text,
           provider: provider.trim(),
@@ -3391,8 +3678,18 @@ function AgentView({
     }
   }, [autonomy]);
 
-  const buildTurnInput = () => {
-    const effortOpts = EFFORT_OPTIONS.find((item) => item.id === effort);
+  const buildTurnInput = (overrides?: {
+    autonomy?: AutonomyLevel;
+    effort?: EffortLevel;
+    context?: "normal" | "continuity";
+  }) => {
+    const nextAutonomy = overrides?.autonomy ?? autonomy;
+    const resolvedEffort = effectiveEffort(
+      nextAutonomy,
+      overrides?.effort ?? effort,
+      overrides?.context ?? "normal",
+    );
+    const effortOpts = EFFORT_OPTIONS.find((item) => item.id === resolvedEffort);
     return {
     prompt: prompt.trim(),
     provider: provider.trim(),
@@ -3402,7 +3699,7 @@ function AgentView({
     outputCostPerMtok: Number(outputCost) || 0,
     sessionCapUsd: Number(sessionCap),
     dailyCapUsd: Number(dailyCap),
-    autonomy,
+    autonomy: nextAutonomy,
     maxSteps: maxSteps.trim()
       ? Math.max(1, Number(maxSteps) || 32)
       : (effortOpts?.maxSteps ?? 32),
@@ -3411,12 +3708,17 @@ function AgentView({
       : providerSupportsEffort(provider)
         ? (effortOpts?.maxTokens ?? null)
         : null,
-    verifyOnComplete: autonomy === "automate" ? true : verifyOnComplete,
+    verifyOnComplete: nextAutonomy === "automate" ? true : verifyOnComplete,
     verifyGate: verifyGate.trim() || "G3",
     // Apply/Automate = write scope; Debug dogfood can pin .ade/dogfood.
-    approveOwnedPaths: mutating,
-    ownedPaths: mutating ? (effectiveOwnedPaths) : [],
-    leaseAgentId: mutating ? agentId : null,
+    approveOwnedPaths:
+      nextAutonomy === "act" || nextAutonomy === "automate",
+    ownedPaths:
+      nextAutonomy === "act" || nextAutonomy === "automate"
+        ? effectiveOwnedPaths
+        : [],
+    leaseAgentId:
+      nextAutonomy === "act" || nextAutonomy === "automate" ? agentId : null,
     preferredShellCwd: preferredShellCwd(shellScope),
     executionRoot: null,
   };
@@ -3615,11 +3917,32 @@ function AgentView({
     if (!nextPrompt || !provider.trim() || !model.trim() || busy || !isTauri()) {
       return;
     }
+    const continuity = autoSubmitContext === "continuity";
+    const nextAutonomy: AutonomyLevel = continuity ? "act" : autonomy;
+    const nextEffort = effectiveEffort(
+      nextAutonomy,
+      effort,
+      continuity ? "continuity" : "normal",
+    );
+    if (continuity) {
+      setAutonomyPersisted("act");
+      setEffort(nextEffort);
+      window.localStorage.setItem(AGENT_EFFORT_KEY, nextEffort);
+      setMaxSteps(
+        String(
+          EFFORT_OPTIONS.find((item) => item.id === nextEffort)?.maxSteps ?? 24,
+        ),
+      );
+    }
     setPrompt("");
     setCurrentUser(nextPrompt);
     stickToBottomRef.current = true;
     onRun({
-      ...buildTurnInput(),
+      ...buildTurnInput({
+        autonomy: nextAutonomy,
+        effort: nextEffort,
+        context: continuity ? "continuity" : "normal",
+      }),
       prompt: nextPrompt,
     });
     // Intentionally one-shot when autoSubmit flips true
@@ -3799,21 +4122,43 @@ function AgentView({
       )}
 
       {handoffAvailable && onContinueHandoff && !busy && (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-blue-400/20 bg-blue-500/8 px-3 py-2">
+        <div
+          className={`flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
+            handoffLatestStatus === "budget_exhausted"
+              ? "border-amber-400/25 bg-amber-500/8"
+              : "border-blue-400/20 bg-blue-500/8"
+          }`}
+        >
           <div className="min-w-0">
-            <div className="text-[11px] font-semibold text-blue-100">
-              Continue last handoff
+            <div
+              className={`text-[11px] font-semibold ${
+                handoffLatestStatus === "budget_exhausted"
+                  ? "text-amber-100"
+                  : "text-blue-100"
+              }`}
+            >
+              {handoffLatestStatus === "budget_exhausted"
+                ? "Budget exhausted — continue with more Effort"
+                : "Continue last handoff"}
             </div>
             <div className="text-[10px] text-slate-500">
-              Loads next_safe_command + prior goal into a new turn (capsule also injected in context).
+              {handoffLatestStatus === "budget_exhausted"
+                ? "Host runs next_safe_command, then resumes at Med+ Effort (Apply)."
+                : "Host runs next_safe_command, then resumes with thrift Continuity prompt."}
             </div>
           </div>
           <button
             type="button"
             onClick={onContinueHandoff}
-            className="shrink-0 rounded-md border border-blue-400/30 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/25"
+            className={`shrink-0 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold ${
+              handoffLatestStatus === "budget_exhausted"
+                ? "border-amber-400/35 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25"
+                : "border-blue-400/30 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25"
+            }`}
           >
-            Continue
+            {handoffLatestStatus === "budget_exhausted"
+              ? "Continue · raise Effort"
+              : "Continue"}
           </button>
         </div>
       )}
@@ -3854,6 +4199,13 @@ function AgentView({
           events={feedEvents}
           busy={busy}
           simpleMode
+          maxSteps={
+            maxSteps.trim()
+              ? Math.max(1, Number(maxSteps) || 32)
+              : (EFFORT_OPTIONS.find(
+                  (item) => item.id === effectiveEffort(autonomy, effort),
+                )?.maxSteps ?? 32)
+          }
           autonomyLabel={
             autonomy === "act"
               ? "Apply"
@@ -3894,7 +4246,13 @@ function AgentView({
             stickToBottomRef.current = true;
             onRun({ ...buildTurnInput(), prompt: trimmed });
           }}
+          failureAdvice={failureAdvice}
+          failureBusy={busy}
+          onFailureAction={(action) => applyFailureAction(action)}
         />
+        {failureNote && latestFailed && !busy && (
+          <p className="mt-2 text-[11px] text-amber-100/90">{failureNote}</p>
+        )}
         <div ref={feedBottomRef} className="h-px w-full shrink-0" aria-hidden />
         {showDebugHarness && (
           <div className="mt-3 space-y-3">
@@ -4037,8 +4395,16 @@ function AgentView({
               if (next === "automate") {
                 setAutonomyPersisted("automate");
                 setVerifyOnComplete(true);
+                if (effort === "low") {
+                  setEffort("medium");
+                  window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+                }
               } else if (next === "act") {
                 setAutonomyPersisted("act");
+                if (effort === "low") {
+                  setEffort("medium");
+                  window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+                }
               } else {
                 setAutonomyPersisted("propose");
               }
@@ -5596,16 +5962,20 @@ function ContextUsageButton({
           {showEffort && (
             <div className="mb-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
-                Effort
+                Effort · turn gas tank
               </div>
+              <p className="mb-1.5 text-[10px] leading-4 text-slate-500">
+                Tool rounds + output tokens for this turn (not model smartness).
+                Apply/Automate floor at Med.
+              </p>
               <DarkSelect
-                ariaLabel="Effort"
+                ariaLabel="Effort turn budget"
                 value={effort}
                 options={EFFORT_OPTIONS.map((item) => ({
                   value: item.id,
                   label: item.label,
                 }))}
-                maxLabelChars={10}
+                maxLabelChars={12}
                 onChange={(next) => onEffort(next as EffortLevel)}
               />
             </div>

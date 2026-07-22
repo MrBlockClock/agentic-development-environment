@@ -143,6 +143,7 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP47 | `handoff_resume` IPC + `HandoffResume` / `resume_user_prompt` | **Done** |
 | WP48 | Home Continue last handoff CTA → auto-submit Agent turn | **Done** |
 | WP49 | Environment Continuity panel Continue → Home | **Done** |
+| WP49b | `scripts/dogfood-continuity.ps1` (host next_safe + act resume, max_steps≥16) | **Done** |
 
 ### N5 work packages — Atlas / Plan Map depth
 
@@ -203,6 +204,7 @@ Goal: get **editor + extensions** without abandoning ADE’s harness identity.
 | WP60 | IPC `workspace_read_text` / `workspace_write_text` (under root, SensitivePathPolicy, size cap) | **Done** |
 | WP61 | Desktop **Editor** nav + Monaco panel (open/save; language from extension) | **Done** |
 | WP62 | DesktopRequired + capability matrix; docs/canvas point at E2 | **Done** |
+| WP63 | Handoff → Editor diff (changed_paths chips; DiffEditor vs git HEAD) | **Done** |
 
 ### N1 work packages
 

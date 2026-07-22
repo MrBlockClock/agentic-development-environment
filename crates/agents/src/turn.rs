@@ -572,6 +572,8 @@ impl AgentTurnService {
                 Err(error) => {
                     let turn_status = if matches!(error, AdeError::Cancelled(_)) {
                         "cancelled"
+                    } else if matches!(error, AdeError::Budget(_)) {
+                        "budget_exhausted"
                     } else {
                         "failed"
                     };

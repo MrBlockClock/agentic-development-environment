@@ -68,6 +68,13 @@ pub enum AgentEvent {
         projected_micros: i64,
         soft_cap_micros: i64,
     },
+    /// Effort / turn gas tank empty (tool rounds or cumulative output tokens).
+    BudgetExhausted {
+        kind: String,
+        limit: u64,
+        used: u64,
+        detail: String,
+    },
     VerifyComplete {
         gate: String,
         passed: bool,
@@ -260,9 +267,18 @@ impl AgentSession {
                 // re-bills the full system prompt and kills Apply mid-task.
                 let used = total_usage.output_tokens;
                 if used >= max_tokens {
-                    return Err(AdeError::Provider(format!(
+                    let detail = format!(
                         "agent exceeded the {max_tokens}-token output budget (used {used})"
-                    )));
+                    );
+                    let _ = events
+                        .send(AgentEvent::BudgetExhausted {
+                            kind: "output_tokens".into(),
+                            limit: max_tokens,
+                            used,
+                            detail: detail.clone(),
+                        })
+                        .await;
+                    return Err(AdeError::Budget(detail));
                 }
             }
             let estimate = self.model.max_round_cost()?;
@@ -331,10 +347,19 @@ impl AgentSession {
             if let Some(max_tokens) = self.max_tokens {
                 let used = total_usage.output_tokens;
                 if used > max_tokens {
-                    return Err(AdeError::Provider(format!(
+                    let detail = format!(
                         "agent exceeded the {max_tokens}-token output budget after round {} (used {used})",
                         round + 1
-                    )));
+                    );
+                    let _ = events
+                        .send(AgentEvent::BudgetExhausted {
+                            kind: "output_tokens".into(),
+                            limit: max_tokens,
+                            used,
+                            detail: detail.clone(),
+                        })
+                        .await;
+                    return Err(AdeError::Budget(detail));
                 }
             }
 
@@ -479,10 +504,19 @@ impl AgentSession {
             }
         }
 
-        Err(AdeError::Provider(format!(
+        let detail = format!(
             "agent exceeded the {}-round tool-call limit",
             self.max_tool_rounds
-        )))
+        );
+        let _ = events
+            .send(AgentEvent::BudgetExhausted {
+                kind: "tool_rounds".into(),
+                limit: self.max_tool_rounds as u64,
+                used: self.max_tool_rounds as u64,
+                detail: detail.clone(),
+            })
+            .await;
+        Err(AdeError::Budget(detail))
     }
 
     async fn stream_provider_round(
@@ -1101,6 +1135,97 @@ mod tests {
             }
         }
         assert!(failed);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn tool_round_limit_emits_budget_exhausted_not_provider() {
+        let root = std::env::temp_dir().join(format!("ade-session-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let provider = Arc::new(MockProvider {
+            completions: Mutex::new(vec![ProviderCompletion {
+                text: String::new(),
+                tool_calls: vec![ProviderToolCall {
+                    id: "call-1".into(),
+                    name: "fs__read_file".into(),
+                    arguments: r#"{"path":"missing.txt"}"#.into(),
+                }],
+                usage: ProviderUsage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                },
+            }]),
+        });
+        let session = AgentSession::new(provider, model(), McpHost::new(), "system")
+            .with_workspace(&root)
+            .with_max_tool_rounds(1)
+            .with_spend_caps(SpendCaps::unlimited(), ledger().await);
+        let mut receiver = session.start_turn("read something");
+        let mut saw_budget = false;
+        let mut failed_msg = None;
+        while let Some(event) = receiver.recv().await {
+            match event {
+                AgentEvent::BudgetExhausted { kind, .. } => {
+                    assert_eq!(kind, "tool_rounds");
+                    saw_budget = true;
+                }
+                AgentEvent::Failed { error } => {
+                    failed_msg = Some(error);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_budget, "expected BudgetExhausted event");
+        let error = failed_msg.expect("expected Failed after BudgetExhausted");
+        assert!(
+            error.starts_with("Budget exhausted:"),
+            "expected Budget exhausted prefix, got {error}"
+        );
+        assert!(!error.contains("Provider error:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn output_token_budget_emits_budget_exhausted_not_provider() {
+        let root = std::env::temp_dir().join(format!("ade-session-{}", Uuid::new_v4()));
+        let provider = Arc::new(MockProvider {
+            completions: Mutex::new(vec![ProviderCompletion {
+                text: "partial".into(),
+                tool_calls: vec![],
+                usage: ProviderUsage {
+                    input_tokens: 10,
+                    output_tokens: 50,
+                },
+            }]),
+        });
+        let session = AgentSession::new(provider, model(), McpHost::new(), "system")
+            .with_workspace(&root)
+            .with_max_tokens(Some(10))
+            .with_spend_caps(SpendCaps::unlimited(), ledger().await);
+        let mut receiver = session.start_turn("hello");
+        let mut saw_budget = false;
+        let mut failed_msg = None;
+        while let Some(event) = receiver.recv().await {
+            match event {
+                AgentEvent::BudgetExhausted { kind, limit, used, .. } => {
+                    assert_eq!(kind, "output_tokens");
+                    assert_eq!(limit, 10);
+                    assert!(used > 10);
+                    saw_budget = true;
+                }
+                AgentEvent::Failed { error } => {
+                    failed_msg = Some(error);
+                    break;
+                }
+                AgentEvent::Completed { .. } => panic!("should not complete under token budget"),
+                _ => {}
+            }
+        }
+        assert!(saw_budget, "expected BudgetExhausted event");
+        let error = failed_msg.expect("expected Failed after BudgetExhausted");
+        assert!(error.starts_with("Budget exhausted:"));
+        assert!(!error.contains("Provider error:"));
         let _ = std::fs::remove_dir_all(root);
     }
 

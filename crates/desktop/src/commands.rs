@@ -1650,17 +1650,94 @@ pub fn handoff_resume(
     state: State<'_, AppState>,
     id: Option<String>,
 ) -> Result<ade_agents::handoff::HandoffResume, String> {
-    let manager = ade_agents::handoff::HandoffManager::new(state.workspace_root());
-    match id
+    let root = state.workspace_root();
+    let manager = ade_agents::handoff::HandoffManager::new(&root);
+    let capsule_id = id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        None | Some("latest") => manager.resume_latest().map_err(|error| error.to_string()),
-        Some(capsule_id) => manager
-            .resume_by_id(capsule_id)
-            .map_err(|error| error.to_string()),
+        .filter(|value| !value.is_empty());
+    let (id_label, capsule) = match capsule_id {
+        None | Some("latest") => match manager.load_latest() {
+            Ok(capsule) => ("latest".to_string(), capsule),
+            Err(ade_core::error::AdeError::NotFound(_)) => {
+                return Ok(ade_agents::handoff::HandoffResume {
+                    available: false,
+                    id: String::new(),
+                    goal: String::new(),
+                    next_safe_command: String::new(),
+                    turn_status: None,
+                    created_at: None,
+                    blockers: Vec::new(),
+                    changed_paths: Vec::new(),
+                    resume_prompt: String::new(),
+                    host_ran_next: false,
+                    host_exit_code: None,
+                });
+            }
+            Err(error) => return Err(error.to_string()),
+        },
+        Some(capsule_id) => {
+            let capsule = manager
+                .load_capsule(capsule_id)
+                .map_err(|error| error.to_string())?;
+            (capsule_id.to_string(), capsule)
+        }
+    };
+    let next = capsule
+        .next_safe_command
+        .clone()
+        .unwrap_or_else(|| "ade audit".into());
+    let (host_ran_next, host_exit_code) = host_run_next_safe_command(&root, &next);
+    Ok(manager.resume_from_capsule_with(
+        &id_label,
+        &capsule,
+        host_ran_next,
+        host_exit_code,
+    ))
+}
+
+/// Host-run Continuity first step when it is an `ade …` command (dogfood parity).
+fn host_run_next_safe_command(workspace: &std::path::Path, command: &str) -> (bool, Option<i32>) {
+    let trimmed = command.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower == "ade" || lower.starts_with("ade ")) {
+        return (false, None);
     }
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.is_empty() {
+        return (false, None);
+    }
+    let bin = resolve_ade_cli_bin();
+    let args = &parts[1..];
+    match std::process::Command::new(&bin)
+        .args(args)
+        .current_dir(workspace)
+        .env("RUST_LOG", "error")
+        .output()
+    {
+        Ok(output) => (true, output.status.code()),
+        Err(_) => (false, None),
+    }
+}
+
+fn resolve_ade_cli_bin() -> std::path::PathBuf {
+    #[cfg(windows)]
+    let name = "ade.exe";
+    #[cfg(not(windows))]
+    let name = "ade";
+
+    let mut candidates = Vec::new();
+    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        candidates.push(std::path::PathBuf::from(target).join("debug").join(name));
+    }
+    candidates.push(std::path::PathBuf::from(r"C:\Dev\ade-target\debug").join(name));
+    candidates.push(std::path::PathBuf::from("target").join("debug").join(name));
+    for path in candidates {
+        if path.is_file() {
+            return path;
+        }
+    }
+    std::path::PathBuf::from(if cfg!(windows) { "ade.exe" } else { "ade" })
 }
 
 #[derive(Serialize)]
@@ -1920,6 +1997,56 @@ pub fn workspace_write_text(
         bytes,
         language_hint: language_hint_for(&absolute),
         content,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTextDiff {
+    pub path: String,
+    pub absolute: String,
+    pub original: String,
+    pub modified: String,
+    pub language_hint: String,
+    /// `head` when original came from `git show HEAD:path`; `empty` when new/untracked.
+    pub baseline: String,
+}
+
+fn git_head_text(root: &Path, rel: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{rel}")])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let body = String::from_utf8_lossy(&output.stdout).into_owned();
+    if body.len() as u64 > WORKSPACE_TEXT_MAX_BYTES {
+        return None;
+    }
+    Some(body)
+}
+
+/// Working-tree text vs git HEAD (or empty baseline for new/untracked files).
+#[tauri::command]
+pub fn workspace_text_diff(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<WorkspaceTextDiff, String> {
+    let root = state.workspace_root();
+    let file = workspace_read_text(state, path)?;
+    let (original, baseline) = match git_head_text(&root, &file.path) {
+        Some(body) => (body, "head".to_string()),
+        None => (String::new(), "empty".to_string()),
+    };
+    Ok(WorkspaceTextDiff {
+        path: file.path,
+        absolute: file.absolute,
+        original,
+        modified: file.content,
+        language_hint: file.language_hint,
+        baseline,
     })
 }
 

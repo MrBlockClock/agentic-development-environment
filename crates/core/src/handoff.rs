@@ -205,6 +205,15 @@ impl HandoffCapsule {
     /// User-facing prompt for Home “Continue last handoff” (N4).
     /// System prompt still injects the budgeted handoff summary separately.
     pub fn resume_user_prompt(&self) -> String {
+        self.resume_user_prompt_with(false, None)
+    }
+
+    /// Continuity thrift variant when the Desktop/CLI host already ran `next_safe_command`.
+    pub fn resume_user_prompt_with(
+        &self,
+        host_ran_next: bool,
+        host_exit: Option<i32>,
+    ) -> String {
         let next = self.next_safe_command.as_deref().unwrap_or("ade audit");
         let goal = truncate(&self.goal, 280);
         let status = self.turn_status.as_deref().unwrap_or("unknown");
@@ -221,16 +230,37 @@ impl HandoffCapsule {
                     .join("; ")
             )
         };
-        format!(
-            "Continue from the latest ADE handoff (status: {status}).\n\
-             Prior goal: {goal}\n\
-             Do next_safe_command first: `{next}`{blockers}\n\
-             Stay inside approved owned_paths / leases. Prefer verify before expanding scope."
-        )
+        let thrift = "Do not run long shell discovery loops, rebuilds, or broad edits.\n\
+             Prefer one focused owned-path action or verify, then stop.";
+        if host_ran_next {
+            let exit = host_exit
+                .map(|code| format!(" (exit {code})"))
+                .unwrap_or_default();
+            format!(
+                "Continue from the latest ADE handoff (status: {status}).\n\
+                 Prior goal: {goal}\n\
+                 Host already ran next_safe_command: `{next}`{exit}.\n\
+                 Do not re-run it unless that output clearly failed.{blockers}\n\
+                 Stay inside approved owned_paths / leases.\n\
+                 {thrift}"
+            )
+        } else {
+            format!(
+                "Continue from the latest ADE handoff (status: {status}).\n\
+                 Prior goal: {goal}\n\
+                 Do next_safe_command first: `{next}`{blockers}\n\
+                 Stay inside approved owned_paths / leases. Prefer verify before expanding scope.\n\
+                 {thrift}"
+            )
+        }
     }
 
     /// Budgeted prompt injection — never dump the full capsule JSON.
     pub fn prompt_summary(&self, max_chars: usize) -> String {
+        self.prompt_summary_with(max_chars, false)
+    }
+
+    pub fn prompt_summary_with(&self, max_chars: usize, host_ran_next: bool) -> String {
         let mut paths = self.changed_paths.clone();
         let truncated_paths = if paths.len() > 12 {
             paths.truncate(12);
@@ -262,6 +292,11 @@ impl HandoffCapsule {
                 .collect::<Vec<_>>()
                 .join("; ")
         };
+        let follow = if host_ran_next {
+            "Host already ran next_safe_command — do not re-run unless it failed; prefer verify / one owned-path write."
+        } else {
+            "Prefer next_safe_command (or its host result) before expanding scope; avoid discovery loops."
+        };
         let mut summary = format!(
             "HANDOFF SUMMARY (ade.handoff/v1)\n\
              - next_safe_command: `{next}`\n\
@@ -276,7 +311,7 @@ impl HandoffCapsule {
              - verify: {verify}\n\
              - blockers: {blockers}\n\
              - changed_paths: {paths}\n\
-             Follow next_safe_command before expanding scope.",
+             {follow}",
             goal = truncate(&self.goal, 240),
             mode = self.mode,
             status = self.turn_status.as_deref().unwrap_or("-"),
@@ -304,6 +339,7 @@ impl HandoffCapsule {
                 truncated_paths
             },
             next = next,
+            follow = follow,
         );
         if summary.chars().count() > max_chars {
             summary = truncate(&summary, max_chars);
@@ -377,7 +413,23 @@ mod tests {
         capsule.turn_status = Some("completed".into());
         let prompt = capsule.resume_user_prompt();
         assert!(prompt.contains("Continue from the latest ADE handoff"));
+        assert!(prompt.contains("Do next_safe_command first"));
         assert!(prompt.contains("ade verify --gate G0 --through"));
         assert!(prompt.contains("Ship N4 continuity"));
+        assert!(prompt.contains("discovery loops"));
+    }
+
+    #[test]
+    fn resume_user_prompt_host_ran_is_thrifty() {
+        let mut capsule = HandoffCapsule::new("Ship N4 continuity", "agent_turn");
+        capsule.next_safe_command = Some("ade audit".into());
+        capsule.turn_status = Some("budget_exhausted".into());
+        let prompt = capsule.resume_user_prompt_with(true, Some(0));
+        assert!(prompt.contains("Host already ran next_safe_command"));
+        assert!(prompt.contains("exit 0"));
+        assert!(!prompt.contains("Do next_safe_command first"));
+        assert!(prompt.contains("discovery loops"));
+        let summary = capsule.prompt_summary_with(800, true);
+        assert!(summary.contains("Host already ran next_safe_command"));
     }
 }

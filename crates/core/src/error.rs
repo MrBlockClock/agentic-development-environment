@@ -17,6 +17,10 @@ pub enum AdeError {
     #[error("Provider error: {0}")]
     Provider(String),
 
+    /// Turn gas tank empty (tool rounds / output tokens) — not a provider outage.
+    #[error("Budget exhausted: {0}")]
+    Budget(String),
+
     #[error("Spend cap error: {0}")]
     Spend(String),
 

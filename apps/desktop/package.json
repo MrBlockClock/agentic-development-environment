@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:unit": "node --import tsx --test src/components/optionSegments.test.ts"
+    "test:unit": "node --import tsx --test src/components/optionSegments.test.ts src/components/turnFailure.test.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

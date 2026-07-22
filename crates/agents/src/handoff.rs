@@ -51,6 +51,11 @@ pub struct HandoffResume {
     pub blockers: Vec<String>,
     pub changed_paths: Vec<String>,
     pub resume_prompt: String,
+    /// Host executed `next_safe_command` before building the resume prompt.
+    #[serde(default)]
+    pub host_ran_next: bool,
+    #[serde(default)]
+    pub host_exit_code: Option<i32>,
 }
 
 pub struct HandoffManager {
@@ -128,6 +133,8 @@ impl HandoffManager {
                 blockers: Vec::new(),
                 changed_paths: Vec::new(),
                 resume_prompt: String::new(),
+                host_ran_next: false,
+                host_exit_code: None,
             }),
             Err(error) => Err(error),
         }
@@ -139,6 +146,16 @@ impl HandoffManager {
     }
 
     fn resume_from_capsule(&self, id: &str, capsule: &HandoffCapsule) -> HandoffResume {
+        self.resume_from_capsule_with(id, capsule, false, None)
+    }
+
+    pub fn resume_from_capsule_with(
+        &self,
+        id: &str,
+        capsule: &HandoffCapsule,
+        host_ran_next: bool,
+        host_exit_code: Option<i32>,
+    ) -> HandoffResume {
         let mut paths = capsule.changed_paths.clone();
         if paths.len() > 8 {
             paths.truncate(8);
@@ -155,7 +172,9 @@ impl HandoffManager {
             created_at: capsule.created_at.clone(),
             blockers: capsule.blockers.iter().take(6).cloned().collect(),
             changed_paths: paths,
-            resume_prompt: capsule.resume_user_prompt(),
+            resume_prompt: capsule.resume_user_prompt_with(host_ran_next, host_exit_code),
+            host_ran_next,
+            host_exit_code,
         }
     }
 

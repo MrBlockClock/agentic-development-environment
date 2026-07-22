@@ -99,9 +99,10 @@ Prerequisite: gold-set gate green (`ade eval --gold` 51/51).
 | Worktrees | `WorktreeManager` · `worktree_provision_for_task` · Isolate toggle |
 
 ## Immediate next engineering slice
-Orch spine (G0–G4 + next-actions) and Ideal **E2 Monaco** are closed. Mission
-Control still held.
+**Effort / turn-budget honesty (B0–B4)** — see
+[`EFFORT_TURN_BUDGET_PLAN.md`](./EFFORT_TURN_BUDGET_PLAN.md) · canvas
+`ADE-effort-budget-gameplan`.
 
-Prefer **operate the product**: Automate / Isolate dogfood scripts + `ade eval
---gold`. Optional later: handoff diff viewer on Monaco, or E1 option 3 only if
-leaving ADE for the editor remains the main friction.
+Orch spine (G0–G4 + next-actions) and Ideal **E2 Monaco** remain closed. Mission
+Control still held. Continuity dogfood script:
+`scripts/dogfood-continuity.ps1`.

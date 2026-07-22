@@ -76,6 +76,7 @@ pub fn run() {
             ade_desktop_crate::commands::spend_ledger_recent,
             ade_desktop_crate::commands::workspace_read_text,
             ade_desktop_crate::commands::workspace_write_text,
+            ade_desktop_crate::commands::workspace_text_diff,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

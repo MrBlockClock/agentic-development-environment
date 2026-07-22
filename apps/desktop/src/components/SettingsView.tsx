@@ -213,10 +213,11 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
         >
           <div className="mb-3">
             <div className="mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">
-              Effort (token budget)
+              Effort (turn gas tank)
             </div>
             <div className="mb-1.5 text-[10px] text-slate-500">
-              Low = short chat · Med = default build · High = long tooling
+              Caps tool rounds + output tokens for this turn — not model smartness. Low =
+              Suggest/inspect (16) · Med = Apply/Continuity (24) · High = Automate (32)
             </div>
             <div className="flex flex-wrap gap-1.5">
               {(["low", "medium", "high"] as EffortLevel[]).map((level) => (
