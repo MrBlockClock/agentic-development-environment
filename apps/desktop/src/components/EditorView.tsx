@@ -311,7 +311,7 @@ export function EditorView() {
             }}
             spellCheck={false}
             placeholder="workspace-relative path (e.g. .ade/dogfood/notes.md)"
-            className="min-w-[16rem] flex-1 rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-400/40"
+            className="min-w-[16rem] flex-1 rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-slate-200 outline-hidden placeholder:text-slate-600 focus:border-blue-400/40"
           />
           <span className="text-[10px] text-slate-500">
             {mode}

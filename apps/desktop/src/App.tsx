@@ -1128,7 +1128,7 @@ function App() {
                       className={navItemClass(activeView === item.id, group.tier)}
                     >
                       <span
-                        className={`grid w-4 place-items-center opacity-80 ${
+                        className={`grid w-4 place-items-center text-current/80 ${
                           group.tier === 2 ? "text-xs" : "text-sm"
                         }`}
                       >
@@ -1171,7 +1171,7 @@ function App() {
                 : "text-slate-500 hover:bg-white/4 hover:text-slate-300"
             }`}
           >
-            <GearIcon className="size-3.5 shrink-0 opacity-80" />
+            <GearIcon className="size-3.5 shrink-0 text-current/80" />
             Settings
           </button>
           <div className="px-3 py-1.5 text-[10px] leading-4 text-slate-600">
@@ -1802,7 +1802,7 @@ function HomeView({
             onChange={(event) => onPromptChange(event.target.value)}
             rows={simpleMode ? 4 : 3}
             placeholder="Describe what you want help with…"
-            className={`w-full flex-1 resize-y rounded-xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-slate-200 outline-none ring-blue-400/30 placeholder:text-slate-600 focus:ring-2 ${
+            className={`w-full flex-1 resize-y rounded-xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-slate-200 outline-hidden ring-blue-400/30 placeholder:text-slate-600 focus:ring-2 ${
               simpleMode ? "min-h-27.5" : "min-h-22"
             }`}
           />
@@ -2604,7 +2604,7 @@ function Overview({
               value={taskGoal}
               onChange={(event) => setTaskGoal(event.target.value)}
               placeholder="Task goal…"
-              className="w-full rounded-md border border-white/10 bg-[#101620] px-2.5 py-1.5 text-[11px] text-slate-200 outline-none focus:border-blue-400/40"
+              className="w-full rounded-md border border-white/10 bg-[#101620] px-2.5 py-1.5 text-[11px] text-slate-200 outline-hidden focus:border-blue-400/40"
             />
             <div className="flex flex-wrap gap-1.5">
               <button
@@ -4389,7 +4389,7 @@ function AgentView({
             }
           }}
           rows={3}
-          className="min-h-16 w-full resize-none border-0 bg-transparent px-4 pt-3 text-[14px] leading-5 text-slate-200 outline-none placeholder:text-slate-500"
+          className="min-h-16 w-full resize-none border-0 bg-transparent px-4 pt-3 text-[14px] leading-5 text-slate-200 outline-hidden placeholder:text-slate-500"
           placeholder="Ask ADE to plan or build…"
         />
         <div className="flex items-center gap-1.5 px-3 pb-3 pt-1">

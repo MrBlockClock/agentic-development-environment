@@ -102,11 +102,11 @@ export function BrowserApiSetup({ refreshKey = 0, onResolved }: BrowserApiSetupP
             </span>
             <Hint text="Chat, provider Keys, and MCP need the Desktop app. This preview talks to `ade serve` over loopback HTTP only." />
           </div>
-          <p className="mt-1 text-[11px] opacity-90">
+          <p className="mt-1 text-[11px] text-slate-300/90">
             API <span className="font-mono text-[10px]">{browserApiBase()}</span>
             {probe?.detail ? ` · ${probe.detail}` : ""}
           </p>
-          <p className="mt-1 text-[11px] opacity-80">
+          <p className="mt-1 text-[11px] text-slate-400/80">
             Scopes: status/verify/guidance when authorized. No agent turns or EXECUTE over
             HTTP — open Desktop for those.
           </p>
@@ -139,7 +139,7 @@ export function BrowserApiSetup({ refreshKey = 0, onResolved }: BrowserApiSetupP
             value={tokenDraft}
             onChange={(event) => setTokenDraft(event.target.value)}
             placeholder="Same value as ADE_API_TOKEN"
-            className="mt-1 w-full rounded-lg border border-white/10 bg-[#0c121a] px-3 py-2 font-mono text-[12px] text-slate-100 outline-none focus:border-blue-400/40"
+            className="mt-1 w-full rounded-lg border border-white/10 bg-[#0c121a] px-3 py-2 font-mono text-[12px] text-slate-100 outline-hidden focus:border-blue-400/40"
           />
         </label>
         <div className="mt-2 flex flex-wrap gap-2">

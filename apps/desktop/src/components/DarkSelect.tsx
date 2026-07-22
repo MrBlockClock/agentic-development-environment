@@ -135,7 +135,7 @@ export function DarkSelect({
           event.stopPropagation();
           setOpen((prev) => !prev);
         }}
-        className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-white/8 bg-white/3 py-0 pl-2 pr-1.5 text-left text-[10px] font-medium text-slate-300 outline-none hover:bg-white/6 hover:text-slate-100 focus-visible:ring-1 focus-visible:ring-blue-400/50"
+        className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-white/8 bg-white/3 py-0 pl-2 pr-1.5 text-left text-[10px] font-medium text-slate-300 outline-hidden hover:bg-white/6 hover:text-slate-100 focus-visible:ring-1 focus-visible:ring-blue-400/50"
       >
         <span className="whitespace-nowrap">{label}</span>
         <span className="shrink-0 text-[8px] text-slate-600" aria-hidden>

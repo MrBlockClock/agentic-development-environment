@@ -336,7 +336,7 @@ function ToolStepRow({
         )}
       </div>
       {expanded && hasDetail && (
-        <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] leading-4 text-slate-400">
+        <pre className="mt-1 whitespace-pre-wrap wrap-break-word font-mono text-[10px] leading-4 text-slate-400">
           {step.detail}
         </pre>
       )}
@@ -651,7 +651,7 @@ export function AgentActivityFeed({
                     {failureAdvice.summary}
                   </p>
                 )}
-                <p className="font-mono text-[11px] leading-5 text-red-100/75 break-words">
+                <p className="font-mono text-[11px] leading-5 text-red-100/75 wrap-break-word">
                   {turnFailed.error}
                 </p>
                 {isLatest && failureAdvice && onFailureAction && !busy && (

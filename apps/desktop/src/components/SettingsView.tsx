@@ -183,7 +183,7 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
                 inputMode="decimal"
                 value={sessionCap}
                 onChange={(e) => setSessionCap(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-[#101620] py-2 pl-6 pr-3 text-xs text-slate-200 outline-none focus:border-blue-400/40"
+                className="w-full rounded-lg border border-white/10 bg-[#101620] py-2 pl-6 pr-3 text-xs text-slate-200 outline-hidden focus:border-blue-400/40"
               />
             </div>
           </label>
@@ -197,7 +197,7 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
                 inputMode="decimal"
                 value={dailyCap}
                 onChange={(e) => setDailyCap(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-[#101620] py-2 pl-6 pr-3 text-xs text-slate-200 outline-none focus:border-blue-400/40"
+                className="w-full rounded-lg border border-white/10 bg-[#101620] py-2 pl-6 pr-3 text-xs text-slate-200 outline-hidden focus:border-blue-400/40"
               />
             </div>
           </label>

@@ -8,7 +8,7 @@ import {
 } from "../providers";
 
 const selectClass =
-  "w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200 outline-none focus:border-blue-400/40";
+  "w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200 outline-hidden focus:border-blue-400/40";
 
 export function ProviderSelect({
   value,
