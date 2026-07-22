@@ -28,6 +28,8 @@ Thumbs.db
 
 # ADE local state
 .ade/handoff/
+.ade/chat/
+.ade/goals/
 .ade/spend/
 .ade/brain/local/
 .ade/daemon/
@@ -60,3 +62,12 @@ apps/desktop/src-tauri/gen/
 # Local competitive research evidence (generated)
 .ade/research/
 
+# ADE always-ignore (do not remove)
+*credentials*.json
+.venv/
+test-results/
+playwright-report/
+**/storageState.json
+*.db
+*.sqlite*
+*.tursodb

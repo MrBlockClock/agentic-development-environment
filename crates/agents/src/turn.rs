@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const DEFAULT_HANDOFF_CHARS: usize = 1_500;
-const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTurnSpec {
@@ -139,6 +139,8 @@ pub struct AgentTurnBuilder {
     max_tool_rounds: usize,
     max_tokens: Option<u64>,
     verify_on_complete: Option<VerifyGate>,
+    /// Default shell cwd when the model omits `cwd` (e.g. `~/Desktop` for Home scope).
+    preferred_shell_cwd: Option<String>,
 }
 
 impl AgentTurnBuilder {
@@ -160,6 +162,7 @@ impl AgentTurnBuilder {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_tokens: None,
             verify_on_complete: None,
+            preferred_shell_cwd: None,
         }
     }
 
@@ -231,6 +234,12 @@ impl AgentTurnBuilder {
         self
     }
 
+    /// Host-selected default for `shell__run_command` when the model omits `cwd`.
+    pub fn preferred_shell_cwd(mut self, cwd: Option<impl Into<String>>) -> Self {
+        self.preferred_shell_cwd = cwd.map(Into::into).filter(|s| !s.trim().is_empty());
+        self
+    }
+
     pub fn key_vault(mut self, key_vault: Arc<dyn ProviderKeyVault>) -> Self {
         self.key_vault = key_vault;
         self
@@ -277,8 +286,10 @@ impl AgentTurnBuilder {
         };
         let authority = AuthorityEnforcer::load(&self.spec.workspace_root, owned_paths)?;
         let effective_owned_paths = authority.owned_paths();
+        // PLAN / eng-goal live on the coordination root (primary checkout), even
+        // when tools execute inside an isolated worktree (G4).
         ade_workflow::plan_enforcement::PlanEnforcer::new().ensure_approved_plan(
-            &self.spec.workspace_root,
+            &coordination_root,
             &effective_owned_paths,
             Some(&self.spec.prompt),
         )?;
@@ -305,11 +316,37 @@ impl AgentTurnBuilder {
                     .skills_tokens,
             )
             .unwrap_or_default();
+        let scope_clause = match self.preferred_shell_cwd.as_deref() {
+            Some(cwd) => format!(
+                "SHELL SCOPE=Home/Desktop: shell__run_command defaults to cwd `{cwd}` when omitted. Prefer this for goals about that folder. fs__* tools remain workspace-scoped."
+            ),
+            None => "SHELL SCOPE=Workspace: shell__run_command defaults to the attached workspace root. Set cwd to ~/Desktop (or $env:USERPROFILE\\\\Desktop) for Desktop/home goals.".into(),
+        };
+        let eng_goal_clause = crate::goal::GoalStore::new(&coordination_root)
+            .load_active()
+            .ok()
+            .flatten()
+            .filter(|g| g.status == "active")
+            .map(|g| g.prompt_block());
+        let isolation_clause = if coordination_root != self.spec.workspace_root {
+            format!(
+                "\n\nISOLATION=worktree: tools execute in `{}`; leases/PLAN/goals stay on the primary checkout.",
+                self.spec.workspace_root.display()
+            )
+        } else {
+            String::new()
+        };
         let assembled = PromptAssembler::daily(self.spec.context_limit).assemble(
             &format!(
-                "{}\n\n{}",
+                "{}\n\n{}\n\n{}{}{}",
                 StartPromptBuilder::new().build(),
-                self.autonomy.prompt_clause()
+                self.autonomy.prompt_clause(),
+                scope_clause,
+                eng_goal_clause
+                    .as_deref()
+                    .map(|block| format!("\n\n{block}"))
+                    .unwrap_or_default(),
+                isolation_clause
             ),
             &authority.prompt_context(),
             Some(skills_context.as_str()).filter(|text| !text.is_empty()),
@@ -353,6 +390,7 @@ impl AgentTurnBuilder {
         )
         .with_authority(authority)
         .with_workspace(&self.spec.workspace_root)
+        .with_preferred_shell_cwd(self.preferred_shell_cwd.clone())
         .with_spend_guard(guard)
         .with_request_timeout(self.request_timeout)
         .with_autonomy(self.autonomy)
@@ -601,9 +639,11 @@ fn save_turn_capsule(
     capsule.score_max = Some(outcome.score_before.score_max);
     capsule.context_compaction = Some(outcome.context_compaction);
     capsule.compact_summary = Some(capsule.prompt_summary(480));
-    HandoffManager::new(workspace_root)
-        .save_capsule(&capsule)
-        .map(|_| ())
+    let id = HandoffManager::new(workspace_root).save_capsule(&capsule)?;
+    if let Ok(Some(active)) = crate::goal::GoalStore::new(workspace_root).load_active() {
+        let _ = crate::goal::GoalStore::new(workspace_root).attach_handoff(&active.id, &id);
+    }
+    Ok(())
 }
 
 fn workspace_score(workspace_root: &Path) -> WorkspaceScore {

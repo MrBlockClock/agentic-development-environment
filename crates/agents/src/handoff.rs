@@ -38,6 +38,21 @@ pub struct HandoffHistoryItem {
     pub context_tokens: Option<u32>,
 }
 
+/// Safe resume payload for Desktop Continuity (includes goal text for CTA).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffResume {
+    pub available: bool,
+    pub id: String,
+    pub goal: String,
+    pub next_safe_command: String,
+    pub turn_status: Option<String>,
+    pub created_at: Option<String>,
+    pub blockers: Vec<String>,
+    pub changed_paths: Vec<String>,
+    pub resume_prompt: String,
+}
+
 pub struct HandoffManager {
     root: PathBuf,
 }
@@ -97,6 +112,51 @@ impl HandoffManager {
 
     pub fn load_latest(&self) -> Result<HandoffCapsule, AdeError> {
         self.load_capsule("latest")
+    }
+
+    /// Build a Home/Agent resume CTA from `latest.json` (or empty if missing).
+    pub fn resume_latest(&self) -> Result<HandoffResume, AdeError> {
+        match self.load_latest() {
+            Ok(capsule) => Ok(self.resume_from_capsule("latest", &capsule)),
+            Err(AdeError::NotFound(_)) => Ok(HandoffResume {
+                available: false,
+                id: String::new(),
+                goal: String::new(),
+                next_safe_command: String::new(),
+                turn_status: None,
+                created_at: None,
+                blockers: Vec::new(),
+                changed_paths: Vec::new(),
+                resume_prompt: String::new(),
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn resume_by_id(&self, id: &str) -> Result<HandoffResume, AdeError> {
+        let capsule = self.load_capsule(id)?;
+        Ok(self.resume_from_capsule(id, &capsule))
+    }
+
+    fn resume_from_capsule(&self, id: &str, capsule: &HandoffCapsule) -> HandoffResume {
+        let mut paths = capsule.changed_paths.clone();
+        if paths.len() > 8 {
+            paths.truncate(8);
+        }
+        HandoffResume {
+            available: true,
+            id: id.to_string(),
+            goal: capsule.goal.chars().take(280).collect(),
+            next_safe_command: capsule
+                .next_safe_command
+                .clone()
+                .unwrap_or_else(|| "ade audit".into()),
+            turn_status: capsule.turn_status.clone(),
+            created_at: capsule.created_at.clone(),
+            blockers: capsule.blockers.iter().take(6).cloned().collect(),
+            changed_paths: paths,
+            resume_prompt: capsule.resume_user_prompt(),
+        }
     }
 
     /// Returns newest immutable capsules first (skips `latest.json`).
@@ -313,6 +373,24 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ade-handoff-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn resume_latest_builds_continue_prompt() {
+        let root = fixture();
+        let manager = HandoffManager::new(&root);
+        assert!(!manager.resume_latest().unwrap().available);
+        let mut capsule = HandoffCapsule::new("Finish N4", "agent_turn");
+        capsule.next_safe_command = Some("ade verify --gate G0 --through".into());
+        capsule.turn_status = Some("completed".into());
+        manager.save_capsule(&capsule).unwrap();
+        let resume = manager.resume_latest().unwrap();
+        assert!(resume.available);
+        assert!(resume.resume_prompt.contains("Finish N4"));
+        assert!(resume
+            .resume_prompt
+            .contains("ade verify --gate G0 --through"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

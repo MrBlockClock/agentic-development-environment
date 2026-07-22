@@ -178,6 +178,157 @@ impl TaskCoordinator {
         })
     }
 
+    /// Claim a specific queued task (G3 Apply-one).
+    pub fn claim_id(
+        &self,
+        task_id: &str,
+        agent_id: Uuid,
+        ttl: Duration,
+    ) -> Result<AgentTask, AdeError> {
+        validate_ttl(ttl)?;
+        self.with_registry_mut(|registry| {
+            self.requeue_expired_locked(registry)?;
+            let completed = registry
+                .tasks
+                .iter()
+                .filter(|task| task.status == TaskStatus::Completed)
+                .map(|task| task.id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let index = task_index(registry, task_id)?;
+            let task = &registry.tasks[index];
+            if task.status != TaskStatus::Queued {
+                return Err(AdeError::Other(format!(
+                    "task '{task_id}' is not queued (status={:?})",
+                    task.status
+                )));
+            }
+            if !task
+                .depends_on
+                .iter()
+                .all(|dependency| completed.contains(dependency.as_str()))
+            {
+                return Err(AdeError::Other(format!(
+                    "task '{task_id}' has incomplete dependencies"
+                )));
+            }
+
+            let owned_paths = task.owned_paths.clone();
+            let lease_mode = task.lease_mode;
+            let lease_manager = LeaseManager::new(&self.root);
+            let mut lease_ids = Vec::new();
+            for path in &owned_paths {
+                match lease_manager.acquire(agent_id, path, lease_mode, ttl) {
+                    Ok(lease) => lease_ids.push(lease.id),
+                    Err(error) => {
+                        for lease_id in &lease_ids {
+                            let _ = lease_manager.release(lease_id);
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+
+            let now = Utc::now();
+            let task = &mut registry.tasks[index];
+            task.status = TaskStatus::Claimed;
+            task.agent_id = Some(agent_id);
+            task.lease_ids = lease_ids;
+            task.claimed_at = Some(now);
+            task.heartbeat_at = Some(now);
+            task.expires_at = Some(now + ttl);
+            Ok(task.clone())
+        })
+    }
+
+    /// Enqueue PLAN phases as tasks (idempotent by `[phase.id]` goal prefix).
+    /// Returns newly queued tasks only.
+    pub fn sync_from_plan(
+        &self,
+        phases: &[ade_core::plan::PlanPhase],
+    ) -> Result<Vec<AgentTask>, AdeError> {
+        if phases.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.with_registry_mut(|registry| {
+            let existing_keys: std::collections::HashSet<String> = registry
+                .tasks
+                .iter()
+                .filter(|task| !task.status.is_terminal())
+                .filter_map(|task| plan_phase_key_from_goal(&task.goal))
+                .collect();
+
+            let mut phase_to_task: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for task in &registry.tasks {
+                if let Some(key) = plan_phase_key_from_goal(&task.goal) {
+                    phase_to_task.insert(key, task.id.clone());
+                }
+            }
+
+            let mut created_ids = Vec::new();
+            for phase in phases {
+                let key = phase.id.trim();
+                if key.is_empty() || existing_keys.contains(key) {
+                    continue;
+                }
+                let mut owned_paths = phase.owned_paths.clone();
+                owned_paths.sort();
+                owned_paths.dedup();
+                if owned_paths.is_empty() {
+                    continue;
+                }
+                let goal = format!("[{}] {}", phase.id, phase.title.trim());
+                let task = AgentTask {
+                    id: Uuid::new_v4().to_string(),
+                    goal,
+                    owned_paths,
+                    lease_mode: LeaseMode::Strong,
+                    depends_on: vec![],
+                    status: TaskStatus::Queued,
+                    agent_id: None,
+                    lease_ids: vec![],
+                    created_at: Utc::now(),
+                    claimed_at: None,
+                    heartbeat_at: None,
+                    expires_at: None,
+                    finished_at: None,
+                    failure: None,
+                };
+                phase_to_task.insert(key.to_string(), task.id.clone());
+                created_ids.push(task.id.clone());
+                registry.tasks.push(task);
+            }
+
+            // Second pass: wire phase.depends_on → task ids (including newly created).
+            for phase in phases {
+                let Some(task_id) = phase_to_task.get(phase.id.trim()) else {
+                    continue;
+                };
+                let depends_on = phase
+                    .depends_on
+                    .iter()
+                    .filter_map(|dep| phase_to_task.get(dep.trim()).cloned())
+                    .collect::<Vec<_>>();
+                if depends_on.is_empty() {
+                    continue;
+                }
+                if let Some(task) = registry.tasks.iter_mut().find(|t| t.id == *task_id) {
+                    if !task.status.is_terminal() {
+                        task.depends_on = depends_on;
+                    }
+                }
+            }
+
+            let created = registry
+                .tasks
+                .iter()
+                .filter(|task| created_ids.iter().any(|id| id == &task.id))
+                .cloned()
+                .collect();
+            Ok(created)
+        })
+    }
+
     pub fn start(&self, task_id: &str, agent_id: Uuid) -> Result<AgentTask, AdeError> {
         self.transition_owned(task_id, agent_id, |task| {
             if task.status != TaskStatus::Claimed {
@@ -413,6 +564,20 @@ impl TaskCoordinator {
     }
 }
 
+fn plan_phase_key_from_goal(goal: &str) -> Option<String> {
+    let trimmed = goal.trim();
+    if !trimmed.starts_with('[') {
+        return None;
+    }
+    let end = trimmed.find(']')?;
+    let key = trimmed[1..end].trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
 fn validate_ttl(ttl: Duration) -> Result<(), AdeError> {
     if ttl <= Duration::zero() {
         return Err(AdeError::Other("task ttl must be positive".into()));
@@ -617,6 +782,46 @@ mod tests {
         assert!(coordinator
             .heartbeat(&task.id, Uuid::new_v4(), Duration::minutes(30))
             .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sync_from_plan_is_idempotent_and_wires_deps() {
+        let root = fixture();
+        let coordinator = TaskCoordinator::new(&root);
+        let phases = vec![
+            ade_core::plan::PlanPhase {
+                id: "p1".into(),
+                title: "First".into(),
+                owned_paths: vec!["src/a".into()],
+                gates: vec![],
+                depends_on: vec![],
+            },
+            ade_core::plan::PlanPhase {
+                id: "p2".into(),
+                title: "Second".into(),
+                owned_paths: vec!["src/b".into()],
+                gates: vec![],
+                depends_on: vec!["p1".into()],
+            },
+        ];
+        let created = coordinator.sync_from_plan(&phases).unwrap();
+        assert_eq!(created.len(), 2);
+        let again = coordinator.sync_from_plan(&phases).unwrap();
+        assert!(again.is_empty());
+        let listed = coordinator.list().unwrap();
+        let p2 = listed.iter().find(|t| t.goal.starts_with("[p2]")).unwrap();
+        let p1 = listed.iter().find(|t| t.goal.starts_with("[p1]")).unwrap();
+        assert_eq!(p2.depends_on, vec![p1.id.clone()]);
+
+        let agent = Uuid::new_v4();
+        assert!(coordinator
+            .claim_id(&p2.id, agent, Duration::minutes(5))
+            .is_err());
+        let claimed = coordinator
+            .claim_id(&p1.id, agent, Duration::minutes(5))
+            .unwrap();
+        assert_eq!(claimed.status, TaskStatus::Claimed);
         let _ = std::fs::remove_dir_all(root);
     }
 }

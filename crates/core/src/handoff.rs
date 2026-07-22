@@ -202,6 +202,33 @@ impl HandoffCapsule {
         self.compact_summary = Some(self.prompt_summary(480));
     }
 
+    /// User-facing prompt for Home “Continue last handoff” (N4).
+    /// System prompt still injects the budgeted handoff summary separately.
+    pub fn resume_user_prompt(&self) -> String {
+        let next = self.next_safe_command.as_deref().unwrap_or("ade audit");
+        let goal = truncate(&self.goal, 280);
+        let status = self.turn_status.as_deref().unwrap_or("unknown");
+        let blockers = if self.blockers.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nKnown blockers: {}",
+                self.blockers
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        };
+        format!(
+            "Continue from the latest ADE handoff (status: {status}).\n\
+             Prior goal: {goal}\n\
+             Do next_safe_command first: `{next}`{blockers}\n\
+             Stay inside approved owned_paths / leases. Prefer verify before expanding scope."
+        )
+    }
+
     /// Budgeted prompt injection — never dump the full capsule JSON.
     pub fn prompt_summary(&self, max_chars: usize) -> String {
         let mut paths = self.changed_paths.clone();
@@ -278,9 +305,8 @@ impl HandoffCapsule {
             },
             next = next,
         );
-        if summary.len() > max_chars {
-            summary.truncate(max_chars.saturating_sub(3));
-            summary.push_str("...");
+        if summary.chars().count() > max_chars {
+            summary = truncate(&summary, max_chars);
         }
         summary
     }
@@ -333,5 +359,25 @@ mod tests {
         assert_eq!(capsule.provider.as_deref(), Some("openai"));
         assert!(capsule.compact_summary.is_some());
         assert!(capsule.prompt_summary(200).contains("next_safe_command"));
+    }
+
+    #[test]
+    fn prompt_summary_respects_unicode_char_boundaries() {
+        let mut capsule = HandoffCapsule::new("goal", "evaluate_existing");
+        capsule.goal = "hello 🦀 world — unicode".repeat(40);
+        let summary = capsule.prompt_summary(80);
+        assert!(summary.chars().count() <= 80);
+        assert!(summary.ends_with("..."));
+    }
+
+    #[test]
+    fn resume_user_prompt_mentions_next_safe_command() {
+        let mut capsule = HandoffCapsule::new("Ship N4 continuity", "agent_turn");
+        capsule.next_safe_command = Some("ade verify --gate G0 --through".into());
+        capsule.turn_status = Some("completed".into());
+        let prompt = capsule.resume_user_prompt();
+        assert!(prompt.contains("Continue from the latest ADE handoff"));
+        assert!(prompt.contains("ade verify --gate G0 --through"));
+        assert!(prompt.contains("Ship N4 continuity"));
     }
 }

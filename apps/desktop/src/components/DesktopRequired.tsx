@@ -37,8 +37,7 @@ export function DesktopRequired({
         </ol>
         {!simpleMode && (
           <p className="mt-4 text-[11px] text-slate-500">
-            Nav labels stay the same in Simple and Full — only capability differs by
-            shell.
+            Nav labels match Desktop — only capability differs by shell.
           </p>
         )}
       </section>

@@ -21,7 +21,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTurnResult {
@@ -99,6 +99,7 @@ pub struct AgentSession {
     autonomy: AutonomyLevel,
     max_tool_rounds: usize,
     max_tokens: Option<u64>,
+    preferred_shell_cwd: Option<String>,
 }
 
 impl AgentSession {
@@ -122,6 +123,7 @@ impl AgentSession {
             autonomy: AutonomyLevel::Propose,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_tokens: None,
+            preferred_shell_cwd: None,
         }
     }
 
@@ -135,9 +137,23 @@ impl AgentSession {
         self
     }
 
+    pub fn with_preferred_shell_cwd(mut self, cwd: Option<impl Into<String>>) -> Self {
+        self.preferred_shell_cwd = cwd.map(Into::into).filter(|s| !s.trim().is_empty());
+        self
+    }
+
     pub fn with_autonomy(mut self, autonomy: AutonomyLevel) -> Self {
         self.autonomy = autonomy;
         self
+    }
+
+    /// Apply/Automate without PLAN owned_paths: the dial is the human write approval.
+    fn tool_write_scope(&self) -> WriteScope {
+        if self.autonomy.allows_mutating_tools() && self.authority.owned_paths().is_empty() {
+            WriteScope::HumanReviewed
+        } else {
+            WriteScope::PlanOwnedPaths
+        }
     }
 
     pub fn with_max_tool_rounds(mut self, rounds: usize) -> Self {
@@ -240,12 +256,12 @@ impl AgentSession {
         for round in 0..self.max_tool_rounds {
             self.check_cancelled()?;
             if let Some(max_tokens) = self.max_tokens {
-                let used = total_usage
-                    .input_tokens
-                    .saturating_add(total_usage.output_tokens);
+                // Effort budgets generated tokens only. Counting input each round
+                // re-bills the full system prompt and kills Apply mid-task.
+                let used = total_usage.output_tokens;
                 if used >= max_tokens {
                     return Err(AdeError::Provider(format!(
-                        "agent exceeded the {max_tokens}-token turn budget (used {used})"
+                        "agent exceeded the {max_tokens}-token output budget (used {used})"
                     )));
                 }
             }
@@ -313,12 +329,10 @@ impl AgentSession {
             total_usage.output_tokens += completion.usage.output_tokens;
 
             if let Some(max_tokens) = self.max_tokens {
-                let used = total_usage
-                    .input_tokens
-                    .saturating_add(total_usage.output_tokens);
+                let used = total_usage.output_tokens;
                 if used > max_tokens {
                     return Err(AdeError::Provider(format!(
-                        "agent exceeded the {max_tokens}-token turn budget after round {} (used {used})",
+                        "agent exceeded the {max_tokens}-token output budget after round {} (used {used})",
                         round + 1
                     )));
                 }
@@ -375,13 +389,13 @@ impl AgentSession {
                         call.name
                     )));
                 }
-                let auth_request = ToolAuthRequest {
+                let mut auth_request = ToolAuthRequest {
                     server: route.server.clone(),
                     tool: route.tool.clone(),
                     arguments: arguments.clone(),
                     input_schema: route.input_schema.clone(),
                     annotations: Some(route.annotations.clone()),
-                    write_scope: WriteScope::PlanOwnedPaths,
+                    write_scope: self.tool_write_scope(),
                     human_approved: false,
                 };
                 let effect = classify_tool_effect(&auth_request);
@@ -393,6 +407,26 @@ impl AgentSession {
                         self.autonomy.as_str()
                     )));
                 }
+                // Act/Automate is the human gate for full process tools. Suggest/Propose
+                // may run inspect-only shell (validated before authorize).
+                if matches!(effect, ToolEffect::ProcessExecution) {
+                    if self.autonomy.allows_mutating_tools() {
+                        auth_request.human_approved = true;
+                    } else if self.autonomy == AutonomyLevel::Propose {
+                        let cmd = arguments
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if crate::shell::is_inspect_command(cmd) {
+                            auth_request.human_approved = true;
+                        } else {
+                            return Err(AdeError::Authorization(
+                                "Suggest shell is inspect-only (list/read). Switch to Apply for mkdir/move/write commands."
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
                 self.authority.authorize_tool_call(&auth_request)?;
                 let _ = events
                     .send(AgentEvent::ToolCall {
@@ -403,7 +437,7 @@ impl AgentSession {
                     })
                     .await;
                 let (is_error, text, content) = if route.host {
-                    match self.call_host_tool(&route.tool, &arguments) {
+                    match self.call_host_tool(&route.tool, &arguments).await {
                         Ok(text) => (false, text.clone(), Value::String(text)),
                         Err(error) => {
                             let text = error.to_string();
@@ -519,7 +553,7 @@ impl AgentSession {
         Ok(())
     }
 
-    fn call_host_tool(&self, tool: &str, arguments: &Value) -> Result<String, AdeError> {
+    async fn call_host_tool(&self, tool: &str, arguments: &Value) -> Result<String, AdeError> {
         match tool {
             "activate_skill" => {
                 let name = arguments
@@ -530,8 +564,122 @@ impl AgentSession {
                 let skill = SkillLoader::new(&self.workspace_root).activate(name)?;
                 Ok(skill_body_block(&skill))
             }
+            "web_fetch" => {
+                let url = arguments
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                crate::web::web_fetch(url).await
+            }
+            "web_search" => {
+                let query = arguments
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                crate::web::web_search(query).await
+            }
+            "read_file" => self.host_read_file(arguments),
+            "write_file" => self.host_write_file(arguments),
+            "run_command" => {
+                let command = arguments
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let timeout_secs = arguments.get("timeout_secs").and_then(Value::as_u64);
+                let cwd = arguments
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .or(self.preferred_shell_cwd.as_deref());
+                crate::shell::run_command(
+                    &self.workspace_root,
+                    command,
+                    timeout_secs,
+                    crate::shell::ShellOptions {
+                        inspect_only: !self.autonomy.allows_mutating_tools(),
+                        cwd,
+                    },
+                )
+                .await
+            }
             other => Err(AdeError::NotFound(format!("unknown host tool '{other}'"))),
         }
+    }
+
+    fn host_resolve_path(&self, relative: &str) -> Result<PathBuf, AdeError> {
+        let relative = relative.trim().replace('\\', "/");
+        if relative.is_empty() {
+            return Err(AdeError::Config("path is required".into()));
+        }
+        if PathBuf::from(&relative).is_absolute() {
+            return Err(AdeError::Authorization(
+                "absolute paths are not allowed; use a workspace-relative path".into(),
+            ));
+        }
+        if relative.split('/').any(|part| part == "..") {
+            return Err(AdeError::Authorization(
+                "path traversal (..) is not allowed".into(),
+            ));
+        }
+        if crate::ignore_enforcer::IgnoreEnforcer::new(&self.workspace_root)
+            .path_is_blocked(&relative)
+        {
+            return Err(AdeError::Authorization(format!(
+                "path '{relative}' is blocked by ADE ignore policy"
+            )));
+        }
+        let full = self.workspace_root.join(&relative);
+        let canonical_root = self
+            .workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace_root.clone());
+        if let Ok(canonical) = full.canonicalize() {
+            if !canonical.starts_with(&canonical_root) {
+                return Err(AdeError::Authorization(
+                    "resolved path escapes the workspace root".into(),
+                ));
+            }
+        }
+        Ok(full)
+    }
+
+    fn host_read_file(&self, arguments: &Value) -> Result<String, AdeError> {
+        let path = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let full = self.host_resolve_path(path)?;
+        let text = std::fs::read_to_string(&full)
+            .map_err(|error| AdeError::Other(format!("read_file {}: {error}", full.display())))?;
+        const MAX: usize = 32_000;
+        if text.chars().count() > MAX {
+            let clipped: String = text.chars().take(MAX).collect();
+            return Ok(format!("{clipped}\n\n…[truncated at {MAX} chars]"));
+        }
+        Ok(text)
+    }
+
+    fn host_write_file(&self, arguments: &Value) -> Result<String, AdeError> {
+        let path = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let content = arguments
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AdeError::Config("content string is required".into()))?;
+        let full = self.host_resolve_path(path)?;
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&full, content)?;
+        Ok(format!("wrote {} bytes to {path}", content.len()))
     }
 
     async fn provider_tools(
@@ -548,7 +696,7 @@ impl AgentSession {
                 arguments: json!({}),
                 input_schema: Some(host.input_schema.clone()),
                 annotations: Some(host.annotations.clone()),
-                write_scope: WriteScope::PlanOwnedPaths,
+                write_scope: self.tool_write_scope(),
                 human_approved: false,
             });
             if !self.autonomy.allows_tool_effect(effect) {
@@ -586,7 +734,7 @@ impl AgentSession {
                 arguments: json!({}),
                 input_schema: Some(tool.input_schema.clone()),
                 annotations: Some(tool.annotations.clone()),
-                write_scope: WriteScope::PlanOwnedPaths,
+                write_scope: self.tool_write_scope(),
                 human_approved: false,
             });
             if !self.autonomy.allows_tool_effect(effect) {
@@ -638,27 +786,146 @@ struct HostToolDef {
 }
 
 fn host_tools() -> Vec<HostToolDef> {
-    vec![HostToolDef {
-        server: "ade".into(),
-        tool: "activate_skill".into(),
-        description: "Load the full body of a listed .ade/skills skill by exact name (progressive disclosure T2).".into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Exact skill name from the T1 catalog"
-                }
+    vec![
+        HostToolDef {
+            server: "ade".into(),
+            tool: "activate_skill".into(),
+            description: "Load the full body of a listed .ade/skills skill by exact name (progressive disclosure T2).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact skill name from the T1 catalog"
+                    }
+                },
+                "required": ["name"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
+                ..Default::default()
             },
-            "required": ["name"],
-            "x-ade-effect": "read_only"
-        }),
-        annotations: ToolAnnotations {
-            read_only_hint: Some(true),
-            ade_effect: Some(ToolEffect::ReadOnly),
-            ..Default::default()
         },
-    }]
+        HostToolDef {
+            server: "ade".into(),
+            tool: "web_search".into(),
+            description: "Search the public web (DuckDuckGo Instant Answer) for docs, APIs, or facts. Prefer this before guessing URLs.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    }
+                },
+                "required": ["query"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "ade".into(),
+            tool: "web_fetch".into(),
+            description: "Fetch an http(s) URL and return truncated text (HTML stripped). Use for docs, changelogs, and API references.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Absolute http or https URL"
+                    }
+                },
+                "required": ["url"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "fs".into(),
+            tool: "read_file".into(),
+            description: "Read a UTF-8 text file relative to the workspace root (read-only).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path"
+                    }
+                },
+                "required": ["path"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "fs".into(),
+            tool: "write_file".into(),
+            description: "Write a UTF-8 text file under an approved owned path (workspace write). Create parent dirs as needed.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path inside approved owned_paths"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full file contents to write"
+                    }
+                },
+                "required": ["path", "content"],
+                "x-ade-effect": "workspace_write"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(false),
+                ade_effect: Some(ToolEffect::WorkspaceWrite),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "shell".into(),
+            tool: "run_command".into(),
+            description: "Run a one-shot shell command (shown as Shell in Live activity). Suggest: inspect-only (Get-ChildItem/ls/pwd/Get-Content). Apply: full shell minus dangerous wipes. Optional cwd may be workspace-relative, absolute under the user profile (Desktop), or $env:USERPROFILE\\\\Desktop. When omitted, uses the host SHELL SCOPE default (workspace or Home/Desktop). Not an interactive PTY.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command (PowerShell on Windows)"
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory override: workspace path, ~, $env:USERPROFILE\\\\Desktop, or absolute under user profile. Omit to use host SHELL SCOPE default."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "Optional timeout (1–300, default 60)"
+                    }
+                },
+                "required": ["command"],
+                "x-ade-effect": "process_execution"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(false),
+                ade_effect: Some(ToolEffect::ProcessExecution),
+                ..Default::default()
+            },
+        },
+    ]
 }
 
 fn provider_tool_name(server: &str, tool: &str) -> String {

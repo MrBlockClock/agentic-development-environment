@@ -50,7 +50,11 @@ impl AutonomyLevel {
         if self.allows_mutating_tools() {
             return true;
         }
-        matches!(effect, ToolEffect::ReadOnly)
+        // Propose gets inspect-only shell (ProcessExecution enforced at runtime).
+        match self {
+            Self::Propose => matches!(effect, ToolEffect::ReadOnly | ToolEffect::ProcessExecution),
+            _ => matches!(effect, ToolEffect::ReadOnly),
+        }
     }
 
     pub fn prompt_clause(self) -> &'static str {
@@ -59,13 +63,13 @@ impl AutonomyLevel {
                 "AUTONOMY=Observe: read-only. Explain and point at evidence. Do not propose file patches or claim you applied changes."
             }
             Self::Propose => {
-                "AUTONOMY=Propose: you may draft plans and unified diffs in chat. Do not apply writes; wait for human approval / Act mode."
+                "AUTONOMY=Propose (Suggest): read tools + shell__run_command in inspect mode (list/pwd/Get-Content). Use cwd for Desktop/home paths. Do not write/move/mkdir via shell — ask the user to switch to Apply for that. When offering choices, prefer a fenced ```ade.next-actions block with schema ade.next-actions/v1 and ≥2 items (label + optional prompt); otherwise a short numbered list. Prefer Queue PLAN→tasks on Desktop rather than self-claiming work."
             }
             Self::Act => {
-                "AUTONOMY=Act: execute only inside approved PLAN owned_paths / active leases. Prefer verify after mutations."
+                "AUTONOMY=Act (Apply): human approved writes for this turn. Prefer approved PLAN owned_paths / leases when present; if none, workspace writes are still allowed (AGENTS.md + sensitive-path policy still apply). shell__run_command is full (minus dangerous wipes); set cwd for Desktop/home. Execute ONE claimed task when role-split is active. Prefer verify after mutations."
             }
             Self::Automate => {
-                "AUTONOMY=Automate: execute under leases/caps. Completion requires verify gates to pass; do not self-certify."
+                "AUTONOMY=Automate: Apply one claimed task under leases/caps with full shell. Completion requires verify gates to pass; do not self-certify or claim a second task in the same turn."
             }
         }
     }
@@ -96,6 +100,13 @@ mod tests {
         assert!(!AutonomyLevel::Observe.allows_mutating_tools());
         assert!(AutonomyLevel::Observe.allows_tool_effect(ToolEffect::ReadOnly));
         assert!(!AutonomyLevel::Observe.allows_tool_effect(ToolEffect::WorkspaceWrite));
+        assert!(!AutonomyLevel::Observe.allows_tool_effect(ToolEffect::ProcessExecution));
+    }
+
+    #[test]
+    fn propose_allows_inspect_shell_not_writes() {
+        assert!(AutonomyLevel::Propose.allows_tool_effect(ToolEffect::ProcessExecution));
+        assert!(!AutonomyLevel::Propose.allows_tool_effect(ToolEffect::WorkspaceWrite));
     }
 
     #[test]

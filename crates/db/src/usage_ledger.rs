@@ -294,6 +294,90 @@ impl UsageLedgerStore {
             .map_err(|error| AdeError::Database(error.to_string()))?;
         Ok(count > 0)
     }
+
+    pub async fn recent_for_workspace(
+        &self,
+        workspace_root: &str,
+        limit: u32,
+    ) -> Result<Vec<LedgerEntryView>, AdeError> {
+        self.expire_stale().await?;
+        let limit = limit.clamp(1, 200) as i64;
+        let mut rows = self
+            .connection
+            .query(
+                "SELECT id, created_at, status, scope, period_key, provider, model,
+                        reserved_micros, actual_micros, input_tokens, output_tokens
+                 FROM usage_ledger_entries
+                 WHERE workspace_root = ?1
+                 ORDER BY created_at DESC
+                 LIMIT ?2",
+                (workspace_root.to_string(), limit),
+            )
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?
+        {
+            let reserved_micros: i64 = row
+                .get(7)
+                .map_err(|error| AdeError::Database(error.to_string()))?;
+            let actual_micros: i64 = row
+                .get(8)
+                .map_err(|error| AdeError::Database(error.to_string()))?;
+            out.push(LedgerEntryView {
+                id: row
+                    .get::<String>(0)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                created_at: row
+                    .get::<String>(1)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                status: row
+                    .get::<String>(2)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                scope: row
+                    .get::<String>(3)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                period_key: row
+                    .get::<String>(4)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                provider: row
+                    .get(5)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                model: row
+                    .get(6)
+                    .map_err(|error| AdeError::Database(error.to_string()))?,
+                reserved_usd: Money::from_micros(reserved_micros.max(0)).to_usd_f64(),
+                actual_usd: Money::from_micros(actual_micros.max(0)).to_usd_f64(),
+                input_tokens: row
+                    .get::<i64>(9)
+                    .map_err(|error| AdeError::Database(error.to_string()))?
+                    .max(0) as u64,
+                output_tokens: row
+                    .get::<i64>(10)
+                    .map_err(|error| AdeError::Database(error.to_string()))?
+                    .max(0) as u64,
+            });
+        }
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LedgerEntryView {
+    pub id: String,
+    pub created_at: String,
+    pub status: String,
+    pub scope: String,
+    pub period_key: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub reserved_usd: f64,
+    pub actual_usd: f64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 fn optional_text(value: Option<&str>) -> turso::Value {

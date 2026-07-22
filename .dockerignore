@@ -21,3 +21,13 @@
 *.pem
 *.key
 *credentials*.json
+
+# ADE always-ignore (do not remove) — exact forms for alignment check
+node_modules/
+target/
+dist/
+.venv/
+test-results/
+playwright-report/
+**/storageState.json
+*.tursodb

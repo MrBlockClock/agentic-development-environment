@@ -16,7 +16,11 @@ export type AdeCapability =
   | "provider_keys"
   | "mcp_host"
   | "execute_plan"
-  | "recipe_initialize";
+  | "recipe_initialize"
+  | "in_app_browser"
+  | "interactive_terminal"
+  | "monaco_editor"
+  | "workspaces_switch";
 
 export type CapabilityRow = {
   id: AdeCapability;
@@ -98,6 +102,34 @@ export const ADE_CAPABILITY_MATRIX: CapabilityRow[] = [
     browser: false,
     note: "Writes workspace files via Desktop",
   },
+  {
+    id: "in_app_browser",
+    label: "In-app Browser (WebView2)",
+    desktop: true,
+    browser: false,
+    note: "Separate Chromium window; agents also get web_fetch/web_search host tools",
+  },
+  {
+    id: "interactive_terminal",
+    label: "Interactive Terminal (PTY)",
+    desktop: true,
+    browser: false,
+    note: "Workspace shell via portable-pty + xterm; agent shell tools come later (WP43)",
+  },
+  {
+    id: "monaco_editor",
+    label: "Monaco Editor (text)",
+    desktop: true,
+    browser: false,
+    note: "Light workspace text edit; SensitivePathPolicy; no VS Code extensions",
+  },
+  {
+    id: "workspaces_switch",
+    label: "Open / create / switch workspaces",
+    desktop: true,
+    browser: false,
+    note: "Folder picker + AGENTS.md adopt; Environment audits the attached root",
+  },
 ];
 
 export function capabilityAvailable(
@@ -111,9 +143,12 @@ export function capabilityAvailable(
 
 /** Views that must show a Desktop funnel in browser preview. */
 export const DESKTOP_REQUIRED_VIEWS = new Set([
-  "Agent",
   "Keys",
   "MCP",
+  "Browser",
+  "Terminal",
+  "Editor",
+  "Workspaces",
 ]);
 
 export function desktopRequiredCopy(view: string): {
@@ -128,17 +163,35 @@ export function desktopRequiredCopy(view: string): {
         body: "Provider credentials are stored in the OS vault. Browser preview cannot save or smoke-test API keys.",
         next: "Open ADE Desktop → Keys, then return here for status and checks.",
       };
-    case "Agent":
-      return {
-        title: "Agent needs Desktop",
-        body: "Chat turns, Apply/Automate, and EXECUTE stay in the desktop harness. There is no agent-over-HTTP.",
-        next: "Open ADE Desktop → Agent. Use this browser for Verify, Recipes, and Trust views.",
-      };
     case "MCP":
       return {
         title: "MCP needs Desktop",
         body: "MCP servers are hosted in the desktop process, not the loopback API.",
         next: "Open ADE Desktop → MCP to connect servers.",
+      };
+    case "Browser":
+      return {
+        title: "In-app Browser needs Desktop",
+        body: "ADE opens a dedicated WebView2 / Chromium window for live browsing. Agents already get web_search and web_fetch on Desktop turns without this window.",
+        next: "Open ADE Desktop → Browser, or ask ADE on Home to fetch docs.",
+      };
+    case "Terminal":
+      return {
+        title: "Terminal needs Desktop",
+        body: "Interactive shells run as a local PTY inside the Desktop app, rooted at the attached workspace.",
+        next: "Open ADE Desktop → Terminal.",
+      };
+    case "Editor":
+      return {
+        title: "Editor needs Desktop",
+        body: "Monaco edits workspace text files through the Desktop FS bridge (SensitivePathPolicy enforced).",
+        next: "Open ADE Desktop → Editor.",
+      };
+    case "Workspaces":
+      return {
+        title: "Workspaces need Desktop",
+        body: "Opening, adopting, and switching folders uses the Desktop file dialog and local ADE state.",
+        next: "Open ADE Desktop → Workspaces to attach a folder, then use Environment to audit it.",
       };
     default:
       return {

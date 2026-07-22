@@ -1,0 +1,409 @@
+//! Eng-goal objects — durable outcome + scope + verify, not free chat.
+//!
+//! Layout (workspace):
+//! - `.ade/goals/{id}.json` — immutable-ish goal records
+//! - `.ade/goals/active.json` — `{ "id": "…" }` pointer to the current goal
+
+use ade_core::error::AdeError;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
+
+pub const GOAL_SCHEMA: &str = "ade.goal/v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EngGoal {
+    pub schema: String,
+    pub id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// User-stated outcome (the product unit of work).
+    pub statement: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_criteria: Vec<String>,
+    /// `workspace` | `home` — maps to shell preferred cwd (G1).
+    pub shell_scope: String,
+    /// `propose` | `act` | `automate` (observe rare for goals).
+    pub autonomy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_gate: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned_paths: Vec<String>,
+    /// `active` | `paused` | `done` | `abandoned`
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_handoff_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveGoalPointer {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalCreateInput {
+    pub statement: String,
+    #[serde(default)]
+    pub success_criteria: Vec<String>,
+    #[serde(default = "default_shell_scope")]
+    pub shell_scope: String,
+    #[serde(default = "default_autonomy")]
+    pub autonomy: String,
+    pub verify_gate: Option<String>,
+    #[serde(default)]
+    pub owned_paths: Vec<String>,
+    /// When true, also write `active.json`.
+    #[serde(default = "default_true")]
+    pub activate: bool,
+}
+
+fn default_shell_scope() -> String {
+    "workspace".into()
+}
+
+fn default_autonomy() -> String {
+    "propose".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl EngGoal {
+    pub fn prompt_block(&self) -> String {
+        let mut lines = vec![
+            format!("ENG GOAL (id={}):", self.id),
+            format!("Statement: {}", self.statement.trim()),
+            format!(
+                "Shell scope: {} · Autonomy: {} · Status: {}",
+                self.shell_scope, self.autonomy, self.status
+            ),
+        ];
+        if let Some(gate) = self.verify_gate.as_deref().filter(|g| !g.trim().is_empty()) {
+            lines.push(format!("Verify gate: {gate}"));
+        }
+        if !self.success_criteria.is_empty() {
+            lines.push("Success criteria:".into());
+            for (i, c) in self.success_criteria.iter().enumerate() {
+                lines.push(format!("  {}. {}", i + 1, c.trim()));
+            }
+        }
+        if !self.owned_paths.is_empty() {
+            lines.push(format!("Owned paths hint: {}", self.owned_paths.join(", ")));
+        }
+        lines.push(
+            "Treat this goal as the outcome to advance this turn; chat is the channel, not the product."
+                .into(),
+        );
+        lines.join("\n")
+    }
+
+    /// Prompt used when the user hits “Run goal” (statement + criteria).
+    pub fn run_prompt(&self) -> String {
+        let mut parts = vec![self.statement.trim().to_string()];
+        if !self.success_criteria.is_empty() {
+            parts.push(String::new());
+            parts.push("Success criteria:".into());
+            for c in &self.success_criteria {
+                parts.push(format!("- {}", c.trim()));
+            }
+        }
+        parts.join("\n")
+    }
+}
+
+pub struct GoalStore {
+    root: PathBuf,
+}
+
+impl GoalStore {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    fn goals_dir(&self) -> PathBuf {
+        self.root.join(".ade").join("goals")
+    }
+
+    fn goal_path(&self, id: &str) -> PathBuf {
+        self.goals_dir().join(format!("{id}.json"))
+    }
+
+    fn active_path(&self) -> PathBuf {
+        self.goals_dir().join("active.json")
+    }
+
+    pub fn create(&self, input: GoalCreateInput) -> Result<EngGoal, AdeError> {
+        let statement = input.statement.trim();
+        if statement.is_empty() {
+            return Err(AdeError::Config("goal statement cannot be empty".into()));
+        }
+        let shell_scope = normalize_shell_scope(&input.shell_scope)?;
+        let autonomy = normalize_autonomy(&input.autonomy)?;
+        let now = Utc::now().to_rfc3339();
+        let goal = EngGoal {
+            schema: GOAL_SCHEMA.into(),
+            id: Uuid::new_v4().to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+            statement: statement.chars().take(2_000).collect(),
+            success_criteria: input
+                .success_criteria
+                .into_iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .take(12)
+                .collect(),
+            shell_scope,
+            autonomy,
+            verify_gate: input
+                .verify_gate
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty()),
+            owned_paths: input
+                .owned_paths
+                .into_iter()
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .take(32)
+                .collect(),
+            status: "active".into(),
+            last_handoff_id: None,
+        };
+        self.save(&goal)?;
+        if input.activate {
+            self.set_active(&goal.id)?;
+        }
+        Ok(goal)
+    }
+
+    pub fn save(&self, goal: &EngGoal) -> Result<(), AdeError> {
+        validate_goal(goal)?;
+        let dir = self.goals_dir();
+        std::fs::create_dir_all(&dir)?;
+        let payload = serde_json::to_vec_pretty(goal)?;
+        write_atomic(&self.goal_path(&goal.id), &payload)?;
+        Ok(())
+    }
+
+    pub fn load(&self, id: &str) -> Result<EngGoal, AdeError> {
+        let id = validate_id(id)?;
+        let path = self.goal_path(id);
+        let raw = std::fs::read(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AdeError::NotFound(format!("eng-goal '{id}' not found"))
+            } else {
+                AdeError::Io(error)
+            }
+        })?;
+        let goal: EngGoal = serde_json::from_slice(&raw)?;
+        validate_goal(&goal)?;
+        Ok(goal)
+    }
+
+    pub fn list(&self) -> Result<Vec<EngGoal>, AdeError> {
+        let dir = self.goals_dir();
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut goals = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == "active.json" || !name.ends_with(".json") {
+                continue;
+            }
+            let id = name.trim_end_matches(".json");
+            if let Ok(goal) = self.load(id) {
+                goals.push(goal);
+            }
+        }
+        goals.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(goals)
+    }
+
+    pub fn set_active(&self, id: &str) -> Result<EngGoal, AdeError> {
+        let mut goal = self.load(id)?;
+        goal.status = "active".into();
+        goal.updated_at = Utc::now().to_rfc3339();
+        self.save(&goal)?;
+        let dir = self.goals_dir();
+        std::fs::create_dir_all(&dir)?;
+        let pointer = ActiveGoalPointer {
+            id: goal.id.clone(),
+        };
+        let payload = serde_json::to_vec_pretty(&pointer)?;
+        write_atomic(&self.active_path(), &payload)?;
+        Ok(goal)
+    }
+
+    pub fn clear_active(&self) -> Result<(), AdeError> {
+        let path = self.active_path();
+        if path.is_file() {
+            std::fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    pub fn load_active(&self) -> Result<Option<EngGoal>, AdeError> {
+        let path = self.active_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let raw = std::fs::read(&path)?;
+        let pointer: ActiveGoalPointer = serde_json::from_slice(&raw)?;
+        match self.load(&pointer.id) {
+            Ok(goal) => Ok(Some(goal)),
+            Err(AdeError::NotFound(_)) => {
+                let _ = std::fs::remove_file(&path);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn mark_status(&self, id: &str, status: &str) -> Result<EngGoal, AdeError> {
+        let status = normalize_status(status)?;
+        let mut goal = self.load(id)?;
+        goal.status = status;
+        goal.updated_at = Utc::now().to_rfc3339();
+        self.save(&goal)?;
+        if goal.status == "done" || goal.status == "abandoned" {
+            if let Ok(Some(active)) = self.load_active() {
+                if active.id == goal.id {
+                    self.clear_active()?;
+                }
+            }
+        }
+        Ok(goal)
+    }
+
+    pub fn attach_handoff(&self, id: &str, handoff_id: &str) -> Result<EngGoal, AdeError> {
+        let mut goal = self.load(id)?;
+        goal.last_handoff_id = Some(handoff_id.trim().to_string());
+        goal.updated_at = Utc::now().to_rfc3339();
+        self.save(&goal)?;
+        Ok(goal)
+    }
+}
+
+fn validate_id(id: &str) -> Result<&str, AdeError> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(AdeError::Config("invalid eng-goal id".into()));
+    }
+    Ok(id)
+}
+
+fn validate_goal(goal: &EngGoal) -> Result<(), AdeError> {
+    if goal.schema != GOAL_SCHEMA {
+        return Err(AdeError::Config(format!(
+            "unsupported eng-goal schema '{}'",
+            goal.schema
+        )));
+    }
+    validate_id(&goal.id)?;
+    if goal.statement.trim().is_empty() {
+        return Err(AdeError::Config("goal statement cannot be empty".into()));
+    }
+    normalize_shell_scope(&goal.shell_scope)?;
+    normalize_autonomy(&goal.autonomy)?;
+    normalize_status(&goal.status)?;
+    Ok(())
+}
+
+fn normalize_shell_scope(raw: &str) -> Result<String, AdeError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "workspace" => Ok("workspace".into()),
+        "home" | "desktop" | "profile" => Ok("home".into()),
+        other => Err(AdeError::Config(format!(
+            "unknown shell_scope '{other}' (expected workspace|home)"
+        ))),
+    }
+}
+
+fn normalize_autonomy(raw: &str) -> Result<String, AdeError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "observe" | "propose" | "act" | "automate" => Ok(raw.trim().to_ascii_lowercase()),
+        other => Err(AdeError::Config(format!(
+            "unknown autonomy '{other}' (expected observe|propose|act|automate)"
+        ))),
+    }
+}
+
+fn normalize_status(raw: &str) -> Result<String, AdeError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "active" | "paused" | "done" | "abandoned" => Ok(raw.trim().to_ascii_lowercase()),
+        other => Err(AdeError::Config(format!(
+            "unknown goal status '{other}' (expected active|paused|done|abandoned)"
+        ))),
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), AdeError> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, bytes)?;
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_activate_load_and_done() {
+        let root = std::env::temp_dir().join(format!("ade-goal-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = GoalStore::new(&root);
+        let goal = store
+            .create(GoalCreateInput {
+                statement: "Organize Desktop into typed folders".into(),
+                success_criteria: vec!["No loose PDFs on Desktop".into()],
+                shell_scope: "home".into(),
+                autonomy: "act".into(),
+                verify_gate: Some("G3".into()),
+                owned_paths: vec![],
+                activate: true,
+            })
+            .unwrap();
+        assert_eq!(goal.shell_scope, "home");
+        let active = store.load_active().unwrap().expect("active");
+        assert_eq!(active.id, goal.id);
+        assert!(active.prompt_block().contains("ENG GOAL"));
+        assert!(active.run_prompt().contains("Organize Desktop"));
+
+        store.mark_status(&goal.id, "done").unwrap();
+        assert!(store.load_active().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_skips_active_pointer() {
+        let root = std::env::temp_dir().join(format!("ade-goal-list-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = GoalStore::new(&root);
+        store
+            .create(GoalCreateInput {
+                statement: "Ship G2".into(),
+                success_criteria: vec![],
+                shell_scope: "workspace".into(),
+                autonomy: "propose".into(),
+                verify_gate: None,
+                owned_paths: vec![],
+                activate: true,
+            })
+            .unwrap();
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

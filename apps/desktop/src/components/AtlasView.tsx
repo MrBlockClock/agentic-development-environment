@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "../ipc";
+import { GraphCanvas } from "./GraphCanvas";
 
 type RuleFile = {
   source: string;
@@ -51,6 +52,8 @@ type AtlasNode = {
   x: number;
   y: number;
   preview: string;
+  jump?: "guidance" | "plan";
+  phaseId?: string;
 };
 
 type AtlasEdge = {
@@ -59,12 +62,13 @@ type AtlasEdge = {
   kind: string;
 };
 
-/** Obsidian-like ADE Atlas — Authority + Work layers, projected from live state. */
+/** Obsidian-like ADE Atlas — Authority + Work layers with pan/zoom (N5). */
 export function AtlasView({
   auditFindings,
   planPhases,
   verifyGates,
   handoffs,
+  focusNodeId = null,
   onOpenGuidance,
   onOpenPlan,
 }: {
@@ -72,8 +76,9 @@ export function AtlasView({
   planPhases: PlanPhase[];
   verifyGates: string[];
   handoffs: HandoffHistoryItem[];
+  focusNodeId?: string | null;
   onOpenGuidance?: () => void;
-  onOpenPlan?: () => void;
+  onOpenPlan?: (phaseId?: string) => void;
 }) {
   const [rules, setRules] = useState<RuleFile[]>([]);
   const [skills, setSkills] = useState<SkillFile[]>([]);
@@ -100,6 +105,10 @@ export function AtlasView({
     })();
   }, []);
 
+  useEffect(() => {
+    if (focusNodeId) setSelectedId(focusNodeId);
+  }, [focusNodeId]);
+
   const { nodes, edges } = useMemo(() => {
     const nodes: AtlasNode[] = [];
     const edges: AtlasEdge[] = [];
@@ -113,6 +122,7 @@ export function AtlasView({
       x: 40,
       y: 40,
       preview: "Machine ADE guidance home",
+      jump: "guidance",
     });
     nodes.push({
       id: "hub-workspace",
@@ -123,6 +133,7 @@ export function AtlasView({
       x: 280,
       y: 40,
       preview: "Checkout .ade + AGENTS.md",
+      jump: "guidance",
     });
     nodes.push({
       id: "agents-md",
@@ -133,6 +144,7 @@ export function AtlasView({
       x: 280,
       y: 110,
       preview: "Canonical workspace contract",
+      jump: "guidance",
     });
     edges.push({ from: "hub-workspace", to: "agents-md", kind: "contains" });
 
@@ -147,6 +159,7 @@ export function AtlasView({
       preview: activeProfile
         ? `Active profile "${activeProfile}" filters pack-tagged guidance.`
         : "No active profile — all packs load. Set one in Guidance.",
+      jump: "guidance",
     });
     edges.push({ from: "hub-global", to: "profile", kind: "activates" });
 
@@ -162,6 +175,7 @@ export function AtlasView({
         x: global ? 40 : 280,
         y: 180 + index * 36,
         preview: `${rule.description || "(no description)"}\n\n${rule.content.slice(0, 800)}`,
+        jump: "guidance",
       });
       edges.push({
         from: global ? "hub-global" : "hub-workspace",
@@ -182,6 +196,7 @@ export function AtlasView({
         x: global ? 140 : 420,
         y: 180 + index * 36,
         preview: `${skill.description}\n\n${skill.body.slice(0, 800)}`,
+        jump: "guidance",
       });
       edges.push({
         from: global ? "hub-global" : "hub-workspace",
@@ -206,7 +221,8 @@ export function AtlasView({
       layer: "work",
       x: 280,
       y: 520,
-      preview: "Trust Route phases",
+      preview: "Plan Map phases",
+      jump: "plan",
     });
     edges.push({ from: "hub-audit", to: "hub-plan", kind: "derived_from" });
 
@@ -234,6 +250,8 @@ export function AtlasView({
         x: 280,
         y: 580 + index * 36,
         preview: `Paths: ${phase.owned_paths.join(", ") || "—"}\nGates: ${phase.gates.join(", ")}`,
+        jump: "plan",
+        phaseId: phase.id,
       });
       edges.push({ from: "hub-plan", to: id, kind: "contains" });
       for (const dep of phase.depends_on ?? []) {
@@ -263,6 +281,7 @@ export function AtlasView({
         x: 520,
         y: 580 + index * 32,
         preview: `Verify gate ${gate}`,
+        jump: "plan",
       });
       edges.push({ from: "hub-plan", to: id, kind: "verified_by" });
     });
@@ -301,13 +320,32 @@ export function AtlasView({
   );
   const selected = nodes.find((n) => n.id === selectedId);
 
-  const width = Math.max(640, ...visibleNodes.map((n) => n.x + 140));
-  const height = Math.max(400, ...visibleNodes.map((n) => n.y + 40));
+  const width = Math.max(640, ...visibleNodes.map((n) => n.x + 140), 140);
+  const height = Math.max(400, ...visibleNodes.map((n) => n.y + 40), 40);
 
   return (
-    <div className="space-y-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-sm font-semibold text-slate-100">Atlas</h2>
+        <nav className="flex items-center gap-1 text-[11px] text-slate-500">
+          <button
+            type="button"
+            onClick={onOpenGuidance}
+            className="text-blue-300/90 hover:text-blue-200"
+          >
+            Guidance
+          </button>
+          <span aria-hidden>→</span>
+          <span className="text-slate-300">Atlas</span>
+          <span aria-hidden>→</span>
+          <button
+            type="button"
+            onClick={() => onOpenPlan?.()}
+            className="text-blue-300/90 hover:text-blue-200"
+          >
+            Plan Map
+          </button>
+        </nav>
         <span
           className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400"
           title="Change in Guidance"
@@ -336,81 +374,70 @@ export function AtlasView({
           placeholder="Filter nodes…"
           className="rounded-lg border border-white/10 bg-[#101620] px-2.5 py-1 text-[11px] text-slate-200"
         />
-        <button
-          type="button"
-          onClick={onOpenGuidance}
-          className="text-[11px] text-blue-300 hover:text-blue-200"
-        >
-          Guidance →
-        </button>
-        <button
-          type="button"
-          onClick={onOpenPlan}
-          className="text-[11px] text-blue-300 hover:text-blue-200"
-        >
-          Plan Map →
-        </button>
       </div>
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_300px]">
-        <div className="thin-scrollbar overflow-auto rounded-2xl border border-white/7 bg-[#080b11]">
-          <svg width={width} height={height} className="block">
-            {visibleEdges.map((edge) => {
-              const from = nodes.find((n) => n.id === edge.from);
-              const to = nodes.find((n) => n.id === edge.to);
-              if (!from || !to) return null;
-              return (
-                <line
-                  key={`${edge.from}-${edge.to}-${edge.kind}`}
-                  x1={from.x + 50}
-                  y1={from.y + 12}
-                  x2={to.x + 50}
-                  y2={to.y + 12}
-                  stroke={
-                    edge.kind === "denies_write"
-                      ? "rgba(251,191,36,0.45)"
-                      : "rgba(100,116,139,0.35)"
-                  }
-                  strokeWidth={1}
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_300px]">
+        <GraphCanvas
+          contentWidth={width}
+          contentHeight={height}
+          className="min-h-[360px] rounded-2xl border border-white/7 bg-[#080b11]"
+        >
+          {visibleEdges.map((edge) => {
+            const from = nodes.find((n) => n.id === edge.from);
+            const to = nodes.find((n) => n.id === edge.to);
+            if (!from || !to) return null;
+            return (
+              <line
+                key={`${edge.from}-${edge.to}-${edge.kind}`}
+                x1={from.x + 50}
+                y1={from.y + 12}
+                x2={to.x + 50}
+                y2={to.y + 12}
+                stroke={
+                  edge.kind === "denies_write"
+                    ? "rgba(251,191,36,0.45)"
+                    : "rgba(100,116,139,0.35)"
+                }
+                strokeWidth={1}
+              />
+            );
+          })}
+          {visibleNodes.map((node) => {
+            const active = node.id === selectedId;
+            const fill =
+              node.scope === "global"
+                ? "rgba(167,139,250,0.15)"
+                : node.layer === "work"
+                  ? "rgba(56,189,248,0.12)"
+                  : "rgba(255,255,255,0.05)";
+            return (
+              <g
+                key={node.id}
+                data-graph-node=""
+                transform={`translate(${node.x}, ${node.y})`}
+                onClick={() => setSelectedId(node.id)}
+                style={{ cursor: "pointer" }}
+              >
+                <rect
+                  width={110}
+                  height={26}
+                  rx={6}
+                  fill={active ? "rgba(59,130,246,0.25)" : fill}
+                  stroke={active ? "rgba(96,165,250,0.8)" : "rgba(255,255,255,0.12)"}
                 />
-              );
-            })}
-            {visibleNodes.map((node) => {
-              const active = node.id === selectedId;
-              const fill =
-                node.scope === "global"
-                  ? "rgba(167,139,250,0.15)"
-                  : node.layer === "work"
-                    ? "rgba(56,189,248,0.12)"
-                    : "rgba(255,255,255,0.05)";
-              return (
-                <g
-                  key={node.id}
-                  transform={`translate(${node.x}, ${node.y})`}
-                  onClick={() => setSelectedId(node.id)}
-                  style={{ cursor: "pointer" }}
+                <text
+                  x={8}
+                  y={17}
+                  style={{ fontSize: 10, fill: "#e2e8f0", fontWeight: 500 }}
                 >
-                  <rect
-                    width={110}
-                    height={26}
-                    rx={6}
-                    fill={active ? "rgba(59,130,246,0.25)" : fill}
-                    stroke={active ? "rgba(96,165,250,0.8)" : "rgba(255,255,255,0.12)"}
-                  />
-                  <text
-                    x={8}
-                    y={17}
-                    style={{ fontSize: 10, fill: "#e2e8f0", fontWeight: 500 }}
-                  >
-                    {node.label.length > 14 ? `${node.label.slice(0, 14)}…` : node.label}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
+                  {node.label.length > 14 ? `${node.label.slice(0, 14)}…` : node.label}
+                </text>
+              </g>
+            );
+          })}
+        </GraphCanvas>
 
         <aside className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-4">
           {selected ? (
@@ -420,9 +447,27 @@ export function AtlasView({
                 {selected.scope ? ` · ${selected.scope}` : ""}
               </div>
               <div className="text-sm font-semibold text-slate-100">{selected.label}</div>
-              <pre className="thin-scrollbar max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 text-[11px] leading-5 text-slate-300">
+              <pre className="thin-scrollbar max-h-[40vh] overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 text-[11px] leading-5 text-slate-300">
                 {selected.preview}
               </pre>
+              {selected.jump === "guidance" && (
+                <button
+                  type="button"
+                  onClick={onOpenGuidance}
+                  className="w-full rounded-lg border border-blue-400/25 bg-blue-500/10 py-2 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/20"
+                >
+                  Open in Guidance →
+                </button>
+              )}
+              {selected.jump === "plan" && (
+                <button
+                  type="button"
+                  onClick={() => onOpenPlan?.(selected.phaseId)}
+                  className="w-full rounded-lg border border-blue-400/25 bg-blue-500/10 py-2 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/20"
+                >
+                  Open in Plan Map →
+                </button>
+              )}
             </div>
           ) : (
             <p className="text-xs text-slate-500">Select a node.</p>

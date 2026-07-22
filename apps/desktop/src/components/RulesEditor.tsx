@@ -38,7 +38,13 @@ function scopeOf(item: { scope?: string }): "global" | "workspace" {
 }
 
 /** Browse Global + workspace rules/skills loaded by the agent runtime. */
-export function RulesEditor() {
+export function RulesEditor({
+  onOpenAtlas,
+  onOpenPlan,
+}: {
+  onOpenAtlas?: () => void;
+  onOpenPlan?: () => void;
+} = {}) {
   const [rules, setRules] = useState<RuleFile[]>([]);
   const [skills, setSkills] = useState<SkillFile[]>([]);
   const [profiles, setProfiles] = useState<GuidanceProfile[]>([]);
@@ -175,6 +181,30 @@ export function RulesEditor() {
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-100">Guidance</h2>
+          <nav className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-500">
+            <span className="text-slate-300">Guidance</span>
+            <span aria-hidden>→</span>
+            <button
+              type="button"
+              onClick={onOpenAtlas}
+              className="text-blue-300/90 hover:text-blue-200"
+            >
+              Atlas
+            </button>
+            <span aria-hidden>→</span>
+            <button
+              type="button"
+              onClick={onOpenPlan}
+              className="text-blue-300/90 hover:text-blue-200"
+            >
+              Plan Map
+            </button>
+          </nav>
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
         <span className="font-medium text-slate-300">Profile</span>
         <button

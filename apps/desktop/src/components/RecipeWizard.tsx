@@ -168,6 +168,38 @@ function eraLabel(era?: string): string {
   return "Modern";
 }
 
+const FIT_STORAGE_KEY = "ade_stack_fit_answers";
+
+function detectHostClient(): string {
+  if (typeof navigator === "undefined") return "";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("windows")) return "windows";
+  if (ua.includes("mac")) return "macos";
+  if (ua.includes("linux")) return "linux";
+  return "";
+}
+
+function suggestedFit(): FitAnswers {
+  return {
+    ...EMPTY_FIT,
+    compliance: "none",
+    repo_state: "existing",
+    host: detectHostClient(),
+  };
+}
+
+function loadFit(): FitAnswers {
+  if (typeof window === "undefined") return suggestedFit();
+  try {
+    const raw = window.localStorage.getItem(FIT_STORAGE_KEY);
+    if (!raw) return suggestedFit();
+    const parsed = JSON.parse(raw) as Partial<FitAnswers>;
+    return { ...suggestedFit(), ...parsed };
+  } catch {
+    return suggestedFit();
+  }
+}
+
 /** Stack Fit + browse catalog → preview/initialize trust contract. */
 export function RecipeWizard({
   recipes,
@@ -182,11 +214,16 @@ export function RecipeWizard({
   const [selected, setSelected] = useState("");
   const [projectName, setProjectName] = useState("");
   const [force, setForce] = useState(false);
-  const [fit, setFit] = useState<FitAnswers>(EMPTY_FIT);
+  const [fit, setFit] = useState<FitAnswers>(loadFit);
   const [ranked, setRanked] = useState<ScoredRecipe[]>([]);
   const [eraFilter, setEraFilter] = useState<string>("");
   const [domainFilter, setDomainFilter] = useState<string>("");
   const [query, setQuery] = useState("");
+  const [autoPicked, setAutoPicked] = useState(false);
+
+  useEffect(() => {
+    window.localStorage.setItem(FIT_STORAGE_KEY, JSON.stringify(fit));
+  }, [fit]);
 
   useEffect(() => {
     if (!selected && recipes[0]) setSelected(recipes[0].id);
@@ -201,7 +238,13 @@ export function RecipeWizard({
     let cancelled = false;
     void invoke<ScoredRecipe[]>("rank_recipes", { answers: fit })
       .then((next) => {
-        if (!cancelled) setRanked(next);
+        if (cancelled) return;
+        setRanked(next);
+        // When Fit answers change, prefer the top match once (N6).
+        if (next[0] && (!selected || autoPicked || selected === recipes[0]?.id)) {
+          setSelected(next[0].id);
+          setAutoPicked(true);
+        }
       })
       .catch(() => {
         if (!cancelled) setRanked([]);
@@ -209,6 +252,7 @@ export function RecipeWizard({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rank on fit; selection side-effect
   }, [fit]);
 
   const domains = useMemo(() => {
@@ -242,6 +286,7 @@ export function RecipeWizard({
   const topMatches = ranked.slice(0, 3);
   const recipe = recipes.find((item) => item.id === selected);
   const whyForSelected = ranked.find((r) => r.id === selected)?.why ?? [];
+  const fitScore = ranked.find((r) => r.id === selected)?.score;
 
   const selectChip = (
     key: keyof FitAnswers,
@@ -252,7 +297,10 @@ export function RecipeWizard({
     <button
       key={`${key}-${value || "any"}`}
       type="button"
-      onClick={() => setFit((prev) => ({ ...prev, [key]: value }))}
+      onClick={() => {
+        setAutoPicked(true);
+        setFit((prev) => ({ ...prev, [key]: value }));
+      }}
       className={`rounded-md border px-2 py-1 text-[11px] ${
         active
           ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
@@ -269,9 +317,19 @@ export function RecipeWizard({
         <section className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5">
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-slate-100">Stack Fit</h2>
-            <Hint text="Answer a few variables — ADE ranks trust contracts (verify ladder + G5), not just templates." />
+            <Hint text="Answer a few variables — ADE ranks trust contracts (verify ladder + G5), not just templates. Why chips include matches and mismatches." />
+            <button
+              type="button"
+              onClick={() => {
+                setAutoPicked(true);
+                setFit(suggestedFit());
+              }}
+              className="ml-auto rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 hover:bg-white/10"
+            >
+              Suggested defaults
+            </button>
           </div>
-          <div className={`space-y-3 ${simpleMode ? "" : ""}`}>
+          <div className="space-y-3">
             {FIT_FIELDS.filter((field) =>
               simpleMode
                 ? ["intent", "primary_runtime", "ui_surface", "evidence", "compliance"].includes(
@@ -309,7 +367,10 @@ export function RecipeWizard({
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setSelected(item.id)}
+                    onClick={() => {
+                      setAutoPicked(false);
+                      setSelected(item.id);
+                    }}
                     className={`w-full rounded-xl border p-3 text-left transition ${
                       selected === item.id
                         ? "border-blue-400/40 bg-blue-500/10"
@@ -327,10 +388,16 @@ export function RecipeWizard({
                       )}
                     </div>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {item.why.slice(0, 2).map((reason) => (
+                      {item.why.slice(0, 3).map((reason) => (
                         <span
                           key={reason}
-                          className="rounded border border-white/8 bg-white/4 px-1.5 py-0.5 text-[10px] text-slate-400"
+                          className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                            reason.toLowerCase().includes("mismatch")
+                              || reason.toLowerCase().includes("weaker")
+                              || reason.toLowerCase().includes("not marked")
+                              ? "border-amber-400/20 bg-amber-400/5 text-amber-100/80"
+                              : "border-white/8 bg-white/4 text-slate-400"
+                          }`}
                         >
                           {reason}
                         </span>
@@ -345,9 +412,9 @@ export function RecipeWizard({
 
         <Disclosure
           title="Browse all recipes"
-          subtitle="Eras, domains, search"
+          subtitle="Eras, domains, search — catalog never hidden"
           summary={`${filtered.length}`}
-          defaultOpen={!simpleMode}
+          defaultOpen={false}
           storageKey="ade_recipes_browse_open"
         >
           <div className="mb-3 flex flex-wrap gap-1.5">
@@ -404,7 +471,10 @@ export function RecipeWizard({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setSelected(item.id)}
+                onClick={() => {
+                  setAutoPicked(false);
+                  setSelected(item.id);
+                }}
                 className={`rounded-xl border p-3 text-left transition ${
                   selected === item.id
                     ? "border-blue-400/40 bg-blue-500/10"
@@ -436,15 +506,29 @@ export function RecipeWizard({
         {recipe ? (
           <div className="space-y-4">
             {whyForSelected.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {whyForSelected.map((reason) => (
-                  <span
-                    key={`sel-${reason}`}
-                    className="rounded border border-emerald-400/20 bg-emerald-400/5 px-1.5 py-0.5 text-[10px] text-emerald-100/80"
-                  >
-                    {reason}
-                  </span>
-                ))}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-600">
+                  <span>Why this fit</span>
+                  {fitScore != null && (
+                    <span className="font-mono normal-case text-slate-500">score {fitScore}</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {whyForSelected.map((reason) => (
+                    <span
+                      key={`sel-${reason}`}
+                      className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                        reason.toLowerCase().includes("mismatch")
+                          || reason.toLowerCase().includes("weaker")
+                          || reason.toLowerCase().includes("not marked")
+                          ? "border-amber-400/20 bg-amber-400/5 text-amber-100/80"
+                          : "border-emerald-400/20 bg-emerald-400/5 text-emerald-100/80"
+                      }`}
+                    >
+                      {reason}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
             <label className="block text-[11px] text-slate-500">

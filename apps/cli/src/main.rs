@@ -185,7 +185,7 @@ enum Commands {
         #[arg(long, default_value = "propose")]
         autonomy: String,
         /// Max tool rounds for this turn
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = 32)]
         max_steps: u32,
         /// Run verify after a successful turn
         #[arg(long)]
@@ -417,6 +417,9 @@ enum WorkerAction {
         /// Remove successful worktrees after completion
         #[arg(long)]
         cleanup_worktree: bool,
+        /// Claim and execute at most one task, then exit (dogfood / CI)
+        #[arg(long)]
+        once: bool,
         /// Confirm this process may automatically claim and mutate ownership
         #[arg(long)]
         approve: bool,
@@ -1382,6 +1385,7 @@ async fn main() -> anyhow::Result<()> {
                 poll_ms,
                 worktree,
                 cleanup_worktree,
+                once,
                 approve,
             } => {
                 require_approval(*approve, "worker run")?;
@@ -1409,10 +1413,11 @@ async fn main() -> anyhow::Result<()> {
                         poll_interval: std::time::Duration::from_millis(*poll_ms),
                         provision_worktree: *worktree,
                         cleanup_worktree: *cleanup_worktree,
+                        once: *once,
                     });
                 println!(
-                    "ADE worker running as {} (worktree={} cleanup={})",
-                    agent, worktree, cleanup_worktree
+                    "ADE worker running as {} (worktree={} cleanup={} once={})",
+                    agent, worktree, cleanup_worktree, once
                 );
                 worker.run().await?;
             }

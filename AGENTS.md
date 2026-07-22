@@ -2,6 +2,23 @@
 
 This is the canonical agent contract for the ADE project itself (dogfooding).
 
+## Product DNA (layers — do not blur)
+
+ADE is a **local harness / Agent Development Environment**, not an IDE fork.
+
+| Layer | Owns | Must not own |
+|-------|------|----------------|
+| **Model** | Reasoning + tool_use proposals | Filesystem, secrets, false “no tools” claims |
+| **Harness / loop** | Tool schemas, ToolEffect auth, budgets, compaction | Pixel UI |
+| **Host (Desktop)** | Sessions, Suggest/Apply, streaming, human gates | Being an editor |
+| **Eng-goal product** | Outcome + scope + verify-as-done | Endless chat theater |
+
+**Autonomy map:** Suggest (Propose) ≈ planner/inspect · Apply (Act) ≈ worker under leases · Automate ≈ Apply + required verify.
+
+**Turn law:** every turn must terminate in the feed (`completed` | `failed` | `cancelled`). Never leave an orphan YOU bubble.
+
+Orchestration roadmap: `docs/platform/ORCHESTRATION_ENG_GOAL_PLAN.md`. Ideal spine: `docs/platform/IDEAL_ADE_DEVELOPMENT_PLAN.md`.
+
 ## Authority Order
 
 1. Law/security/human direction

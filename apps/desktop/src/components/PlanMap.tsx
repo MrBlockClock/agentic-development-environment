@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { GraphCanvas } from "./GraphCanvas";
 
 export type PlanPhase = {
   id: string;
@@ -66,25 +67,37 @@ function layoutPhases(phases: PlanPhase[]): Map<string, { x: number; y: number }
   return positions;
 }
 
-/** ADE Trust Route — AUDIT→PLAN→EXECUTE→VERIFY with phase DAG. */
+/** ADE Trust Route — AUDIT→PLAN→EXECUTE→VERIFY with pan/zoom DAG (N5). */
 export function PlanMap({
   plan,
   scorePercent,
   verifyResults,
   executing,
+  focusPhaseId = null,
   onExecute,
   onRunAudit,
   onRunVerify,
+  onOpenAtlas,
+  onOpenGuidance,
 }: {
   plan: PlanReport;
   scorePercent: number;
   verifyResults: VerifyResult[];
   executing: boolean;
+  focusPhaseId?: string | null;
   onExecute: () => void;
   onRunAudit?: () => void;
   onRunVerify?: () => void;
+  onOpenAtlas?: (phaseId?: string) => void;
+  onOpenGuidance?: () => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(plan.phases[0]?.id ?? null);
+
+  useEffect(() => {
+    if (focusPhaseId && plan.phases.some((p) => p.id === focusPhaseId)) {
+      setSelectedId(focusPhaseId);
+    }
+  }, [focusPhaseId, plan.phases]);
 
   const station: Station = useMemo(() => {
     if (verifyResults.length > 0) return "VERIFY";
@@ -111,13 +124,29 @@ export function PlanMap({
   const stationIndex = stations.indexOf(station);
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-100">Trust Route</h2>
-          <p className="text-[11px] text-slate-500">
-            AUDIT → PLAN → EXECUTE → VERIFY · owned paths stay visible
-          </p>
+          <h2 className="text-sm font-semibold text-slate-100">Plan Map</h2>
+          <nav className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-500">
+            <button
+              type="button"
+              onClick={onOpenGuidance}
+              className="text-blue-300/90 hover:text-blue-200"
+            >
+              Guidance
+            </button>
+            <span aria-hidden>→</span>
+            <button
+              type="button"
+              onClick={() => onOpenAtlas?.()}
+              className="text-blue-300/90 hover:text-blue-200"
+            >
+              Atlas
+            </button>
+            <span aria-hidden>→</span>
+            <span className="text-slate-300">Plan Map</span>
+          </nav>
         </div>
         <div className="text-[11px] text-slate-400">
           Score{" "}
@@ -164,91 +193,94 @@ export function PlanMap({
           No remediation phases. Run Audit to refresh, or the workspace is clear.
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-          <div className="thin-scrollbar overflow-auto rounded-2xl border border-white/7 bg-[#0a0e14] p-2">
-            <svg width={width} height={height} className="block min-w-full">
-              {plan.phases.flatMap((phase) =>
-                (phase.depends_on ?? []).map((dep) => {
-                  const from = positions.get(dep);
-                  const to = positions.get(phase.id);
-                  if (!from || !to) return null;
-                  return (
-                    <line
-                      key={`${dep}->${phase.id}`}
-                      x1={from.x + 160}
-                      y1={from.y + 28}
-                      x2={to.x}
-                      y2={to.y + 28}
-                      stroke="rgba(148,163,184,0.35)"
-                      strokeWidth={1.5}
-                      markerEnd="url(#arrow)"
-                    />
-                  );
-                }),
-              )}
-              <defs>
-                <marker
-                  id="arrow"
-                  markerWidth="6"
-                  markerHeight="6"
-                  refX="5"
-                  refY="3"
-                  orient="auto"
-                >
-                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(148,163,184,0.5)" />
-                </marker>
-              </defs>
-              {plan.phases.map((phase) => {
-                const pos = positions.get(phase.id) ?? { x: 0, y: 0 };
-                const isBlocker = phase.id.includes("blocker");
-                const selected = phase.id === selectedId;
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_280px]">
+          <GraphCanvas
+            contentWidth={width}
+            contentHeight={height}
+            className="min-h-[320px] rounded-2xl border border-white/7 bg-[#0a0e14]"
+          >
+            <defs>
+              <marker
+                id="arrow"
+                markerWidth="6"
+                markerHeight="6"
+                refX="5"
+                refY="3"
+                orient="auto"
+              >
+                <path d="M0,0 L6,3 L0,6 Z" fill="rgba(148,163,184,0.5)" />
+              </marker>
+            </defs>
+            {plan.phases.flatMap((phase) =>
+              (phase.depends_on ?? []).map((dep) => {
+                const from = positions.get(dep);
+                const to = positions.get(phase.id);
+                if (!from || !to) return null;
                 return (
-                  <g
-                    key={phase.id}
-                    transform={`translate(${pos.x}, ${pos.y})`}
-                    onClick={() => setSelectedId(phase.id)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <rect
-                      width={168}
-                      height={64}
-                      rx={10}
-                      fill={
-                        selected
-                          ? "rgba(59,130,246,0.2)"
-                          : isBlocker
-                            ? "rgba(251,191,36,0.12)"
-                            : "rgba(255,255,255,0.04)"
-                      }
-                      stroke={
-                        selected
-                          ? "rgba(96,165,250,0.7)"
-                          : isBlocker
-                            ? "rgba(251,191,36,0.45)"
-                            : "rgba(255,255,255,0.1)"
-                      }
-                    />
-                    <text
-                      x={10}
-                      y={22}
-                      className="fill-slate-100"
-                      style={{ fontSize: 11, fontWeight: 600 }}
-                    >
-                      {phase.title.length > 22
-                        ? `${phase.title.slice(0, 22)}…`
-                        : phase.title}
-                    </text>
-                    <text x={10} y={40} style={{ fontSize: 9, fill: "#94a3b8" }}>
-                      {phase.owned_paths.length} path
-                      {phase.owned_paths.length === 1 ? "" : "s"} · {phase.gates.length}{" "}
-                      gate
-                      {phase.gates.length === 1 ? "" : "s"}
-                    </text>
-                  </g>
+                  <line
+                    key={`${dep}->${phase.id}`}
+                    x1={from.x + 160}
+                    y1={from.y + 28}
+                    x2={to.x}
+                    y2={to.y + 28}
+                    stroke="rgba(148,163,184,0.35)"
+                    strokeWidth={1.5}
+                    markerEnd="url(#arrow)"
+                  />
                 );
-              })}
-            </svg>
-          </div>
+              }),
+            )}
+            {plan.phases.map((phase) => {
+              const pos = positions.get(phase.id) ?? { x: 0, y: 0 };
+              const isBlocker = phase.id.includes("blocker");
+              const isSelected = phase.id === selectedId;
+              return (
+                <g
+                  key={phase.id}
+                  data-graph-node=""
+                  transform={`translate(${pos.x}, ${pos.y})`}
+                  onClick={() => setSelectedId(phase.id)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <rect
+                    width={168}
+                    height={64}
+                    rx={10}
+                    fill={
+                      isSelected
+                        ? "rgba(59,130,246,0.2)"
+                        : isBlocker
+                          ? "rgba(251,191,36,0.12)"
+                          : "rgba(255,255,255,0.04)"
+                    }
+                    stroke={
+                      isSelected
+                        ? "rgba(96,165,250,0.7)"
+                        : isBlocker
+                          ? "rgba(251,191,36,0.45)"
+                          : "rgba(255,255,255,0.1)"
+                    }
+                  />
+                  <text
+                    x={10}
+                    y={22}
+                    className="fill-slate-100"
+                    style={{ fontSize: 11, fontWeight: 600 }}
+                  >
+                    {phase.title.length > 22
+                      ? `${phase.title.slice(0, 22)}…`
+                      : phase.title}
+                  </text>
+                  <text x={10} y={40} style={{ fontSize: 9, fill: "#94a3b8" }}>
+                    {phase.owned_paths.length} path
+                    {phase.owned_paths.length === 1 ? "" : "s"} · {phase.gates.length}{" "}
+                    gate
+                    {phase.gates.length === 1 ? "" : "s"}
+                  </text>
+                </g>
+              );
+            })}
+          </GraphCanvas>
 
           <aside className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-4 text-sm">
             {selected ? (
@@ -307,6 +339,13 @@ export function PlanMap({
                     </ul>
                   </div>
                 )}
+                <button
+                  type="button"
+                  onClick={() => onOpenAtlas?.(selected.id)}
+                  className="w-full rounded-lg border border-blue-400/25 bg-blue-500/10 py-2 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/20"
+                >
+                  Show on Atlas →
+                </button>
                 <button
                   type="button"
                   onClick={onExecute}

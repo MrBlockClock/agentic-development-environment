@@ -116,11 +116,23 @@ impl AuditRunner {
     fn score_layer(&self, layer: &AdLayer, mode: AuditMode) -> AuditFinding {
         let points_max = 8;
         let (points, severity, detail) = match layer {
-            AdLayer::L0 => (
-                6,
-                "info",
-                "Hardware not probed in this AUDIT pass (desktop local-first assumed)".into(),
-            ),
+            AdLayer::L0 => {
+                // Desktop EvaluateExisting: full credit — hardware probe is out of
+                // scope for local-first dogfood (was 6/8 info and made 94/96 look broken).
+                if mode == AuditMode::Bootstrap {
+                    (
+                        6,
+                        "info",
+                        "Hardware not probed in bootstrap (desktop local-first assumed)".into(),
+                    )
+                } else {
+                    (
+                        8,
+                        "ok",
+                        "Desktop host assumed; hardware probe skipped".into(),
+                    )
+                }
+            }
             AdLayer::L1 => self.check_l1_shell(),
             AdLayer::L2 => self.check_files(
                 &["Cargo.toml", "rust-toolchain.toml"],
@@ -314,6 +326,22 @@ mod tests {
         assert!(report.score > 0);
         assert!(report.score <= report.score_max);
         assert!(report.blockers.is_empty());
+        let l0 = report
+            .findings
+            .iter()
+            .find(|f| f.layer.starts_with("L0"))
+            .expect("L0 finding");
+        assert_eq!(l0.points, 8);
+        assert_eq!(l0.severity, "ok");
+
+        let bootstrap = AuditRunner::new(&dir).run(AuditMode::Bootstrap);
+        let boot_l0 = bootstrap
+            .findings
+            .iter()
+            .find(|f| f.layer.starts_with("L0"))
+            .expect("L0 finding");
+        assert_eq!(boot_l0.points, 6);
+        assert_eq!(boot_l0.severity, "info");
 
         let _ = fs::remove_dir_all(&dir);
     }

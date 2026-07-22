@@ -1,15 +1,15 @@
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  
-**Status:** Active · Ideal spine + Guidance/Atlas/Fit shipped · **N2 done · N3 next** · 2026-07-20  
-**Canvas:** Ideal-ADE-development-plan.canvas.tsx  
-**Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard
+**Status:** Active · Ideal spine shipped · **N1–N7 · T1 · C1 · A1 · E2** · Orch **G0–G4** · 2026-07-22  
+**Canvas:** ADE-next-gameplan.canvas.tsx (live) · Ideal-ADE-development-plan.canvas.tsx (archive) · ADE-orchestration-eng-goal.canvas.tsx  
+**Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard · **ORCHESTRATION_ENG_GOAL_PLAN.md** (harness DNA / eng-goal)
 
 ## North star
 
 Browser + Desktop **Agent Development Environment**: local harness control plane,
 do-work Home, verify-as-truth, BYOK honesty, progressive disclosure.
-Coexist with Cursor/Claude — do not become another IDE fork.
+Coexist with Cursor/Claude — do not become another IDE fork (see **E1** for shell options).
 
 **Audit is a Trust feature, not the brand.**
 
@@ -107,7 +107,7 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 
 ## Held
 
-- SSO/SCIM/RBAC · Public EXECUTE HTTP · VS Code fork race · Signed marketplace · Cloud sync default
+- SSO/SCIM/RBAC · Public EXECUTE HTTP · **Full VS Code / Code OSS fork** · Signed marketplace · Cloud sync default
 
 ## Next phases (post Ideal)
 
@@ -116,10 +116,93 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | **N1** | Local auth honesty | Browser token setup UX; clear 401s; never hardcode tokens; scope honesty (no EXECUTE HTTP) |
 | **N2** | Browser↔Desktop Simple path | Capability matrix; Guided funnel that does not lie |
 | **N3** | Dogfood Automate acceptance | Automate + owned paths + verify-on-complete → G3 checklist |
+| **T1** | **Desktop Terminal** | Interactive PTY panel in Desktop; agent-visible cwd; autonomy-gated run; lease-aware when writing |
 | **N4** | Continuity resume | Home “Continue last handoff” → Agent |
 | **N5** | Atlas / Plan Map depth | Pan/zoom (or equiv); ≤2-click Guidance↔Atlas↔Plan |
 | **N6** | Stack Fit depth | Stronger Fit defaults/`why`; Fit smoke tests |
 | **N7** | Trust surfaces v2 | Ignore-drift UI; Spend under Trust; Audit log viewer |
+| **C1** | Persisted chat transcript | Multi-turn Home/Agent history on disk (per workspace); clear-on-send already in-session |
+| **A1** | Desktop multi / parallel agents | Wire `leaseAgentId` + task queue in UI; ≥1 write agent per checkout still enforced |
+| **E1** | IDE shell exploration (research) | Decide companion vs embed vs host; **no fork commitment** — see section below |
+| **E2** | Monaco editor spike | Desktop Editor nav; workspace text read/write; SensitivePathPolicy; no VS Code extensions |
+| **W1** | Environment + Workspaces IA | Rename audit surface; open/adopt/switch folders; Home attachment honesty |
+
+### T1 work packages — Desktop Terminal (priority)
+
+| WP | Work | Status |
+|----|------|--------|
+| WP41 | PTY backend (Desktop): spawn shell in workspace cwd; stream stdout/stderr; stdin | **Done** (`pty_spawn` / `write` / `resize` / `kill`) |
+| WP42 | UI: xterm-style panel (Dedicated nav); resize; copy; clear | **Done** (Terminal nav + `TerminalView`) |
+| WP43 | Autonomy + ToolEffect: Propose inspect shell; Act/Automate full shell; show in Live activity | **Done** (`shell::run_command` + inspect allowlist on Propose) |
+| WP44 | Rebuild-lock / dangerous-command warn; optional “Open in system terminal” escape hatch | **Done** (deny list + rebuild hint + System terminal button) |
+
+### N4 work packages — Continuity resume
+
+| WP | Work | Status |
+|----|------|--------|
+| WP47 | `handoff_resume` IPC + `HandoffResume` / `resume_user_prompt` | **Done** |
+| WP48 | Home Continue last handoff CTA → auto-submit Agent turn | **Done** |
+| WP49 | Environment Continuity panel Continue → Home | **Done** |
+
+### N5 work packages — Atlas / Plan Map depth
+
+| WP | Work | Status |
+|----|------|--------|
+| WP50 | Shared `GraphCanvas` pan/zoom (wheel + drag + Fit) | **Done** |
+| WP51 | Atlas + Plan Map use GraphCanvas; inspector jump actions | **Done** |
+| WP52 | ≤2-click trail Guidance ↔ Atlas ↔ Plan (focus phase/node) | **Done** |
+
+### N6 work packages — Stack Fit depth + Settings
+
+| WP | Work | Status |
+|----|------|--------|
+| WP53 | Stronger Fit `why` (match + mismatch) + `FitAnswers::suggested()` host/repo defaults | **Done** |
+| WP54 | Fit smoke tests (reorder, regulated, rust/http, mismatch why, never drop) | **Done** |
+| WP55 | Recipes UI: suggested defaults, persist Fit, amber mismatch chips, auto top-match | **Done** |
+| WP56 | Settings nav/view (surface, autonomy, effort, caps, provider presets) | **Done** |
+
+### N7 work packages — Trust surfaces v2
+
+| WP | Work | Status |
+|----|------|--------|
+| WP57 | Ignore-drift UI (alignment chips + Repair ignores) | **Done** |
+| WP58 | Spend under Trust (daily usage vs caps + Caps → Settings) | **Done** |
+| WP59 | Audit log viewer (handoffs + ledger + Export JSON); Trust nav in Standard | **Done** |
+
+### C1 work packages — Persisted chat transcript
+
+| WP | Work | Status |
+|----|------|--------|
+| WP45 | Persist turns under `.ade/chat/thread.json` + reopen last thread per workspace; Clear chat | **Done** |
+
+### A1 work packages — Desktop multi / parallel agents
+
+| WP | Work | Status |
+|----|------|--------|
+| WP46 | Persist agent UUID; Apply acquires/renews/releases leases; pass `leaseAgentId`; Standard session strip; Debug enqueue/claim | **Done** |
+
+### E1 — IDE shell options (explore only)
+
+Goal: get **editor + extensions** without abandoning ADE’s harness identity.
+
+| Option | What you get | Cost / risk | Fit for ADE |
+|--------|--------------|-------------|-------------|
+| **0. Companion** | “Open in Cursor / VS Code” + ADE Terminal + Agent | Low | **Default now** — matches north star |
+| **1. ADE Terminal only** | Interactive shell inside Desktop (T1) | Medium | **Shipped** |
+| **2. Monaco embed** | Light file edit; **no** VS Code extensions | Medium | **E2 now** — owned-path / handoff text |
+| **3. code-server / OpenVSCode Server** | Near-full VS Code UI + many extensions in browser/webview | High (separate process, auth, updates) | Later only if leaving ADE for editor is proven friction |
+| **4. Eclipse Theia** | IDE shell; partial extension compat | High | Only if we need an in-house IDE platform |
+| **5. Code OSS / VS Code fork** | Cursor-class surface | Multi-year; marketplace/licensing; fights research “refuse fork war” | **Held** — not Ideal |
+
+**Practical recommendation:** Keep **Open in Cursor/VS Code** for extensions. **T1 Terminal** shipped. Ship **E2 Monaco** as a thin Desktop Editor (not an IDE). Revisit option 3 only after E2 dogfood.
+
+### E2 work packages — Monaco editor spike
+
+| WP | Work | Status |
+|----|------|--------|
+| WP60 | IPC `workspace_read_text` / `workspace_write_text` (under root, SensitivePathPolicy, size cap) | **Done** |
+| WP61 | Desktop **Editor** nav + Monaco panel (open/save; language from extension) | **Done** |
+| WP62 | DesktopRequired + capability matrix; docs/canvas point at E2 | **Done** |
 
 ### N1 work packages
 
@@ -136,6 +219,47 @@ Manual note: live Automate + G3 dogfood turn in Desktop remains an operator chec
 | WP27 | Capability matrix (`capabilities.ts`) + UI disclosure | Done |
 | WP28 | DesktopRequired funnel for Agent / Keys / MCP in browser | Done |
 | WP29 | Guided Home readiness: browser finishes stack+verify; Keys stays Desktop gate | Done |
+
+### K1–K2 work packages
+
+| WP | Work | Status |
+|----|------|--------|
+| WP30 | Keys Tier-0: provider `<select>` + recommended shortcuts + vault status | Done |
+| WP31 | Shared `ModelPicker` + `GET /v1/models` (OpenCode Zen / FreeLLMAPI) | Done |
+| WP32 | FreeLLMAPI provider preset (`freellm` → localhost:3001/v1) | Done |
+| WP32b | K3 usage strip on Keys + Home (`spend_summary`) | Done |
+
+### W1 work packages — Environment / Workspaces
+
+| WP | Work | Status |
+|----|------|--------|
+| WP33 | Rename nav Workspace → Environment; audit copy + Fix with ADE | Done |
+| WP34 | Workspaces view: Open / Create-Adopt / Recent / Switch + header Change… | Done |
+| WP35 | Home + Agent attachment honesty (“Working in {folder}”) | Done |
+| WP36 | Relax ADE root to `AGENTS.md`; persist preferred + recent under LOCALAPPDATA | Done |
+
+### N3 work packages — Dogfood Automate
+
+| WP | Work | Status |
+|----|------|--------|
+| WP37 | `docs/platform/N3_DOGFOOD_AUTOMATE.md` + canvas ADE-n3-dogfood | Done |
+| WP38 | `scripts/dogfood-automate.ps1` (Automate + owned `.ade/dogfood` + G3) | Done |
+| WP39 | Debug Home chip “Dogfood Automate” | Done |
+| WP40 | Live pass evidence on ADE repo (`scripts/dogfood-automate.ps1` exit 0) | Done |
+
+## Orchestration / eng-goal (DNA alignment)
+
+Canonical: [`ORCHESTRATION_ENG_GOAL_PLAN.md`](./ORCHESTRATION_ENG_GOAL_PLAN.md) · canvas `ADE-orchestration-eng-goal`.
+
+| Phase | Name | Status |
+|-------|------|--------|
+| **G0** | Turn terminalization (failed in-feed; no orphan YOU) | **Done** (Desktop host) |
+| **G1** | Intent surface (mode in transcript; scope chip) | **Done** — Suggest/Apply + Workspace\|Home (`preferred_shell_cwd`) |
+| **G2** | Eng-goal object under `.ade/goals/` | **Done** — GoalStore + active strip (Save/Run/Done) |
+| **G3** | Suggest→PLAN/tasks · Apply→claim-one · Automate+verify | **Done** — Queue PLAN + Apply next on Home |
+| **G4** | Parallel workers / worktrees in product UI | **Done** — Isolate Apply worktree (no Mission Control); dogfood `scripts/dogfood-isolate-apply.ps1` |
+
+Naming: orch **G0–G4** ≠ verify ladder **G0–G4** ≠ Ideal **T1 Terminal**.
 
 ## Verify every phase
 

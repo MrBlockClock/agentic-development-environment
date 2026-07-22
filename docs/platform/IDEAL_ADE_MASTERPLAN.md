@@ -39,10 +39,14 @@ Dev panels; I4 ships “Improve ADE” guided win.
 
 - **Home** — brand, composer, guided starters, continue last handoff
 - **Agent studio** — turns, autonomy dial, budgets, plan gate
+- **Terminal** (post-Ideal **T1**) — interactive PTY in Desktop; autonomy-gated
 - **Project setup** — recipes, rules, skills, AGENTS.md
 - **Trust & Health** — audit, verify, spend, continuity
+- **Settings** — surface mode, agent defaults, provider presets (local)
 - **Integrations** — BYOK keys, MCP
-- **Settings** — profiles, budgets, enterprise (held)
+- Enterprise profiles / SSO (held)
+
+Editor/extensions: coexist via **Open in Cursor/VS Code**; full Code OSS fork is a held non-goal (see Development Plan **E1**).
 
 ## Autonomy dial
 
@@ -80,6 +84,7 @@ I4 = “Improve ADE” guided win. One write agent per checkout; warn on binary 
 - Committing real API keys to git
 - Enterprise SSO/RBAC until foundation Ideal UI lands
 - Treating Audit as the default home metaphor
+- Racing a full VS Code / Code OSS fork for extensions (companion + Terminal first)
 
 ## Provider keys (local testing)
 

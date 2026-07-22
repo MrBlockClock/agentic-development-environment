@@ -34,6 +34,8 @@ pub struct WorkerConfig {
     pub poll_interval: Duration,
     pub provision_worktree: bool,
     pub cleanup_worktree: bool,
+    /// When true, claim+execute at most one task then return (dogfood / CI).
+    pub once: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +58,20 @@ impl AgentTurnWorker {
     pub async fn run(&self) -> Result<(), AdeError> {
         loop {
             let tick = self.run_once().await?;
+            if self.config.once {
+                if !tick.claimed {
+                    return Err(AdeError::Other(
+                        "worker --once: no dependency-ready task to claim".into(),
+                    ));
+                }
+                if tick.status == "failed" {
+                    return Err(AdeError::Other(
+                        tick.detail
+                            .unwrap_or_else(|| "worker --once task failed".into()),
+                    ));
+                }
+                return Ok(());
+            }
             if !tick.claimed {
                 tokio::time::sleep(self.config.poll_interval).await;
             }
@@ -106,7 +122,9 @@ impl AgentTurnWorker {
             })
         };
 
-        let outcome = self.execute_task(&task.goal, &execution_root).await;
+        let outcome = self
+            .execute_task(&task.goal, &task.owned_paths, &execution_root)
+            .await;
         heartbeat.abort();
 
         let tick = match outcome {
@@ -118,11 +136,15 @@ impl AgentTurnWorker {
                             WorktreeManager::new(&self.config.workspace_root).remove(path, true);
                     }
                 }
+                let worktree_note = worktree
+                    .as_ref()
+                    .map(|path| format!(" · worktree {}", path.display()))
+                    .unwrap_or_default();
                 WorkerTick {
                     claimed: true,
                     task_id: Some(task.id),
                     status: "completed".into(),
-                    detail: Some(detail),
+                    detail: Some(format!("{detail}{worktree_note}")),
                 }
             }
             Err(error) => {
@@ -138,7 +160,12 @@ impl AgentTurnWorker {
         Ok(tick)
     }
 
-    async fn execute_task(&self, goal: &str, execution_root: &Path) -> Result<String, AdeError> {
+    async fn execute_task(
+        &self,
+        goal: &str,
+        owned_paths: &[String],
+        execution_root: &Path,
+    ) -> Result<String, AdeError> {
         let config = ade_core::config::AdeConfig::load()?;
         let database = AdeDatabase::open(&DbConfig::from_ade_config(&config)).await?;
         let ledger = UsageLedgerStore::new(database.connect()?);
@@ -153,13 +180,14 @@ impl AgentTurnWorker {
             output_limit: self.config.output_limit,
             profile: self.config.profile.clone(),
             workspace_root: execution_root.to_path_buf(),
-            owned_paths: vec![],
+            owned_paths: owned_paths.to_vec(),
             handoff_chars: 1_500,
         })
         .ledger(ledger)
         .spend_caps(SpendCaps::from_env())
         .lease_agent(self.config.agent_id)
-        .actor(format!("worker:{}", self.config.agent_id));
+        .actor(format!("worker:{}", self.config.agent_id))
+        .autonomy(ade_agents::autonomy::AutonomyLevel::Act);
         if execution_root != self.config.workspace_root {
             builder = builder.coordination_root(self.config.workspace_root.clone());
         }
@@ -234,6 +262,7 @@ mod tests {
             poll_interval: Duration::from_millis(10),
             provision_worktree: false,
             cleanup_worktree: false,
+            once: false,
         });
         let tick = worker.run_once().await.unwrap();
         assert!(!tick.claimed);

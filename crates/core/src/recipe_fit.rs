@@ -1,6 +1,6 @@
 //! Stack Fit — deterministic ranking of trust-contract recipes.
 
-use crate::recipe::{RecipeEra, RecipeG5, StackRecipe};
+use crate::recipe::{RecipeEra, StackRecipe};
 use serde::{Deserialize, Serialize};
 
 /// Interview answers (empty / `any` = wildcard).
@@ -20,6 +20,38 @@ pub struct FitAnswers {
     pub repo_state: String,
     #[serde(default)]
     pub host: String,
+}
+
+impl FitAnswers {
+    /// Sensible bootstrap defaults for Stack Fit (N6).
+    /// Host from compile target; repo assumed existing when running inside ADE.
+    pub fn suggested() -> Self {
+        Self {
+            intent: String::new(),
+            primary_runtime: String::new(),
+            ui_surface: String::new(),
+            evidence: String::new(),
+            compliance: "none".into(),
+            repo_state: "existing".into(),
+            host: detect_host().into(),
+        }
+    }
+}
+
+/// Detect host OS for Fit soft hints.
+pub fn detect_host() -> &'static str {
+    #[cfg(windows)]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "linux"
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,7 +81,8 @@ fn list_has(list: &[String], needle: &str) -> bool {
     })
 }
 
-fn g5_evidence_tokens(g5: &RecipeG5) -> &'static [&'static str] {
+fn g5_evidence_tokens(g5: &crate::recipe::RecipeG5) -> &'static [&'static str] {
+    use crate::recipe::RecipeG5;
     match g5 {
         RecipeG5::Playwright => &["playwright"],
         RecipeG5::HttpContract => &["http"],
@@ -70,7 +103,7 @@ fn score_list_match(
     hints: &[String],
     match_pts: i32,
     mismatch_pts: i32,
-    why_match: &str,
+    dimension: &str,
     why: &mut Vec<String>,
 ) -> i32 {
     if is_wild(answer) {
@@ -80,9 +113,10 @@ fn score_list_match(
         return 0;
     }
     if list_has(hints, answer) {
-        why.push(why_match.into());
+        why.push(format!("Matches {dimension}"));
         match_pts
     } else {
+        why.push(format!("Mismatch on {dimension} (wanted `{answer}`)"));
         mismatch_pts
     }
 }
@@ -102,7 +136,7 @@ pub fn rank_recipes(answers: &FitAnswers, recipes: &[StackRecipe]) -> Vec<Scored
                 &recipe.fit.intents,
                 12,
                 -4,
-                "Matches project intent",
+                "intent",
                 &mut why,
             );
             score += score_list_match(
@@ -110,7 +144,7 @@ pub fn rank_recipes(answers: &FitAnswers, recipes: &[StackRecipe]) -> Vec<Scored
                 &recipe.fit.runtimes,
                 18,
                 -10,
-                "Matches primary runtime",
+                "runtime",
                 &mut why,
             );
             score += score_list_match(
@@ -118,7 +152,7 @@ pub fn rank_recipes(answers: &FitAnswers, recipes: &[StackRecipe]) -> Vec<Scored
                 &recipe.fit.ui_surfaces,
                 14,
                 -8,
-                "Matches UI surface",
+                "UI surface",
                 &mut why,
             );
 
@@ -134,6 +168,7 @@ pub fn rank_recipes(answers: &FitAnswers, recipes: &[StackRecipe]) -> Vec<Scored
                     why.push("Evidence story aligns with G5".into());
                 } else {
                     score -= 22;
+                    why.push(format!("G5 evidence mismatch (wanted `{evidence}`)"));
                 }
             }
 
@@ -145,22 +180,19 @@ pub fn rank_recipes(answers: &FitAnswers, recipes: &[StackRecipe]) -> Vec<Scored
                     why.push("Built for regulated / compliance workflows".into());
                 } else if recipe.id.contains("saas") || recipe.domain == "saas" {
                     score -= 12;
+                    why.push("Casual SaaS — weaker for regulated".into());
+                } else {
+                    why.push("Not marked for regulated compliance".into());
                 }
             } else if compliance == "none"
                 && list_has(&recipe.fit.compliance, "regulated")
                 && !is_wild(&answers.compliance)
             {
                 score -= 6;
+                why.push("Regulated recipe while compliance=none".into());
             }
 
-            score += score_list_match(
-                &answers.host,
-                &recipe.fit.hosts,
-                4,
-                -1,
-                "Host-friendly recipe",
-                &mut why,
-            );
+            score += score_list_match(&answers.host, &recipe.fit.hosts, 4, -1, "host", &mut why);
 
             let repo = norm(&answers.repo_state);
             if repo == "existing" && (recipe.id == "oss-fork-maintainer" || recipe.domain == "oss")
@@ -170,11 +202,41 @@ pub fn rank_recipes(answers: &FitAnswers, recipes: &[StackRecipe]) -> Vec<Scored
             }
             if repo == "empty" && recipe.id == "ade-plan-heavy" {
                 score -= 4;
+                why.push("Plan-heavy recipe is heavy for an empty repo".into());
+            }
+            if repo == "empty"
+                && matches!(
+                    recipe.domain.as_str(),
+                    "saas" | "systems" | "data-ai" | "game" | "mobile" | "desktop"
+                )
+            {
+                score += 2;
+            }
+
+            // Soft domain scent when runtime+UI already match: prefer modern catalogs.
+            if !is_wild(&answers.primary_runtime)
+                && list_has(&recipe.fit.runtimes, &answers.primary_runtime)
+                && matches!(recipe.era, RecipeEra::Modern)
+            {
+                score += 2;
             }
 
             if why.is_empty() {
                 why.push(format!("{} · {}", recipe.domain, era_label(&recipe.era)));
             }
+
+            // Cap why list for UI — keep matches first, then mismatches.
+            why.sort_by_key(|line| {
+                if line.starts_with("Mismatch")
+                    || line.contains("mismatch")
+                    || line.contains("weaker")
+                {
+                    1
+                } else {
+                    0
+                }
+            });
+            why.truncate(6);
 
             (
                 idx,
@@ -226,6 +288,10 @@ mod tests {
         let ranked = rank_recipes(&answers, &builtin_recipes());
         assert_eq!(ranked[0].id, "business-regulated");
         assert!(ranked[0].score > ranked[1].score);
+        assert!(ranked[0]
+            .why
+            .iter()
+            .any(|w| w.to_ascii_lowercase().contains("regulated")));
     }
 
     #[test]
@@ -243,8 +309,80 @@ mod tests {
     }
 
     #[test]
+    fn rust_binary_prefers_systems_or_api() {
+        let answers = FitAnswers {
+            intent: "lib".into(),
+            primary_runtime: "rust".into(),
+            ui_surface: "none".into(),
+            evidence: "binary".into(),
+            compliance: "none".into(),
+            ..Default::default()
+        };
+        let ranked = rank_recipes(&answers, &builtin_recipes());
+        assert!(
+            ranked[0].id == "rust-systems" || ranked[0].id.starts_with("rust-"),
+            "top was {}",
+            ranked[0].id
+        );
+        assert!(ranked[0]
+            .why
+            .iter()
+            .any(|w| w.contains("runtime") || w.contains("Evidence")));
+    }
+
+    #[test]
+    fn mismatch_why_explains_penalties() {
+        let answers = FitAnswers {
+            primary_runtime: "python".into(),
+            ui_surface: "web".into(),
+            evidence: "playwright".into(),
+            ..Default::default()
+        };
+        let ranked = rank_recipes(&answers, &builtin_recipes());
+        let rustish = ranked
+            .iter()
+            .find(|r| r.id == "rust-api-turso")
+            .expect("rust-api-turso present");
+        assert!(
+            rustish
+                .why
+                .iter()
+                .any(|w| w.contains("Mismatch") || w.contains("mismatch")),
+            "expected mismatch why, got {:?}",
+            rustish.why
+        );
+    }
+
+    #[test]
     fn never_drops_canonical_recipes() {
         let ranked = rank_builtin_recipes(&FitAnswers::default());
         assert_eq!(ranked.len(), 13);
+    }
+
+    #[test]
+    fn suggested_defaults_set_host_and_repo() {
+        let suggested = FitAnswers::suggested();
+        assert!(!suggested.host.is_empty());
+        assert_eq!(suggested.repo_state, "existing");
+        assert_eq!(suggested.compliance, "none");
+        let ranked = rank_builtin_recipes(&suggested);
+        assert_eq!(ranked.len(), 13);
+    }
+
+    #[test]
+    fn changing_answers_reorders_without_hiding() {
+        let a = rank_builtin_recipes(&FitAnswers {
+            primary_runtime: "rust".into(),
+            evidence: "http".into(),
+            ..Default::default()
+        });
+        let b = rank_builtin_recipes(&FitAnswers {
+            compliance: "regulated".into(),
+            ui_surface: "web".into(),
+            evidence: "playwright".into(),
+            ..Default::default()
+        });
+        assert_eq!(a.len(), b.len());
+        assert_ne!(a[0].id, b[0].id);
     }
 }

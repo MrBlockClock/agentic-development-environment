@@ -1,5 +1,6 @@
 use crate::audit::{AuditFinding, AuditReport};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 pub const PLAN_SCHEMA: &str = "ade.plan.report/v1";
 
@@ -110,6 +111,27 @@ impl PlanBuilder {
             });
         }
 
+        // High-score workspaces can still lack a stack pin — Apply needs a write
+        // target or fs__write_file dies with "no approved PLAN owned_paths".
+        if !Path::new(&audit.root)
+            .join(".ade")
+            .join("recipe.json")
+            .is_file()
+        {
+            let recipe_dep = phases
+                .first()
+                .map(|phase| vec![phase.id.clone()])
+                .unwrap_or_default();
+            phases.push(PlanPhase {
+                id: "phase-activate-recipe".into(),
+                title: "Pin stack recipe (.ade/recipe.json)".into(),
+                owned_paths: vec![".ade/recipe.json".into()],
+                gates: DEFAULT_GATES.iter().map(|s| s.to_string()).collect(),
+                depends_on: recipe_dep,
+            });
+            requires_human.push("Approve recipe pin: .ade/recipe.json".into());
+        }
+
         // EXECUTE may not start without explicit human approval of this plan.
         requires_human.push("Approve this plan before EXECUTE".into());
 
@@ -142,9 +164,21 @@ fn owned_paths_for_blockers(blockers: &[String]) -> Vec<String> {
         if b.contains("AGENTS.md") {
             paths.push("AGENTS.md".to_string());
         }
+        if b.contains("recipe.json") || b.contains("stack recipe") {
+            paths.push(".ade/recipe.json".to_string());
+        }
     }
     paths.sort();
     paths.dedup();
+    paths
+}
+
+/// Apply write targets when PLAN phases are empty but activation work remains.
+pub fn bootstrap_apply_owned_paths(workspace_root: &Path) -> Vec<String> {
+    let mut paths = Vec::new();
+    if !workspace_root.join(".ade").join("recipe.json").is_file() {
+        paths.push(".ade/recipe.json".into());
+    }
     paths
 }
 
@@ -224,8 +258,24 @@ mod tests {
         assert!(audit.blockers.is_empty());
         let plan = PlanBuilder::new().build(&audit);
         assert!(plan.phases.iter().all(|p| p.id != "phase-0-blockers"));
-        assert!(plan.phases.iter().all(|p| p.depends_on.is_empty()));
+        // Fixture has no recipe.json → activation phase owns that write path.
+        assert!(plan.phases.iter().any(|p| p.id == "phase-activate-recipe"
+            && p.owned_paths.iter().any(|path| path == ".ade/recipe.json")));
         assert_eq!(plan.score_before, audit.score);
+    }
+
+    #[test]
+    fn bootstrap_owned_paths_when_recipe_missing() {
+        let dir = std::env::temp_dir().join(format!("ade-boot-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            bootstrap_apply_owned_paths(&dir),
+            vec![".ade/recipe.json".to_string()]
+        );
+        std::fs::create_dir_all(dir.join(".ade")).unwrap();
+        std::fs::write(dir.join(".ade").join("recipe.json"), "{}\n").unwrap();
+        assert!(bootstrap_apply_owned_paths(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -100,7 +100,11 @@ impl ProviderUsage {
     }
 
     pub fn exceeds_model_limits(&self, model: &ModelConfig) -> bool {
-        self.input_tokens > model.context_limit || self.output_tokens > model.output_limit
+        // Unpriced / free BYOK turns use 0/0 = "no hard limit configured".
+        // Treating that as a real ceiling falsely fails free OpenCode/FreeLLM turns.
+        let over_context = model.context_limit > 0 && self.input_tokens > model.context_limit;
+        let over_output = model.output_limit > 0 && self.output_tokens > model.output_limit;
+        over_context || over_output
     }
 }
 
@@ -173,14 +177,38 @@ impl ChatProvider for OpenAiCompatibleProvider {
         let response = http
             .send()
             .await
-            .map_err(|error| AdeError::Provider(format!("request failed: {error}")))?;
+            .map_err(|error| AdeError::Provider(format_request_error(&self.config, &error)))?;
         let status = response.status();
         if !status.is_success() {
             let detail = response.text().await.unwrap_or_default();
+            let base = self.config.base_url.trim_end_matches('/');
+            let hint = if status.as_u16() == 401 {
+                let mut fix = format!(
+                    " — vault key for provider '{}' rejected by {base}.",
+                    self.config.name
+                );
+                if base.contains("opencode.ai") {
+                    fix.push_str(
+                        " Fix: Keys → OpenCode Zen → paste the Zen key from opencode.ai/auth (not a FreeLLMAPI key). Import OpenCode auth if auth.json has an `opencode` entry.",
+                    );
+                } else if base.contains("127.0.0.1") || base.contains("localhost") {
+                    fix.push_str(
+                        " Fix: Keys → FreeLLMAPI → paste the key for that local gateway (:31415 Desktop vs :3001 Docker are different).",
+                    );
+                } else {
+                    fix.push_str(
+                        " Fix: Keys → select that provider → paste a fresh key for this exact base URL.",
+                    );
+                }
+                fix
+            } else {
+                String::new()
+            };
             return Err(AdeError::Provider(format!(
-                "{} returned HTTP {status}: {}",
+                "{} → {base} returned HTTP {status}: {}{hint}",
                 self.config.name,
-                truncate(&detail, 500)
+                truncate(&detail, 400),
+                hint = hint
             )));
         }
 
@@ -356,6 +384,22 @@ fn validate_config(config: &ProviderConfig) -> Result<(), AdeError> {
     Ok(())
 }
 
+fn format_request_error(config: &ProviderConfig, error: &reqwest::Error) -> String {
+    let base = config.base_url.trim_end_matches('/');
+    if error.is_connect() {
+        if base.contains("127.0.0.1") || base.contains("localhost") {
+            return format!(
+                "cannot reach {base}/chat/completions — is the local gateway running? (FreeLLMAPI: docker compose up -d in ~/freellmapi, or start the FreeLLMAPI Desktop app)"
+            );
+        }
+        return format!("cannot reach {base}/chat/completions: {error}");
+    }
+    if error.is_timeout() {
+        return format!("provider timed out talking to {base}: {error}");
+    }
+    format!("request failed talking to {base}: {error}")
+}
+
 fn truncate(value: &str, max: usize) -> &str {
     value.get(..max).unwrap_or(value)
 }
@@ -499,5 +543,22 @@ mod tests {
         });
 
         assert_eq!(body["max_tokens"], 16);
+    }
+
+    #[test]
+    fn zero_limits_mean_unlimited_usage_check() {
+        let model = ModelConfig {
+            id: "free".into(),
+            name: "Free".into(),
+            context_limit: 0,
+            output_limit: 0,
+            cost_per_input_mtok: Money::ZERO,
+            cost_per_output_mtok: Money::ZERO,
+        };
+        let usage = ProviderUsage {
+            input_tokens: 3_737,
+            output_tokens: 187,
+        };
+        assert!(!usage.exceeds_model_limits(&model));
     }
 }

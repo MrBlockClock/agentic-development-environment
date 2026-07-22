@@ -573,7 +573,10 @@ fn probe_autonomy_propose() -> Result<String, String> {
     if AutonomyLevel::Propose.allows_tool_effect(ToolEffect::WorkspaceWrite) {
         return Err("Propose allowed WorkspaceWrite".into());
     }
-    Ok("Propose blocks writes".into())
+    if !AutonomyLevel::Propose.allows_tool_effect(ToolEffect::ProcessExecution) {
+        return Err("Propose should allow inspect shell (ProcessExecution)".into());
+    }
+    Ok("Propose blocks writes, allows inspect shell".into())
 }
 
 fn probe_autonomy_act() -> Result<String, String> {

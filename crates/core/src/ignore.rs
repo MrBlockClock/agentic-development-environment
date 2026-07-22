@@ -130,6 +130,13 @@ impl SensitivePathPolicy {
 pub fn ensure_bootstrap_ignores(root: &Path) -> Result<(), AdeError> {
     ensure_ignore_file(root, ".gitignore")?;
     ensure_ignore_file(root, ".cursorignore")?;
+    if root.join("Dockerfile").exists()
+        || root.join("docker").exists()
+        || root.join("docker-compose.yml").exists()
+        || root.join(".dockerignore").exists()
+    {
+        ensure_ignore_file(root, ".dockerignore")?;
+    }
     Ok(())
 }
 
@@ -380,6 +387,24 @@ mod tests {
         let drifted = check_alignment(&root);
         assert!(drifted.iter().any(|item| {
             item.surface == ".gitignore" && matches!(item.status, IgnoreStatus::Drifted)
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dockerignore_accepts_exact_always_ignore_forms() {
+        let root = std::env::temp_dir().join(format!("ade-ignore-docker-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Dockerfile"), "FROM scratch\n").unwrap();
+        std::fs::write(root.join(".dockerignore"), "target/\n").unwrap();
+        let before = check_alignment(&root);
+        assert!(before.iter().any(|item| {
+            item.surface == ".dockerignore" && matches!(item.status, IgnoreStatus::Drifted)
+        }));
+        ensure_bootstrap_ignores(&root).unwrap();
+        let after = check_alignment(&root);
+        assert!(after.iter().any(|item| {
+            item.surface == ".dockerignore" && matches!(item.status, IgnoreStatus::Synced)
         }));
         let _ = std::fs::remove_dir_all(root);
     }
