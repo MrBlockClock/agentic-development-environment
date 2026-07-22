@@ -209,11 +209,7 @@ impl HandoffCapsule {
     }
 
     /// Continuity thrift variant when the Desktop/CLI host already ran `next_safe_command`.
-    pub fn resume_user_prompt_with(
-        &self,
-        host_ran_next: bool,
-        host_exit: Option<i32>,
-    ) -> String {
+    pub fn resume_user_prompt_with(&self, host_ran_next: bool, host_exit: Option<i32>) -> String {
         let next = self.next_safe_command.as_deref().unwrap_or("ade audit");
         let goal = truncate(&self.goal, 280);
         let status = self.turn_status.as_deref().unwrap_or("unknown");

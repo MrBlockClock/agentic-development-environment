@@ -161,7 +161,10 @@ export function EditorView() {
     setBusy(true);
     setError(null);
     try {
-      const resume = await invoke<HandoffResume>("handoff_resume", { id: null });
+      const resume = await invoke<HandoffResume>("handoff_resume", {
+        id: null,
+        hostRunNext: false,
+      });
       if (!resume.available) {
         setHandoffPaths([]);
         setHandoffMeta(null);

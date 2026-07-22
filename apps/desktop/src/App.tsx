@@ -519,6 +519,7 @@ function App() {
   const [agentAutoSubmitContext, setAgentAutoSubmitContext] = useState<
     "normal" | "continuity"
   >("normal");
+  const [continuityBusy, setContinuityBusy] = useState(false);
   const [planFocusPhaseId, setPlanFocusPhaseId] = useState<string | null>(null);
   const [atlasFocusNodeId, setAtlasFocusNodeId] = useState<string | null>(null);
   const [pendingImproveWin, setPendingImproveWin] = useState(false);
@@ -729,6 +730,7 @@ function App() {
 
   const continueLastHandoff = async (id?: string) => {
     setError(null);
+    setContinuityBusy(true);
     try {
       const resume = await invoke<{
         available: boolean;
@@ -738,7 +740,7 @@ function App() {
         turnStatus?: string | null;
         hostRanNext?: boolean;
         hostExitCode?: number | null;
-      }>("handoff_resume", { id: id ?? null });
+      }>("handoff_resume", { id: id ?? null, hostRunNext: true });
       if (!resume.available || !resume.resumePrompt.trim()) {
         setError("No handoff capsule to continue yet. Run an agent turn or Check first.");
         return;
@@ -755,6 +757,8 @@ function App() {
       setActiveView("Home");
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      setContinuityBusy(false);
     }
   };
 
@@ -1317,6 +1321,7 @@ function App() {
                       Boolean(dashboard.handoff.latest_status)
                     }
                     handoffLatestStatus={dashboard.handoff.latest_status}
+                    continuityBusy={continuityBusy}
                     onContinueHandoff={() => void continueLastHandoff()}
                     onClearTranscript={() => setAgentEvents([])}
                     onOpenKeys={() => setActiveView("Keys")}
@@ -1382,6 +1387,7 @@ function App() {
                   onOpenHome={() => setActiveView("Home")}
                   onOpenWorkspaces={() => setActiveView("Workspaces")}
                   onContinueHandoff={() => void continueLastHandoff()}
+                  continuityBusy={continuityBusy}
                   onReviewHandoffInEditor={() => {
                     window.sessionStorage.setItem(
                       ADE_EDITOR_INTENT_KEY,
@@ -2018,6 +2024,7 @@ function Overview({
   onContinueHandoff,
   onReviewHandoffInEditor,
   onRefresh,
+  continuityBusy = false,
   devMode = false,
 }: {
   dashboard: DashboardSnapshot;
@@ -2036,6 +2043,7 @@ function Overview({
   onContinueHandoff?: () => void;
   onReviewHandoffInEditor?: () => void;
   onRefresh?: () => void;
+  continuityBusy?: boolean;
   devMode?: boolean;
 }) {
   const passed = verifyResults.filter((result) => result.passed).length;
@@ -2713,10 +2721,11 @@ function Overview({
             </div>
             <button
               type="button"
+              disabled={continuityBusy}
               onClick={onContinueHandoff}
-              className="shrink-0 rounded-md border border-blue-400/30 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/25"
+              className="shrink-0 rounded-md border border-blue-400/30 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/25 disabled:opacity-40"
             >
-              Continue → Home
+              {continuityBusy ? "Working…" : "Continue → Home"}
             </button>
             {onReviewHandoffInEditor && (
               <button
@@ -2924,6 +2933,7 @@ function AgentView({
   rebuildLockWarnings = [],
   handoffAvailable = false,
   handoffLatestStatus = null,
+  continuityBusy = false,
   onContinueHandoff,
   onClearTranscript,
   onOpenKeys,
@@ -2949,6 +2959,7 @@ function AgentView({
   rebuildLockWarnings?: string[];
   handoffAvailable?: boolean;
   handoffLatestStatus?: string | null;
+  continuityBusy?: boolean;
   onContinueHandoff?: () => void;
   onClearTranscript?: () => void;
   onOpenKeys?: () => void;
@@ -3071,8 +3082,9 @@ function AgentView({
       model,
       baseUrl,
       effort,
+      handoffAvailable,
     });
-  }, [latestFailed, busy, provider, model, baseUrl, effort]);
+  }, [latestFailed, busy, provider, model, baseUrl, effort, handoffAvailable]);
 
   const runPromptAgain = useCallback(
     (
@@ -3154,12 +3166,25 @@ function AgentView({
 
   const applyFailureAction = useCallback(
     (action: TurnFailureAction, opts?: { auto?: boolean }) => {
-      const promptText = currentUser?.trim();
       if (action.id === "open_keys") {
         onOpenKeys?.();
         setFailureNote("Open Keys, fix the vault key / base URL, then retry.");
         return;
       }
+      if (action.id === "continue_handoff") {
+        setEffort(action.effort);
+        window.localStorage.setItem(AGENT_EFFORT_KEY, action.effort);
+        setMaxSteps(String(action.maxSteps));
+        setAutonomyPersisted("act");
+        setFailureNote(
+          opts?.auto
+            ? `Auto-fixed: continue handoff · Effort ${action.effort}`
+            : `Continuing handoff with Effort ${action.effort} (${action.maxSteps} rounds)…`,
+        );
+        onContinueHandoff?.();
+        return;
+      }
+      const promptText = currentUser?.trim();
       if (!promptText) {
         setFailureNote("No prompt to retry — type a message and Go again.");
         return;
@@ -3214,17 +3239,6 @@ function AgentView({
         });
         return;
       }
-      if (action.id === "continue_handoff") {
-        setEffort(action.effort);
-        window.localStorage.setItem(AGENT_EFFORT_KEY, action.effort);
-        setMaxSteps(String(action.maxSteps));
-        setAutonomyPersisted("act");
-        setFailureNote(
-          `Continuing handoff with Effort ${action.effort} (${action.maxSteps} rounds)…`,
-        );
-        onContinueHandoff?.();
-        return;
-      }
       if (action.id === "fix_base_url") {
         setBaseUrl(action.baseUrl);
         window.localStorage.setItem(AGENT_BASE_URL_KEY, action.baseUrl);
@@ -3236,7 +3250,9 @@ function AgentView({
   );
 
   useEffect(() => {
-    if (!latestFailed || busy || !failureAdvice?.autoFix || !currentUser) return;
+    if (!latestFailed || busy || !failureAdvice?.autoFix) return;
+    // continue_handoff does not need the prior user prompt; other autofixes do.
+    if (failureAdvice.autoFix.id !== "continue_handoff" && !currentUser) return;
     const key = failureFingerprint({
       error: latestFailed.error,
       providerId: provider,
@@ -3912,11 +3928,14 @@ function AgentView({
 
   useEffect(() => {
     if (!autoSubmit) return;
-    onAutoSubmitHandled?.();
     const nextPrompt = (initialPrompt.trim() || prompt).trim();
-    if (!nextPrompt || !provider.trim() || !model.trim() || busy || !isTauri()) {
+    // Wait while another turn is running — do not clear the Continuity kick.
+    if (busy) return;
+    if (!nextPrompt || !provider.trim() || !model.trim() || !isTauri()) {
+      onAutoSubmitHandled?.();
       return;
     }
+    onAutoSubmitHandled?.();
     const continuity = autoSubmitContext === "continuity";
     const nextAutonomy: AutonomyLevel = continuity ? "act" : autonomy;
     const nextEffort = effectiveEffort(
@@ -3945,9 +3964,9 @@ function AgentView({
       }),
       prompt: nextPrompt,
     });
-    // Intentionally one-shot when autoSubmit flips true
+    // Re-run when busy clears so Continuity autoSubmit is not lost mid-turn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSubmit]);
+  }, [autoSubmit, busy]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -4137,9 +4156,11 @@ function AgentView({
                   : "text-blue-100"
               }`}
             >
-              {handoffLatestStatus === "budget_exhausted"
-                ? "Budget exhausted — continue with more Effort"
-                : "Continue last handoff"}
+              {continuityBusy
+                ? "Preparing Continuity…"
+                : handoffLatestStatus === "budget_exhausted"
+                  ? "Budget exhausted — continue with more Effort"
+                  : "Continue last handoff"}
             </div>
             <div className="text-[10px] text-slate-500">
               {handoffLatestStatus === "budget_exhausted"
@@ -4149,16 +4170,19 @@ function AgentView({
           </div>
           <button
             type="button"
+            disabled={continuityBusy}
             onClick={onContinueHandoff}
-            className={`shrink-0 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold ${
+            className={`shrink-0 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-40 ${
               handoffLatestStatus === "budget_exhausted"
                 ? "border-amber-400/35 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25"
                 : "border-blue-400/30 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25"
             }`}
           >
-            {handoffLatestStatus === "budget_exhausted"
-              ? "Continue · raise Effort"
-              : "Continue"}
+            {continuityBusy
+              ? "Working…"
+              : handoffLatestStatus === "budget_exhausted"
+                ? "Continue · raise Effort"
+                : "Continue"}
           </button>
         </div>
       )}

@@ -1208,7 +1208,9 @@ mod tests {
         let mut failed_msg = None;
         while let Some(event) = receiver.recv().await {
             match event {
-                AgentEvent::BudgetExhausted { kind, limit, used, .. } => {
+                AgentEvent::BudgetExhausted {
+                    kind, limit, used, ..
+                } => {
                     assert_eq!(kind, "output_tokens");
                     assert_eq!(limit, 10);
                     assert!(used > 10);

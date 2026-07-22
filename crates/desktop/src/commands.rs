@@ -1645,10 +1645,15 @@ pub fn task_fail(
         .map_err(|error| error.to_string())
 }
 
+/// Resume Continuity from a handoff capsule.
+/// When `host_run_next` is true (default), host-runs `ade …` next_safe_command
+/// before building the thrift resume prompt. Editor handoff-diff should pass
+/// `false` — it only needs capsule paths.
 #[tauri::command]
-pub fn handoff_resume(
+pub async fn handoff_resume(
     state: State<'_, AppState>,
     id: Option<String>,
+    host_run_next: Option<bool>,
 ) -> Result<ade_agents::handoff::HandoffResume, String> {
     let root = state.workspace_root();
     let manager = ade_agents::handoff::HandoffManager::new(&root);
@@ -1687,16 +1692,23 @@ pub fn handoff_resume(
         .next_safe_command
         .clone()
         .unwrap_or_else(|| "ade audit".into());
-    let (host_ran_next, host_exit_code) = host_run_next_safe_command(&root, &next);
-    Ok(manager.resume_from_capsule_with(
-        &id_label,
-        &capsule,
-        host_ran_next,
-        host_exit_code,
-    ))
+    let do_host = host_run_next.unwrap_or(true);
+    let (host_ran_next, host_exit_code) = if do_host {
+        let workspace = root.clone();
+        let command = next.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host_run_next_safe_command(&workspace, &command)
+        })
+        .await
+        .map_err(|error| format!("host next_safe_command task failed: {error}"))?
+    } else {
+        (false, None)
+    };
+    Ok(manager.resume_from_capsule_with(&id_label, &capsule, host_ran_next, host_exit_code))
 }
 
 /// Host-run Continuity first step when it is an `ade …` command (dogfood parity).
+/// Caps runtime so Desktop Continuity cannot freeze forever on `ade audit`.
 fn host_run_next_safe_command(workspace: &std::path::Path, command: &str) -> (bool, Option<i32>) {
     let trimmed = command.trim();
     let lower = trimmed.to_ascii_lowercase();
@@ -1709,14 +1721,30 @@ fn host_run_next_safe_command(workspace: &std::path::Path, command: &str) -> (bo
     }
     let bin = resolve_ade_cli_bin();
     let args = &parts[1..];
-    match std::process::Command::new(&bin)
+    let mut child = match std::process::Command::new(&bin)
         .args(args)
         .current_dir(workspace)
         .env("RUST_LOG", "error")
-        .output()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
     {
-        Ok(output) => (true, output.status.code()),
-        Err(_) => (false, None),
+        Ok(child) => child,
+        Err(_) => return (false, None),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return (true, status.code()),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // Timed out — resume prompt keeps "Do next_safe_command first".
+                return (false, None);
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Err(_) => return (false, None),
+        }
     }
 }
 
@@ -1728,10 +1756,24 @@ fn resolve_ade_cli_bin() -> std::path::PathBuf {
 
     let mut candidates = Vec::new();
     if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
-        candidates.push(std::path::PathBuf::from(target).join("debug").join(name));
+        let target = std::path::PathBuf::from(target);
+        candidates.push(target.join("debug").join(name));
+        candidates.push(target.join("release").join(name));
     }
-    candidates.push(std::path::PathBuf::from(r"C:\Dev\ade-target\debug").join(name));
+    // Workspace-relative targets (CI / portable checkouts).
     candidates.push(std::path::PathBuf::from("target").join("debug").join(name));
+    candidates.push(
+        std::path::PathBuf::from("target")
+            .join("release")
+            .join(name),
+    );
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("target").join("debug").join(name));
+        // Sibling ade-target layout used by this repo's cargo config.
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("ade-target").join("debug").join(name));
+        }
+    }
     for path in candidates {
         if path.is_file() {
             return path;
@@ -1938,9 +1980,7 @@ fn resolve_workspace_text_path(
         return Err("path must be a file under the workspace".into());
     }
     if ade_core::ignore::SensitivePathPolicy::path_is_blocked(&rel_str) {
-        return Err(format!(
-            "path blocked by SensitivePathPolicy: {rel_str}"
-        ));
+        return Err(format!("path blocked by SensitivePathPolicy: {rel_str}"));
     }
     Ok((resolved, rel_str))
 }

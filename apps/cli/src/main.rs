@@ -1944,9 +1944,7 @@ async fn main() -> anyhow::Result<()> {
                         used,
                         detail,
                     } => {
-                        eprintln!(
-                            "\n! budget exhausted ({kind}): {used}/{limit} — {detail}"
-                        );
+                        eprintln!("\n! budget exhausted ({kind}): {used}/{limit} — {detail}");
                     }
                     ade_agents::session::AgentEvent::VerifyComplete {
                         gate,

@@ -60,6 +60,19 @@ test("classifies tool-round limit and raises effort", () => {
   }
 });
 
+test("budget stop with handoff prefers continue_handoff autofix", () => {
+  const advice = evaluateTurnFailure({
+    error: "Budget exhausted: agent exceeded the 8-round tool-call limit",
+    providerId: "opencode",
+    model: "deepseek-v4-flash-free",
+    baseUrl: "https://opencode.ai/zen/v1",
+    effort: "low",
+    handoffAvailable: true,
+  });
+  assert.equal(advice.kind, "tool_round_limit");
+  assert.equal(advice.autoFix?.id, "continue_handoff");
+});
+
 test("legacy Provider-labeled round limit still classifies", () => {
   const advice = evaluateTurnFailure({
     error: "Provider error: agent exceeded the 16-round tool-call limit",

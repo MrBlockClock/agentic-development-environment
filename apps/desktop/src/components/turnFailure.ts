@@ -62,6 +62,8 @@ export type TurnFailureContext = {
   model: string;
   baseUrl: string;
   effort?: EffortTier;
+  /** Prefer Continue handoff over same-prompt raise_steps when a capsule exists. */
+  handoffAvailable?: boolean;
 };
 
 function alternateModel(preset: ProviderPreset | undefined, current: string): string | null {
@@ -141,7 +143,7 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
           maxSteps: Math.max(raised.maxSteps, hit * 2),
         }
       : null;
-    const continueAction: TurnFailureAction | null = raised
+    const continueAction: TurnFailureAction = raised
       ? {
           id: "continue_handoff",
           label: `Continue handoff → ${raised.effort}`,
@@ -154,14 +156,19 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
           effort: "high",
           maxSteps: 32,
         };
+    const preferContinue = Boolean(ctx.handoffAvailable);
     return {
       kind: "tool_round_limit",
       title: "Tool-round budget exhausted",
-      summary: raiseAction
-        ? `ADE stopped after ${hit} tool rounds (Effort was too low for this Continuity/dogfood turn). Raising the step budget and retrying.`
-        : `Already on High effort (${hit}+ rounds). Narrow the goal, or continue from the last handoff with a shorter next_safe_command.`,
-      autoFix: raiseAction,
-      actions: [raiseAction, continueAction, retry].filter(Boolean) as TurnFailureAction[],
+      summary: preferContinue
+        ? `ADE stopped after ${hit} tool rounds. Continuing from the handoff with raised Effort (host runs next_safe_command first).`
+        : raiseAction
+          ? `ADE stopped after ${hit} tool rounds (Effort was too low for this Continuity/dogfood turn). Raising the step budget and retrying.`
+          : `Already on High effort (${hit}+ rounds). Narrow the goal, or continue from the last handoff with a shorter next_safe_command.`,
+      autoFix: preferContinue ? continueAction : raiseAction,
+      actions: preferContinue
+        ? ([continueAction, raiseAction, retry].filter(Boolean) as TurnFailureAction[])
+        : ([raiseAction, continueAction, retry].filter(Boolean) as TurnFailureAction[]),
     };
   }
 
@@ -193,14 +200,19 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
           effort: "high",
           maxSteps: 32,
         };
+    const preferContinue = Boolean(ctx.handoffAvailable);
     return {
       kind: "token_budget",
       title: "Token budget hit",
-      summary: raiseAction
-        ? "The turn hit the output token budget. Raising Effort increases the allowance."
-        : "Already on High effort. Split the task or continue from handoff.",
-      autoFix: raiseAction,
-      actions: [raiseAction, continueAction, retry].filter(Boolean) as TurnFailureAction[],
+      summary: preferContinue
+        ? "Output token budget hit. Continuing from the handoff with raised Effort."
+        : raiseAction
+          ? "The turn hit the output token budget. Raising Effort increases the allowance."
+          : "Already on High effort. Split the task or continue from handoff.",
+      autoFix: preferContinue ? continueAction : raiseAction,
+      actions: preferContinue
+        ? ([continueAction, raiseAction, retry].filter(Boolean) as TurnFailureAction[])
+        : ([raiseAction, continueAction, retry].filter(Boolean) as TurnFailureAction[]),
     };
   }
 
