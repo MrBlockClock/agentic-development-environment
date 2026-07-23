@@ -1,0 +1,12 @@
+﻿{
+  "schema": "ade.model-profile/v1",
+  "id": "planner-fast",
+  "label": "Planner (fast)",
+  "allowed_autonomy": ["observe", "propose"],
+  "tool_effect_deny": ["workspace_write", "external_write"],
+  "effort_floor_steps": 8,
+  "slot_eligibility": ["planner"],
+  "require_verify": false,
+  "prefer_worktree": false,
+  "tags": ["fast", "cheap"]
+}

@@ -22,7 +22,7 @@ Apply global **ui-strategy** first. This skill is ADE wiring only.
 - `RulesEditor` — Guidance browser (Global / Workspace)
 - `PlanMap` — Plan Map spine + phase DAG
 - `AtlasView` — dual-layer Authority/Work graph
-- `WorkspacesView` — open / create-adopt / recent / switch folders
+- `WorkspacesView` — New workspace (name+parent) / Open / Adopt / recent / switch
 - `BrowserView` — Desktop in-app WebView2 window launcher
 - `SettingsView` — durable defaults only (caps, Suggest/Apply, Keys link)
 - `TerminalView` — Desktop PTY
@@ -53,7 +53,7 @@ Apply global **ui-strategy** first. This skill is ADE wiring only.
 |---------|-----|
 | **Home** | Ask ADE / Suggest / Apply in the *attached* folder |
 | **Environment** | Audit *this* folder’s setup gaps (keys, recipe, checks, blockers) |
-| **Workspaces** | Open / Create-Adopt / Recent / Switch which folder is attached |
+| **Workspaces** | New workspace (name+parent) / Open / Adopt / Recent / Switch which folder is attached |
 | **Trust** | Ignore drift, spend vs caps, audit log (scoreboard — not Home) |
 | **Settings** | Defaults: write scope, spend caps, provider preset — **one entry, footer gear** |
 | **Keys** | Credentials only (vault) — linked from Settings |

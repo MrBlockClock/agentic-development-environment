@@ -7,7 +7,7 @@ export type { TurnFailureAction, TurnFailureAdvice };
 
 export type AgentFeedEvent =
   | { type: "user_message"; text: string }
-  | { type: "started"; session_id: string; provider: string; model: string }
+  | { type: "started"; session_id: string; provider: string; model: string; profile_id?: string; route_reason?: string; slot?: string }
   | { type: "text_delta"; text: string }
   | {
       type: "tool_call";
@@ -15,8 +15,22 @@ export type AgentFeedEvent =
       tool: string;
       arguments: unknown;
       effect?: string;
+      envelope?: {
+        effect: string;
+        paths?: string[];
+        autonomy: string;
+        risk_tier?: string;
+        risk_category?: string;
+      };
     }
   | { type: "tool_result"; server: string; tool: string; is_error: boolean; text: string }
+  | {
+      type: "context_compacted";
+      trigger: string;
+      tokens_before: number;
+      tokens_after: number;
+      occupancy_before: number;
+    }
   | {
       type: "usage";
       input_tokens: number;
@@ -61,6 +75,8 @@ type Step =
       status: "running" | "ok" | "error";
       detail?: string;
       pathHint?: string;
+      /** E1: effect · autonomy · risk — survives tool_result overwrite of detail */
+      envelopeLabel?: string;
     }
   | { kind: "verify"; key: string; gate: string; passed: boolean; summary: string }
   | { kind: "note"; key: string; tone: "info" | "warn" | "error"; text: string }
@@ -69,11 +85,37 @@ type Step =
 function pathFromArgs(args: unknown): string | undefined {
   if (!args || typeof args !== "object") return undefined;
   const record = args as Record<string, unknown>;
-  for (const key of ["path", "file", "filename", "target", "cwd"]) {
+  for (const key of ["path", "file", "filename", "target", "cwd", "owned_path"]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
+  const paths = record.paths;
+  if (Array.isArray(paths)) {
+    const first = paths.find((p) => typeof p === "string" && p.trim());
+    if (typeof first === "string") return first.trim();
+  }
   return undefined;
+}
+
+function envelopeLabelFrom(
+  env:
+    | {
+        effect?: string;
+        paths?: string[];
+        autonomy?: string;
+        risk_tier?: string;
+        risk_category?: string;
+      }
+    | undefined,
+): string | undefined {
+  if (!env) return undefined;
+  const parts: string[] = [];
+  if (env.effect) parts.push(env.effect);
+  if (env.autonomy && env.autonomy !== "act") parts.push(env.autonomy);
+  if (env.risk_tier && env.risk_tier !== "low") {
+    parts.push(`risk ${env.risk_category ?? env.risk_tier}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 function summarizeDetail(detail: string, pathHint?: string): string {
@@ -118,16 +160,25 @@ function buildSteps(events: AgentFeedEvent[]): Step[] {
       return;
     }
     if (event.type === "started") {
+      const why = event.route_reason?.trim();
+      const profile = event.profile_id?.trim();
+      const slot = event.slot?.trim();
+      const extras = [profile && `profile ${profile}`, slot && `slot ${slot}`, why]
+        .filter(Boolean)
+        .join(" · ");
       steps.push({
         kind: "note",
         key: `started-${index}`,
         tone: "info",
-        text: `Started · ${event.provider} / ${event.model}`,
+        text: extras
+          ? `Started · ${event.provider} / ${event.model} · ${extras}`
+          : `Started · ${event.provider} / ${event.model}`,
       });
       return;
     }
     if (event.type === "tool_call") {
       open.set(`${event.server}/${event.tool}`, steps.length);
+      const env = event.envelope;
       steps.push({
         kind: "tool",
         key: `${event.server}/${event.tool}-${index}`,
@@ -135,7 +186,19 @@ function buildSteps(events: AgentFeedEvent[]): Step[] {
         tool: event.tool,
         effect: event.effect,
         status: "running",
-        pathHint: pathFromArgs(event.arguments),
+        pathHint: pathFromArgs(event.arguments) ?? env?.paths?.[0],
+        envelopeLabel: envelopeLabelFrom(env),
+        detail: undefined,
+      });
+      return;
+    }
+    if (event.type === "context_compacted") {
+      const pct = Math.round(event.occupancy_before * 100);
+      steps.push({
+        kind: "note",
+        key: `compact-${index}`,
+        tone: "warn",
+        text: `Context compacted · ${event.trigger} · ${event.tokens_before}→${event.tokens_after} tok (~${pct}% occupancy)`,
       });
       return;
     }
@@ -296,6 +359,7 @@ function ToolStepRow({
   const summary = hasDetail
     ? summarizeDetail(step.detail!, step.pathHint)
     : step.pathHint;
+  const envelopeBits = [step.envelopeLabel, summary].filter(Boolean).join(" · ");
 
   return (
     <div>
@@ -322,8 +386,10 @@ function ToolStepRow({
             {step.server}/{step.tool}
           </span>
         )}
-        {summary && (
-          <span className="truncate font-mono text-[10px] text-slate-500">{summary}</span>
+        {envelopeBits && (
+          <span className="truncate font-mono text-[10px] text-slate-500">
+            {envelopeBits}
+          </span>
         )}
         {hasDetail && (
           <button

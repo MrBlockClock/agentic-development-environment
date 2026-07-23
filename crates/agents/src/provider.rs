@@ -51,18 +51,48 @@ impl ModelConfig {
         Ok(())
     }
 
-    /// Worst-case round cost using declared context and output limits.
+    pub fn is_priced(&self) -> bool {
+        self.cost_per_input_mtok > Money::ZERO || self.cost_per_output_mtok > Money::ZERO
+    }
+
+    /// Worst-case round cost using declared context and output limits (hard ceiling).
     pub fn max_round_cost(&self) -> Result<Money, AdeError> {
         self.validate_spend_limits()?;
-        let priced =
-            self.cost_per_input_mtok > Money::ZERO || self.cost_per_output_mtok > Money::ZERO;
-        if !priced {
+        if !self.is_priced() {
             return Ok(Money::ZERO);
         }
         Ok(
             Money::cost_for_tokens(self.context_limit, self.cost_per_input_mtok)
                 + Money::cost_for_tokens(self.output_limit, self.cost_per_output_mtok),
         )
+    }
+
+    /// Honest per-round reserve from estimated input + bounded output (not full context).
+    pub fn estimate_round_cost(
+        &self,
+        estimated_input_tokens: u64,
+        output_budget_tokens: u64,
+    ) -> Result<Money, AdeError> {
+        self.validate_spend_limits()?;
+        if !self.is_priced() {
+            return Ok(Money::ZERO);
+        }
+        let input = estimated_input_tokens
+            .max(256)
+            .min(self.context_limit)
+            .saturating_mul(12)
+            .saturating_div(10); // ~20% cushion
+        let output = output_budget_tokens
+            .max(256)
+            .min(self.output_limit.max(256));
+        let estimate = Money::cost_for_tokens(input, self.cost_per_input_mtok)
+            + Money::cost_for_tokens(output, self.cost_per_output_mtok);
+        let ceiling = self.max_round_cost()?;
+        Ok(if estimate > ceiling {
+            ceiling
+        } else {
+            estimate
+        })
     }
 }
 

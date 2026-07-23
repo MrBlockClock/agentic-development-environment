@@ -21,7 +21,7 @@ import { BrowserView } from "./components/BrowserView";
 import { EditorView, ADE_EDITOR_INTENT_KEY } from "./components/EditorView";
 import { TerminalView } from "./components/TerminalView";
 import { SettingsView } from "./components/SettingsView";
-import { WorkspacesView } from "./components/WorkspacesView";
+import { WorkspacesView, type WorkspaceOpenIntent } from "./components/WorkspacesView";
 import { DarkSelect, GearIcon } from "./components/DarkSelect";
 import { AuditViewer } from "./components/AuditViewer";
 import {
@@ -29,6 +29,7 @@ import {
   honestLeaseError,
   readOrCreateAgentId,
   rotateAgentId,
+  rotateSessionId,
   writableConflict,
   type PathLease as StripLease,
 } from "./components/AgentSessionStrip";
@@ -73,13 +74,36 @@ type EngGoal = {
   updatedAt: string;
   statement: string;
   successCriteria: string[];
+  outOfScope?: string[];
   shellScope: string;
   autonomy: string;
   verifyGate?: string | null;
   ownedPaths: string[];
   status: string;
   lastHandoffId?: string | null;
+  contractWaive?: { at: string; reason: string } | null;
+  clarifyResolutions?: string[];
 };
+
+function isGoalContractReady(goal: EngGoal | null | undefined): boolean {
+  if (!goal || goal.status !== "active") return false;
+  if (goal.contractWaive?.reason?.trim()) return true;
+  const clarify = (goal.clarifyResolutions ?? []).filter((c) => c.trim());
+  if (clarify.length >= 1 && clarify.length <= 3) return true;
+  const ac = (goal.successCriteria ?? []).some((c) => c.trim());
+  const oos = (goal.outOfScope ?? []).some((c) => c.trim());
+  const verify = Boolean(goal.verifyGate?.trim());
+  return ac && oos && verify;
+}
+
+function splitListInput(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[\n;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
 
 const EFFORT_OPTIONS: {
   id: EffortLevel;
@@ -435,7 +459,7 @@ type AgentTurnResult = {
 };
 
 type AgentEvent =
-  | { type: "started"; session_id: string; provider: string; model: string }
+  | { type: "started"; session_id: string; provider: string; model: string; profile_id?: string; route_reason?: string; slot?: string }
   | { type: "text_delta"; text: string }
   | {
       type: "tool_call";
@@ -443,8 +467,22 @@ type AgentEvent =
       tool: string;
       arguments: unknown;
       effect?: string;
+      envelope?: {
+        effect: string;
+        paths?: string[];
+        autonomy: string;
+        risk_tier?: string;
+        risk_category?: string;
+      };
     }
   | { type: "tool_result"; server: string; tool: string; is_error: boolean; text: string }
+  | {
+      type: "context_compacted";
+      trigger: string;
+      tokens_before: number;
+      tokens_after: number;
+      occupancy_before: number;
+    }
   | {
       type: "usage";
       input_tokens: number;
@@ -492,6 +530,10 @@ type ProviderKeySmokeResult = {
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeView, setActiveView] = useState("Home");
+  /** When true, Workspaces opens with the New workspace form expanded. */
+  const [workspacesStartNew, setWorkspacesStartNew] = useState(false);
+  /** Bumped to request AgentView clear chat (header + Chat). */
+  const [newChatNonce, setNewChatNonce] = useState(0);
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>(readSurfaceMode);
   const [navOpen, setNavOpen] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -869,6 +911,12 @@ function App() {
     leaseAgentId: string | null;
     preferredShellCwd: string | null;
     executionRoot: string | null;
+    approvedRiskCategories?: string[];
+    approvedRiskTiers?: string[];
+    allowUnpriced?: boolean;
+    claimedTaskId?: string | null;
+    waiveQueue?: boolean;
+    slotOverride?: string | null;
   }) => {
     if (!isTauri()) {
       const message =
@@ -896,13 +944,69 @@ function App() {
       });
     };
 
+    const noteHeartbeat = (message: string) => {
+      setError(message);
+    };
+
     const mutating = input.autonomy === "act" || input.autonomy === "automate";
-    const agentId = mutating ? input.leaseAgentId : null;
+    const isVerifier = (input.slotOverride ?? "").toLowerCase() === "verifier";
+    const agentId = mutating && !isVerifier ? input.leaseAgentId : null;
     const acquiredIds: string[] = [];
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    const leaseTtlSecs = 300;
+    const ratesZero =
+      (Number(input.inputCostPerMtok) || 0) <= 0 &&
+      (Number(input.outputCostPerMtok) || 0) <= 0;
+    const capsOn =
+      (Number(input.sessionCapUsd) || 0) > 0 || (Number(input.dailyCapUsd) || 0) > 0;
+    let allowUnpriced = Boolean(input.allowUnpriced);
+    if (ratesZero && capsOn && !allowUnpriced) {
+      allowUnpriced = window.confirm(
+        "Spend honesty: $/MTok rates are $0 but session/daily caps are set.\n\nOK = continue this turn unmetered\nCancel = stop and set Input/Output $/MTok",
+      );
+      if (!allowUnpriced) {
+        failTurn(
+          "spend_honesty: set Input/Output $/MTok to match your provider, or confirm unmetered.",
+        );
+        setAgentBusy(false);
+        return;
+      }
+    }
+
+    let waiveQueue = Boolean(input.waiveQueue);
+    if (mutating && !isVerifier && !input.claimedTaskId && !waiveQueue) {
+      const readyQueued = (dashboard?.tasks ?? []).filter(
+        (task) => task.status === "queued",
+      ).length;
+      if (readyQueued > 0) {
+        const continueFreeform = window.confirm(
+          `claim_gate: ${readyQueued} queued task(s).\n\nOK = waive queue and Apply free-form\nCancel = stop (use Apply next from the queue)`,
+        );
+        if (!continueFreeform) {
+          failTurn(
+            `claim_gate: ${readyQueued} queued task(s) — Apply next or waive`,
+          );
+          setAgentBusy(false);
+          return;
+        }
+        waiveQueue = true;
+      }
+    }
 
     try {
-      if (agentId && input.approveOwnedPaths && input.ownedPaths.length > 0) {
+      const claimedTaskId = input.claimedTaskId?.trim() || null;
+      if (claimedTaskId && agentId) {
+        const intervalMs = Math.max(1_000, Math.floor((leaseTtlSecs * 1000) / 3));
+        heartbeat = setInterval(() => {
+          void invoke("task_heartbeat", {
+            taskId: claimedTaskId,
+            agentId,
+            ttlSecs: leaseTtlSecs,
+          }).catch((reason) => {
+            noteHeartbeat(`heartbeat_failed: ${String(reason)}`);
+          });
+        }, intervalMs);
+      } else if (agentId && input.approveOwnedPaths && input.ownedPaths.length > 0) {
         const conflict = writableConflict(
           (dashboard?.leases ?? []) as StripLease[],
           agentId,
@@ -910,7 +1014,7 @@ function App() {
         );
         if (conflict) {
           failTurn(
-            `Another agent (${conflict.agent_id.slice(0, 8)}) holds a write lease on ${conflict.path}. Suggest-only until it finishes or expires.`,
+            `lease conflict: another agent (${conflict.agent_id.slice(0, 8)}) holds a write lease on ${conflict.path}. Suggest-only until it finishes or expires.`,
           );
           return;
         }
@@ -920,7 +1024,8 @@ function App() {
               agentId,
               path,
               mode: "strong",
-              ttlSecs: 300,
+              ttlSecs: leaseTtlSecs,
+              autonomy: input.autonomy,
             });
             acquiredIds.push(lease.id);
           } catch (reason) {
@@ -933,15 +1038,18 @@ function App() {
           }
         }
         if (acquiredIds.length > 0) {
+          const intervalMs = Math.max(1_000, Math.floor((leaseTtlSecs * 1000) / 3));
           heartbeat = setInterval(() => {
             for (const leaseId of acquiredIds) {
               void invoke("lease_renew", {
                 agentId,
                 leaseId,
-                ttlSecs: 300,
-              }).catch(() => {});
+                ttlSecs: leaseTtlSecs,
+              }).catch((reason) => {
+                noteHeartbeat(`heartbeat_failed: ${String(reason)}`);
+              });
             }
-          }, 90_000);
+          }, intervalMs);
         }
       }
 
@@ -968,15 +1076,21 @@ function App() {
         dailyCapUsd: input.dailyCapUsd,
         profile: "local",
         leaseAgentId: agentId,
-        autonomy: input.autonomy,
+        autonomy: isVerifier ? "propose" : input.autonomy,
         maxSteps: input.maxSteps,
         maxTokens: input.maxTokens,
         verifyOnComplete: input.verifyOnComplete,
         verifyGate: input.verifyGate,
-        approveOwnedPaths: input.approveOwnedPaths,
-        ownedPaths: input.ownedPaths,
+        approveOwnedPaths: isVerifier ? false : input.approveOwnedPaths,
+        ownedPaths: isVerifier ? [] : input.ownedPaths,
         preferredShellCwd: input.preferredShellCwd,
         executionRoot: input.executionRoot,
+        allowUnpriced,
+        approvedRiskCategories: input.approvedRiskCategories ?? [],
+        approvedRiskTiers: input.approvedRiskTiers ?? [],
+        claimedTaskId,
+        waiveQueue,
+        slotOverride: input.slotOverride ?? null,
         onEvent,
       });
       if (pendingImproveWin) {
@@ -1232,9 +1346,47 @@ function App() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {(activeView === "Home" || activeView === "Agent") && (
+              <button
+                type="button"
+                onClick={() => setNewChatNonce((n) => n + 1)}
+                title="New chat in this workspace"
+                className="rounded-md border border-white/10 bg-white/2.5 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/6"
+              >
+                + Chat
+              </button>
+            )}
+            {isTauri() && dashboard?.workspace_root && (
+              <button
+                type="button"
+                onClick={() => {
+                  void invoke("open_in_zed")
+                    .then(() => setError(null))
+                    .catch((reason) => setError(String(reason)));
+                }}
+                title="Open this workspace in Zed (ACP soft shell: ade acp)"
+                className="rounded-md border border-white/10 bg-white/2.5 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/6"
+              >
+                Zed
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setActiveView("Workspaces")}
+              onClick={() => {
+                setWorkspacesStartNew(true);
+                setActiveView("Workspaces");
+              }}
+              title="Create a new workspace folder"
+              className="rounded-md border border-blue-400/30 bg-blue-500/15 px-2 py-1 text-[10px] font-semibold text-blue-100 hover:bg-blue-500/25"
+            >
+              + Workspace
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setWorkspacesStartNew(false);
+                setActiveView("Workspaces");
+              }}
               title={dashboard?.workspace_root ?? "Change workspace"}
               className="hidden max-w-40 truncate rounded-md border border-white/10 bg-white/2.5 px-2 py-1 text-[10px] font-medium text-slate-300 hover:bg-white/6 sm:inline-block"
             >
@@ -1302,11 +1454,15 @@ function App() {
                       setAgentAutoSubmit(false);
                       setAgentAutoSubmitContext("normal");
                     }}
+                    newChatNonce={newChatNonce}
                     sharedVerifyGate={gate}
                     devMode={debugChrome}
                     simpleMode={false}
                     workspaceRoot={dashboard.workspace_root}
-                    onOpenWorkspaces={() => setActiveView("Workspaces")}
+                    onOpenWorkspaces={() => {
+                      setWorkspacesStartNew(false);
+                      setActiveView("Workspaces");
+                    }}
                     onOpenEnvironment={() => setActiveView("Environment")}
                     leases={dashboard.leases}
                     planOwnedPaths={[
@@ -1328,6 +1484,10 @@ function App() {
                     tasks={dashboard.tasks ?? []}
                     planPhaseCount={dashboard.plan.phases.length}
                     onRefresh={() => void refresh()}
+                    onSurfaceFailure={(error) => {
+                      setError(error);
+                      setAgentEvents([{ type: "failed", error }]);
+                    }}
                     onRun={(input) => void runAgentTurn(input)}
                   />
                 ) : (
@@ -1404,9 +1564,12 @@ function App() {
                   <DesktopRequired view="Workspaces" />
                 ) : (
                   <WorkspacesView
-                    onOpened={() => {
+                    startWithNew={workspacesStartNew}
+                    onStartWithNewConsumed={() => setWorkspacesStartNew(false)}
+                    onOpened={(intent?: WorkspaceOpenIntent) => {
                       void refresh();
-                      setActiveView("Environment");
+                      setWorkspacesStartNew(false);
+                      setActiveView(intent === "work" ? "Home" : "Environment");
                     }}
                     onOpenEnvironment={() => setActiveView("Environment")}
                   />
@@ -2640,6 +2803,7 @@ function Overview({
                   void invoke<{ id: string; goal: string } | null>("task_claim", {
                     agentId,
                     ttlSecs: 300,
+                    autonomy: "act",
                   })
                     .then((task) => {
                       if (!task) {
@@ -2923,6 +3087,7 @@ function AgentView({
   autoSubmitContext = "normal",
   onAutoSubmitHandled,
   sharedVerifyGate = "G3",
+  newChatNonce = 0,
   devMode = false,
   simpleMode = false,
   workspaceRoot = "",
@@ -2940,6 +3105,7 @@ function AgentView({
   tasks = [],
   planPhaseCount = 0,
   onRefresh,
+  onSurfaceFailure,
 }: {
   events: AgentEvent[];
   busy: boolean;
@@ -2949,6 +3115,8 @@ function AgentView({
   autoSubmitContext?: "normal" | "continuity";
   onAutoSubmitHandled?: () => void;
   sharedVerifyGate?: string;
+  /** Parent header + Chat bumps this to clear the transcript. */
+  newChatNonce?: number;
   devMode?: boolean;
   simpleMode?: boolean;
   workspaceRoot?: string;
@@ -2966,6 +3134,7 @@ function AgentView({
   tasks?: AgentTask[];
   planPhaseCount?: number;
   onRefresh?: () => void;
+  onSurfaceFailure?: (error: string) => void;
   onRun: (input: {
     prompt: string;
     provider: string;
@@ -2985,6 +3154,12 @@ function AgentView({
     leaseAgentId: string | null;
     preferredShellCwd: string | null;
     executionRoot: string | null;
+    approvedRiskCategories?: string[];
+    approvedRiskTiers?: string[];
+    allowUnpriced?: boolean;
+    claimedTaskId?: string | null;
+    waiveQueue?: boolean;
+    slotOverride?: string | null;
   }) => void;
 }) {
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -3064,6 +3239,13 @@ function AgentView({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const autoFixedFailureRef = useRef<string | null>(null);
   const [failureNote, setFailureNote] = useState<string | null>(null);
+  const [forceAdvancedOpen, setForceAdvancedOpen] = useState(false);
+
+  const surfaceLeaseConflict = (conflict: PathLease) => {
+    const error = `lease conflict: another agent (${conflict.agent_id.slice(0, 8)}) holds a write lease on ${conflict.path}`;
+    setFailureNote(error);
+    onSurfaceFailure?.(error);
+  };
 
   const latestFailed = useMemo(() => {
     return [...events]
@@ -3086,6 +3268,11 @@ function AgentView({
     });
   }, [latestFailed, busy, provider, model, baseUrl, effort, handoffAvailable]);
 
+  const [approvedRiskCategories, setApprovedRiskCategories] = useState<string[]>(
+    [],
+  );
+  const [approvedRiskTiers, setApprovedRiskTiers] = useState<string[]>([]);
+
   const runPromptAgain = useCallback(
     (
       text: string,
@@ -3095,6 +3282,12 @@ function AgentView({
         model?: string;
         effort?: EffortLevel;
         maxSteps?: number;
+        approvedRiskCategories?: string[];
+        approvedRiskTiers?: string[];
+        allowUnpriced?: boolean;
+        waiveQueue?: boolean;
+        claimedTaskId?: string | null;
+        slotOverride?: string | null;
       },
     ) => {
       const trimmed = text.trim();
@@ -3140,6 +3333,20 @@ function AgentView({
         leaseAgentId: isMutating ? agentId : null,
         preferredShellCwd: preferredShellCwd(shellScope),
         executionRoot: null,
+        approvedRiskCategories:
+          overrides?.approvedRiskCategories ?? approvedRiskCategories,
+        approvedRiskTiers: overrides?.approvedRiskTiers ?? approvedRiskTiers,
+        allowUnpriced: overrides?.allowUnpriced,
+        waiveQueue: overrides?.waiveQueue,
+        claimedTaskId:
+          overrides?.claimedTaskId !== undefined
+            ? overrides.claimedTaskId
+            : claimedTask &&
+                (claimedTask.status === "claimed" ||
+                  claimedTask.status === "running")
+              ? claimedTask.id
+              : null,
+        slotOverride: overrides?.slotOverride,
       });
     },
     [
@@ -3161,6 +3368,9 @@ function AgentView({
       agentId,
       shellScope,
       onRun,
+      approvedRiskCategories,
+      approvedRiskTiers,
+      claimedTask,
     ],
   );
 
@@ -3169,6 +3379,101 @@ function AgentView({
       if (action.id === "open_keys") {
         onOpenKeys?.();
         setFailureNote("Open Keys, fix the vault key / base URL, then retry.");
+        return;
+      }
+      if (action.id === "define_goal") {
+        void completeActiveGoalContract();
+        setFailureNote("Complete the eng-goal contract, then retry Apply.");
+        return;
+      }
+      if (action.id === "switch_suggest") {
+        setAutonomyPersisted("propose");
+        setFailureNote("Switched to Suggest — inspect/plan without Act tools.");
+        return;
+      }
+      if (action.id === "switch_apply") {
+        setAutonomyPersisted("act");
+        if (effort === "low") {
+          setEffort("medium");
+          window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+        }
+        setFailureNote("Switched to Apply — retry when ready.");
+        return;
+      }
+      if (action.id === "confirm_unmetered") {
+        const promptText = currentUser?.trim();
+        if (!promptText) {
+          setFailureNote("No prompt to retry — type a message and Go again.");
+          return;
+        }
+        setFailureNote("Retrying unmetered…");
+        runPromptAgain(promptText, { allowUnpriced: true });
+        return;
+      }
+      if (action.id === "open_spend_rates") {
+        window.localStorage.setItem("ade_agent_advanced_run", "1");
+        setForceAdvancedOpen(true);
+        setFailureNote(
+          "Set Input/Output $/MTok in Advanced run options, then retry — or Confirm unmetered.",
+        );
+        return;
+      }
+      if (action.id === "apply_next") {
+        onRefresh?.();
+        const next = tasks.find((task) => task.status === "queued");
+        if (next) {
+          setFailureNote("Applying next queued task…");
+          void applyClaimedTask(next, true);
+        } else {
+          setFailureNote("No queued task — refresh or Queue PLAN first.");
+        }
+        return;
+      }
+      if (action.id === "waive_queue") {
+        const promptText = currentUser?.trim();
+        if (!promptText) {
+          setFailureNote("No prompt to retry — type a message and Go again.");
+          return;
+        }
+        setFailureNote("Waiving queue — retrying free-form…");
+        runPromptAgain(promptText, { waiveQueue: true });
+        return;
+      }
+      if (action.id === "approve_risk") {
+        const cats = action.categories ?? [];
+        const tiers = action.tiers ?? ["high"];
+        setApprovedRiskCategories(cats);
+        setApprovedRiskTiers(tiers);
+        const promptText = currentUser?.trim();
+        if (!promptText) {
+          setFailureNote(
+            `Approved risk ${[...cats, ...tiers].join(", ")} — retry the prompt.`,
+          );
+          return;
+        }
+        setFailureNote(
+          `Approved risk ${[...cats, ...tiers].join(", ")} — retrying…`,
+        );
+        runPromptAgain(promptText, {
+          approvedRiskCategories: cats,
+          approvedRiskTiers: tiers,
+        });
+        return;
+      }
+      if (action.id === "rotate_lease") {
+        setAgentId(rotateAgentId(workspaceRoot));
+        setFailureNote("Rotated lease id — retry Apply when ready.");
+        return;
+      }
+      if (action.id === "enable_isolate") {
+        setApplyIsolate(true);
+        window.localStorage.setItem(APPLY_ISOLATE_KEY, "1");
+        setFailureNote("Isolate enabled — next Apply uses a worktree.");
+        return;
+      }
+      if (action.id === "wait_refresh") {
+        onRefresh?.();
+        setFailureNote("Refreshed leases — wait for the other agent or retry.");
         return;
       }
       if (action.id === "continue_handoff") {
@@ -3246,7 +3551,7 @@ function AgentView({
         runPromptAgain(promptText, { baseUrl: action.baseUrl });
       }
     },
-    [currentUser, onOpenKeys, onContinueHandoff, runPromptAgain],
+    [currentUser, onOpenKeys, onContinueHandoff, runPromptAgain, activeGoal, effort],
   );
 
   useEffect(() => {
@@ -3372,6 +3677,7 @@ function AgentView({
     }
     setPastTurns([]);
     setCurrentUser(null);
+    rotateSessionId(workspaceRoot);
     onClearTranscript?.();
     if (isTauri()) {
       void invoke("chat_clear")
@@ -3379,6 +3685,12 @@ function AgentView({
         .catch((reason) => setChatError(String(reason)));
     }
   };
+
+  useEffect(() => {
+    if (!newChatNonce) return;
+    clearChat();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only fire on parent + Chat
+  }, [newChatNonce]);
 
   useEffect(() => {
     if (sharedVerifyGate.trim()) {
@@ -3423,25 +3735,199 @@ function AgentView({
   const savePromptAsGoal = async () => {
     const statement = prompt.trim();
     if (!statement || !isTauri() || goalBusy) return;
+    const criteriaRaw = window.prompt(
+      "Acceptance criteria (one per line; required for Apply)",
+      "",
+    );
+    if (criteriaRaw === null) return;
+    const oosRaw = window.prompt(
+      "Out of scope (one per line; required for Apply)",
+      "",
+    );
+    if (oosRaw === null) return;
+    const successCriteria = splitListInput(criteriaRaw);
+    const outOfScope = splitListInput(oosRaw);
+    const gate =
+      window.prompt(
+        "Verify pointer (e.g. G3)",
+        verifyGate.trim() || "G3",
+      )?.trim() || "G3";
     setGoalBusy(true);
     try {
       const goal = await invoke<EngGoal>("goal_create", {
         input: {
           statement,
-          successCriteria: [],
+          successCriteria,
+          outOfScope,
           shellScope,
           autonomy,
-          verifyGate: verifyGate.trim() || null,
-          ownedPaths: mutating ? (effectiveOwnedPaths) : [],
+          verifyGate: gate || null,
+          ownedPaths: mutating ? effectiveOwnedPaths : [],
           activate: true,
         },
       });
       setActiveGoal(goal);
+      if (!isGoalContractReady(goal)) {
+        setFailureNote(
+          "Goal saved but Apply contract incomplete — add AC, out-of-scope, and verify (or waive).",
+        );
+      }
     } catch (reason) {
       window.alert(String(reason));
     } finally {
       setGoalBusy(false);
     }
+  };
+
+  const completeActiveGoalContract = async () => {
+    if (!isTauri() || goalBusy) return;
+    setGoalBusy(true);
+    try {
+      let goal = activeGoal;
+      if (!goal) {
+        const statement =
+          prompt.trim() ||
+          window.prompt("Goal statement", "")?.trim() ||
+          "";
+        if (!statement) {
+          window.alert("Need a goal statement first.");
+          return;
+        }
+        const criteriaRaw = window.prompt(
+          "Acceptance criteria (one per line)",
+          "",
+        );
+        if (criteriaRaw === null) return;
+        const oosRaw = window.prompt("Out of scope (one per line)", "");
+        if (oosRaw === null) return;
+        const gate =
+          window.prompt(
+            "Verify pointer (e.g. G3)",
+            verifyGate.trim() || "G3",
+          )?.trim() || "G3";
+        goal = await invoke<EngGoal>("goal_create", {
+          input: {
+            statement,
+            successCriteria: splitListInput(criteriaRaw),
+            outOfScope: splitListInput(oosRaw),
+            shellScope,
+            autonomy: autonomy === "observe" ? "propose" : autonomy,
+            verifyGate: gate || null,
+            ownedPaths: mutating ? effectiveOwnedPaths : [],
+            activate: true,
+          },
+        });
+      } else if (!isGoalContractReady(goal)) {
+        const criteriaRaw = window.prompt(
+          "Acceptance criteria (one per line)",
+          (goal.successCriteria ?? []).join("\n"),
+        );
+        if (criteriaRaw === null) return;
+        const oosRaw = window.prompt(
+          "Out of scope (one per line)",
+          (goal.outOfScope ?? []).join("\n"),
+        );
+        if (oosRaw === null) return;
+        const gate =
+          window.prompt(
+            "Verify pointer (e.g. G3)",
+            goal.verifyGate?.trim() || verifyGate.trim() || "G3",
+          )?.trim() || "G3";
+        goal = await invoke<EngGoal>("goal_update_contract", {
+          id: goal.id,
+          successCriteria: splitListInput(criteriaRaw),
+          outOfScope: splitListInput(oosRaw),
+          verifyGate: gate || null,
+          clarifyResolutions: null,
+        });
+      }
+      setActiveGoal(goal);
+      if (!isGoalContractReady(goal)) {
+        window.alert(
+          "Contract still incomplete. Fill AC, out-of-scope, and verify — or waive.",
+        );
+      }
+    } catch (reason) {
+      window.alert(String(reason));
+    } finally {
+      setGoalBusy(false);
+    }
+  };
+
+  const waiveActiveGoalContract = async () => {
+    if (!activeGoal || !isTauri() || goalBusy) return;
+    const reason = window.prompt(
+      "Waive Apply contract — reason (logged)",
+      "dogfood / emergency",
+    );
+    if (reason === null || !reason.trim()) return;
+    setGoalBusy(true);
+    try {
+      const goal = await invoke<EngGoal>("goal_waive_contract", {
+        id: activeGoal.id,
+        reason: reason.trim(),
+      });
+      setActiveGoal(goal);
+      setFailureNote("Contract waived — Apply tools unlocked for this goal.");
+    } catch (reason) {
+      window.alert(String(reason));
+    } finally {
+      setGoalBusy(false);
+    }
+  };
+
+  const requestApplyAutonomy = (next: "act" | "automate") => {
+    if (isGoalContractReady(activeGoal)) {
+      setAutonomyPersisted(next);
+      if (next === "automate") setVerifyOnComplete(true);
+      if (effort === "low") {
+        setEffort("medium");
+        window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+      }
+      return;
+    }
+    const choice = window.confirm(
+      "Apply requires an eng-goal contract (acceptance criteria + out-of-scope + verify), or a logged waive.\n\nOK = define / complete contract now\nCancel = stay on Suggest",
+    );
+    if (!choice) return;
+    void (async () => {
+      await completeActiveGoalContract();
+      // Re-read via state may lag; invoke active after update
+      try {
+        const fresh = await invoke<EngGoal | null>("goal_active");
+        if (isGoalContractReady(fresh)) {
+          setActiveGoal(fresh);
+          setAutonomyPersisted(next);
+          if (next === "automate") setVerifyOnComplete(true);
+          if (effort === "low") {
+            setEffort("medium");
+            window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+          }
+        } else if (fresh) {
+          setActiveGoal(fresh);
+          const waive = window.confirm(
+            "Contract still incomplete. Waive for this goal and switch to Apply?",
+          );
+          if (waive) {
+            const reason = window.prompt(
+              "Waive reason",
+              "proceed without full contract",
+            );
+            if (reason?.trim()) {
+              const waived = await invoke<EngGoal>("goal_waive_contract", {
+                id: fresh.id,
+                reason: reason.trim(),
+              });
+              setActiveGoal(waived);
+              setAutonomyPersisted(next);
+              if (next === "automate") setVerifyOnComplete(true);
+            }
+          }
+        }
+      } catch (reason) {
+        window.alert(String(reason));
+      }
+    })();
   };
 
   const runActiveGoal = () => {
@@ -3476,9 +3962,7 @@ function AgentView({
         effectiveOwnedPaths,
       );
       if (conflict) {
-        window.alert(
-          `Another agent (${conflict.agent_id.slice(0, 8)}) holds a write lease on ${conflict.path}. Switch to Suggest or wait.`,
-        );
+        surfaceLeaseConflict(conflict);
         return;
       }
     }
@@ -3514,6 +3998,8 @@ function AgentView({
       leaseAgentId: nextMutating ? agentId : null,
       preferredShellCwd: preferredShellCwd(nextScope),
       executionRoot: null,
+      approvedRiskCategories,
+      approvedRiskTiers,
     });
   };
 
@@ -3583,6 +4069,7 @@ function AgentView({
           taskId: task.id,
           agentId,
           ttlSecs: 300,
+          autonomy: autonomy === "automate" ? "automate" : "act",
         });
       }
       working = await invoke<AgentTask>("task_start", {
@@ -3643,6 +4130,9 @@ function AgentView({
           leaseAgentId: agentId,
           preferredShellCwd: preferredShellCwd(shellScope),
           executionRoot,
+          approvedRiskCategories,
+          approvedRiskTiers,
+          claimedTaskId: working.id,
         });
       }
     } catch (reason) {
@@ -3737,6 +4227,13 @@ function AgentView({
       nextAutonomy === "act" || nextAutonomy === "automate" ? agentId : null,
     preferredShellCwd: preferredShellCwd(shellScope),
     executionRoot: null,
+    approvedRiskCategories,
+    approvedRiskTiers,
+    claimedTaskId:
+      claimedTask &&
+      (claimedTask.status === "claimed" || claimedTask.status === "running")
+        ? claimedTask.id
+        : null,
   };
   };
 
@@ -3750,9 +4247,7 @@ function AgentView({
         effectiveOwnedPaths,
       );
       if (conflict) {
-        window.alert(
-          `Another agent (${conflict.agent_id.slice(0, 8)}) holds a write lease on ${conflict.path}. Switch to Suggest or wait.`,
-        );
+        surfaceLeaseConflict(conflict);
         return;
       }
     }
@@ -3996,6 +4491,10 @@ function AgentView({
                     ? "Automate"
                     : "Suggest"}
                 {activeGoal.verifyGate ? ` · ${activeGoal.verifyGate}` : ""}
+                {" · "}
+                {isGoalContractReady(activeGoal)
+                  ? "contract ready"
+                  : "contract incomplete"}
               </span>
             </div>
             <div className="truncate text-[11px] text-slate-300" title={activeGoal.statement}>
@@ -4003,6 +4502,27 @@ function AgentView({
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            {!isGoalContractReady(activeGoal) && (
+              <>
+                <button
+                  type="button"
+                  disabled={goalBusy}
+                  onClick={() => void completeActiveGoalContract()}
+                  className="rounded-md border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-40"
+                >
+                  Complete contract
+                </button>
+                <button
+                  type="button"
+                  disabled={goalBusy}
+                  onClick={() => void waiveActiveGoalContract()}
+                  className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/8 disabled:opacity-40"
+                  title="Log a waive so Apply can proceed without full AC/OOS/verify"
+                >
+                  Waive
+                </button>
+              </>
+            )}
             <button
               type="button"
               disabled={busy || goalBusy || !provider.trim() || !model.trim()}
@@ -4140,7 +4660,7 @@ function AgentView({
         </div>
       )}
 
-      {handoffAvailable && onContinueHandoff && !busy && (
+      {handoffAvailable && onContinueHandoff && (
         <div
           className={`flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
             handoffLatestStatus === "budget_exhausted"
@@ -4158,9 +4678,11 @@ function AgentView({
             >
               {continuityBusy
                 ? "Preparing Continuity…"
-                : handoffLatestStatus === "budget_exhausted"
-                  ? "Budget exhausted — continue with more Effort"
-                  : "Continue last handoff"}
+                : busy
+                  ? "Handoff ready — wait for turn"
+                  : handoffLatestStatus === "budget_exhausted"
+                    ? "Budget exhausted — continue with more Effort"
+                    : "Continue last handoff"}
             </div>
             <div className="text-[10px] text-slate-500">
               {handoffLatestStatus === "budget_exhausted"
@@ -4170,7 +4692,7 @@ function AgentView({
           </div>
           <button
             type="button"
-            disabled={continuityBusy}
+            disabled={continuityBusy || busy}
             onClick={onContinueHandoff}
             className={`shrink-0 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-40 ${
               handoffLatestStatus === "budget_exhausted"
@@ -4194,8 +4716,54 @@ function AgentView({
         ownedPaths={mutating ? (effectiveOwnedPaths) : []}
         busy={busy}
         shellScope={shellScope}
-        onNewAgent={() => setAgentId(rotateAgentId(workspaceRoot))}
+        onNewLease={() => setAgentId(rotateAgentId(workspaceRoot))}
+        onNewChat={clearChat}
+        onWaitRefresh={() => onRefresh?.()}
+        onEnableIsolate={() => {
+          setApplyIsolate(true);
+          window.localStorage.setItem(APPLY_ISOLATE_KEY, "1");
+        }}
+        onSwitchSuggest={() => setAutonomyPersisted("propose")}
+        isolateEnabled={applyIsolate}
       />
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-0.5">
+        <button
+          type="button"
+          disabled={busy || !provider.trim() || !model.trim() || !isTauri()}
+          onClick={() => {
+            void invoke<VerifyResult[]>("run_verify", {
+              gate: verifyGate.trim() || "G3",
+              through: true,
+            })
+              .then((results) => {
+                setTaskNote(
+                  `Verify G${verifyGate.trim() || "G3"} · ${results.filter((r) => r.passed).length}/${results.length} passed`,
+                );
+              })
+              .catch((reason) => setTaskNote(honestLeaseError(String(reason))));
+            const text =
+              "Verifier (judge): grade evidence only. Summarize what sensors prove; do not propose patches or write files. List pass/fail and next safe command.";
+            setPrompt("");
+            setCurrentUser(text);
+            stickToBottomRef.current = true;
+            onRun({
+              ...buildTurnInput({ autonomy: "propose" }),
+              prompt: text,
+              autonomy: "propose",
+              approveOwnedPaths: false,
+              ownedPaths: [],
+              leaseAgentId: null,
+              slotOverride: "verifier",
+              claimedTaskId: null,
+            });
+          }}
+          className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
+          title="Sensors-first Verifier slot — no write leases"
+        >
+          Verify (judge)
+        </button>
+      </div>
 
       <div
         ref={feedScrollRef}
@@ -4209,14 +4777,6 @@ function AgentView({
                 ? `Chat save: ${chatError}`
                 : `${pastTurns.length} saved turn${pastTurns.length === 1 ? "" : "s"} · .ade/chat`}
             </div>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={clearChat}
-              className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300 disabled:opacity-40"
-            >
-              Clear chat
-            </button>
           </div>
         )}
         <AgentActivityFeed
@@ -4232,16 +4792,16 @@ function AgentView({
           }
           autonomyLabel={
             autonomy === "act"
-              ? "Apply"
+              ? "Apply · Worker"
               : autonomy === "automate"
-                ? "Automate"
+                ? "Automate · Worker"
                 : autonomy === "observe"
-                  ? "Observe"
-                  : "Suggest"
+                  ? "Observe · Planner"
+                  : "Suggest · Planner"
           }
           scopeLabel={shellScope === "home" ? "Home" : "Workspace"}
           autonomySuggest={autonomy === "propose" || autonomy === "observe"}
-          onSwitchToApply={() => setAutonomyPersisted("act")}
+          onSwitchToApply={() => requestApplyAutonomy("act")}
           onSwitchToHomeScope={() => setShellScopePersisted("home")}
           onPrefillPrompt={(text) => {
             setPrompt(text);
@@ -4259,9 +4819,7 @@ function AgentView({
                 effectiveOwnedPaths,
               );
               if (conflict) {
-                window.alert(
-                  `Another agent (${conflict.agent_id.slice(0, 8)}) holds a write lease on ${conflict.path}. Switch to Suggest or wait.`,
-                );
+                surfaceLeaseConflict(conflict);
                 return;
               }
             }
@@ -4290,6 +4848,7 @@ function AgentView({
                     : "defaults"
               }
               defaultOpen={false}
+              forceOpen={forceAdvancedOpen}
               storageKey="ade_agent_advanced_run"
             >
               <div className="space-y-2">
@@ -4342,6 +4901,34 @@ function AgentView({
                   >
                     Dogfood Automate
                   </Chip>
+                  <Chip
+                    onClick={() => {
+                      setAutonomyPersisted("act");
+                      if (effort === "low") {
+                        setEffort("medium");
+                        window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+                      }
+                      setForceOwnedPaths([".ade/dogfood"]);
+                      setPrompt(
+                        "N4 dogfood Continuity: after a turn under .ade/dogfood/, use Continue last handoff (or raise Effort) and append continuity-acceptance.md with ISO time and that Continuity resumed. Do not edit crates/ or apps/.",
+                      );
+                    }}
+                  >
+                    Dogfood Continuity
+                  </Chip>
+                  <Chip
+                    onClick={() => {
+                      setApplyIsolate(true);
+                      window.localStorage.setItem(APPLY_ISOLATE_KEY, "1");
+                      setAutonomyPersisted("act");
+                      setForceOwnedPaths([".ade/dogfood/isolate"]);
+                      setPrompt(
+                        "G4 dogfood Isolate: Apply under .ade/dogfood/isolate with Isolate enabled. Write isolate-acceptance.md noting worktree path if used. Do not edit crates/ or apps/.",
+                      );
+                    }}
+                  >
+                    Dogfood Isolate
+                  </Chip>
                 </div>
                 <ProviderSelect
                   value={provider}
@@ -4371,6 +4958,14 @@ function AgentView({
                   <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
                   <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
                 </div>
+                {Number(inputCost) <= 0 &&
+                  Number(outputCost) <= 0 &&
+                  (Number(sessionCap) > 0 || Number(dailyCap) > 0) && (
+                    <p className="text-[10px] leading-snug text-amber-200/90">
+                      Spend honesty: rates are $0 — caps cannot reserve real dollars. Set
+                      Input/Output $/MTok to match your provider invoice class.
+                    </p>
+                  )}
               </div>
             </Disclosure>
           </div>
@@ -4417,18 +5012,9 @@ function AgentView({
             maxLabelChars={10}
             onChange={(next) => {
               if (next === "automate") {
-                setAutonomyPersisted("automate");
-                setVerifyOnComplete(true);
-                if (effort === "low") {
-                  setEffort("medium");
-                  window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
-                }
+                requestApplyAutonomy("automate");
               } else if (next === "act") {
-                setAutonomyPersisted("act");
-                if (effort === "low") {
-                  setEffort("medium");
-                  window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
-                }
+                requestApplyAutonomy("act");
               } else {
                 setAutonomyPersisted("propose");
               }
@@ -5046,6 +5632,9 @@ function AuditView({
   const [ignoreMessage, setIgnoreMessage] = useState<string | null>(null);
   const [spend, setSpend] = useState<{
     daily_usd: number;
+    used_usd: number;
+    reserved_usd: number;
+    remaining_usd: number;
     daily_cap_usd: number;
     session_cap_usd: number;
     period_key: string;
@@ -5064,6 +5653,9 @@ function AuditView({
     const dailyCap = Number(window.localStorage.getItem("ade_daily_cap_usd") || "10");
     void invoke<{
       daily_usd: number;
+      used_usd: number;
+      reserved_usd: number;
+      remaining_usd: number;
       daily_cap_usd: number;
       session_cap_usd: number;
       period_key: string;
@@ -5181,7 +5773,7 @@ function AuditView({
                 Spend
               </div>
               <div className="mt-0.5 text-[12px] text-slate-400">
-                Workspace daily usage vs your hard caps
+                Used / reserved / remaining vs daily cap (invoice class)
               </div>
             </div>
             <button
@@ -5193,12 +5785,24 @@ function AuditView({
               Caps
             </button>
           </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               dense
-              label="Today"
-              value={spend ? `$${spend.daily_usd.toFixed(4)}` : "—"}
+              label="Used"
+              value={spend ? `$${spend.used_usd.toFixed(4)}` : "—"}
               accent="blue"
+            />
+            <MetricCard
+              dense
+              label="Reserved"
+              value={spend ? `$${spend.reserved_usd.toFixed(4)}` : "—"}
+              accent="slate"
+            />
+            <MetricCard
+              dense
+              label="Remaining"
+              value={spend ? `$${spend.remaining_usd.toFixed(4)}` : "—"}
+              accent={spend && spend.remaining_usd <= 0 ? "red" : "slate"}
             />
             <MetricCard
               dense
@@ -5206,16 +5810,12 @@ function AuditView({
               value={spend ? `$${spend.daily_cap_usd.toFixed(2)}` : "—"}
               accent="slate"
             />
-            <MetricCard
-              dense
-              label="Session cap"
-              value={spend ? `$${spend.session_cap_usd.toFixed(2)}` : "—"}
-              accent="slate"
-            />
           </div>
           {spend && (
-            <div className="mt-2 font-mono text-[10px] text-slate-600">
-              period {spend.period_key}
+            <div className="mt-2 flex flex-wrap gap-3 font-mono text-[10px] text-slate-600">
+              <span>active ${spend.daily_usd.toFixed(4)} (used+reserved)</span>
+              <span>session cap ${spend.session_cap_usd.toFixed(2)}</span>
+              <span>period {spend.period_key}</span>
             </div>
           )}
         </div>
@@ -5791,6 +6391,9 @@ function SpendUsageStrip({
 }) {
   const [spend, setSpend] = useState<{
     daily_usd: number;
+    used_usd: number;
+    reserved_usd: number;
+    remaining_usd: number;
     daily_cap_usd: number;
     session_cap_usd: number;
     period_key: string;
@@ -5805,6 +6408,9 @@ function SpendUsageStrip({
     let cancelled = false;
     void invoke<{
       daily_usd: number;
+      used_usd: number;
+      reserved_usd: number;
+      remaining_usd: number;
       daily_cap_usd: number;
       session_cap_usd: number;
       period_key: string;
@@ -5840,13 +6446,13 @@ function SpendUsageStrip({
         className={`font-mono text-[10px] tabular-nums ${
           overDaily ? "text-amber-200" : "text-slate-500"
         } ${className}`}
-        title={`period ${spend.period_key}`}
+        title={`period ${spend.period_key} · used $${spend.used_usd.toFixed(4)} · reserved $${spend.reserved_usd.toFixed(4)}`}
       >
-        Today ${spend.daily_usd.toFixed(4)}
+        Used ${spend.used_usd.toFixed(4)}
         {" · "}
-        daily cap ${spend.daily_cap_usd.toFixed(2)}
+        rem ${spend.remaining_usd.toFixed(4)}
         {" · "}
-        session ${spend.session_cap_usd.toFixed(2)}
+        cap ${spend.daily_cap_usd.toFixed(2)}
       </div>
     );
   }
@@ -5861,7 +6467,7 @@ function SpendUsageStrip({
             Usage
           </div>
           <div className="mt-0.5 text-[12px] text-slate-400">
-            Workspace daily spend vs hard caps (same ledger as Trust)
+            Invoice-class used / reserved / remaining (same ledger as Trust)
           </div>
         </div>
         <div
@@ -5869,10 +6475,12 @@ function SpendUsageStrip({
             overDaily ? "text-amber-200" : "text-slate-300"
           }`}
         >
-          Today ${spend.daily_usd.toFixed(4)}
+          Used ${spend.used_usd.toFixed(4)}
         </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-3 font-mono text-[10px] text-slate-500">
+        <span>reserved ${spend.reserved_usd.toFixed(4)}</span>
+        <span>remaining ${spend.remaining_usd.toFixed(4)}</span>
         <span>daily cap ${spend.daily_cap_usd.toFixed(2)}</span>
         <span>session cap ${spend.session_cap_usd.toFixed(2)}</span>
         <span>period {spend.period_key}</span>

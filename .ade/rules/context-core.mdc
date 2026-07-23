@@ -1,14 +1,10 @@
 ---
-description: Minimal safety, context, verification, and git contract (from ADE setup book)
+description: ADE-local agent contract pointers (phases, FreeLLMAPI skill, verify)
 ---
-# Context Core
+# ADE Context
 
-- Locate, then read slices; never load folders or full logs by default.
-- Tool output: errors plus final 30 lines, or one JSONL summary.
-- Verify behavioral changes; report result, evidence, and `path:lines`.
-- Default output: plain or Agent Wire; no recap/table/heading unless it helps.
-- Never expose/commit secrets or run destructive commands without explicit approval.
-- Git: inspect status/diff; no commit/push/amend/force unless requested.
-- Keep canonical facts in one file; link rather than duplicate.
-- Use task-specific skills under `.ade/skills/` on demand.
-- Bulk AI work: use FreeLLMAPI when available — see skill `freellmapi-offload`.
+- Phases: rule `golden-path` (AUDIT → PLAN → EXECUTE). Do not expand EXECUTE scope.
+- Verify: skill `verify-ladder` before claiming done.
+- Bulk AI: skill `freellmapi-offload` when available.
+- Money paths: rule `money-invariants`. Secrets/generated: deny rules with globs.
+- After verified roadmap phase boundaries: rule `phase-summary` (`/summarize`).

@@ -18,6 +18,8 @@ export type TurnFailureKind =
   | "token_budget"
   | "spend_cap"
   | "lease_conflict"
+  | "contract_gate"
+  | "risk_gate"
   | "unknown";
 
 export type EffortTier = "low" | "medium" | "high";
@@ -45,7 +47,23 @@ export type TurnFailureAction =
       maxSteps: number;
     }
   | { id: "open_keys"; label: string }
-  | { id: "fix_base_url"; label: string; baseUrl: string };
+  | { id: "fix_base_url"; label: string; baseUrl: string }
+  | { id: "define_goal"; label: string }
+  | { id: "switch_suggest"; label: string }
+  | { id: "switch_apply"; label: string }
+  | {
+      id: "approve_risk";
+      label: string;
+      categories?: string[];
+      tiers?: string[];
+    }
+  | { id: "rotate_lease"; label: string }
+  | { id: "enable_isolate"; label: string }
+  | { id: "wait_refresh"; label: string }
+  | { id: "confirm_unmetered"; label: string }
+  | { id: "open_spend_rates"; label: string }
+  | { id: "apply_next"; label: string }
+  | { id: "waive_queue"; label: string };
 
 export type TurnFailureAdvice = {
   kind: TurnFailureKind;
@@ -302,23 +320,129 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
     };
   }
 
+  if (lower.includes("spend_honesty") || (lower.includes("spend") && lower.includes("$/mtok"))) {
+    return {
+      kind: "spend_cap",
+      title: "Spend rates required",
+      summary:
+        "Session/daily caps are on but $/MTok rates are $0. Set Input/Output rates to your provider invoice class, or confirm unmetered.",
+      autoFix: null,
+      actions: [
+        { id: "confirm_unmetered", label: "Confirm unmetered & retry" },
+        { id: "open_spend_rates", label: "Open spend rates" },
+        retry,
+      ],
+    };
+  }
+
   if (lower.includes("spend") && (lower.includes("cap") || lower.includes("budget"))) {
     return {
       kind: "spend_cap",
       title: "Spend cap hit",
       summary: "Session or daily spend reserve blocked the turn. Raise caps in Settings, or wait for the period to roll.",
       autoFix: null,
-      actions: [retry],
+      actions: [
+        { id: "open_spend_rates", label: "Open spend rates" },
+        retry,
+      ],
     };
   }
 
-  if (lower.includes("lease") && lower.includes("conflict")) {
+  if (lower.includes("claim_gate")) {
+    return {
+      kind: "lease_conflict",
+      title: "Queue requires claim",
+      summary:
+        "Ready tasks are queued. Apply next from the queue, or waive once to free-form Apply.",
+      autoFix: null,
+      actions: [
+        { id: "apply_next", label: "Apply next" },
+        { id: "waive_queue", label: "Waive queue & retry" },
+        retry,
+      ],
+    };
+  }
+
+  if (lower.includes("slot_gate")) {
+    return {
+      kind: "lease_conflict",
+      title: "Wrong slot",
+      summary:
+        "Planner/Suggest cannot claim tasks or take write leases. Switch to Apply (Worker), then retry.",
+      autoFix: null,
+      actions: [
+        { id: "switch_apply", label: "Switch to Apply" },
+        { id: "switch_suggest", label: "Stay on Suggest" },
+        retry,
+      ],
+    };
+  }
+
+  if (
+    lower.includes("lease conflict") ||
+    lower.includes("already holds") ||
+    (lower.includes("lease") && lower.includes("conflict")) ||
+    lower.includes("not covered by an active writable lease") ||
+    (lower.includes("another agent") && lower.includes("write lease"))
+  ) {
     return {
       kind: "lease_conflict",
       title: "Lease conflict",
-      summary: "Another agent holds a write lease on an owned path. Switch to Suggest, or wait / release the lease.",
+      summary:
+        "Another agent holds a write lease on an owned path. Wait/refresh, Isolate to a worktree, rotate your lease id, or switch to Suggest.",
       autoFix: null,
-      actions: [retry],
+      actions: [
+        { id: "wait_refresh", label: "Wait · refresh" },
+        { id: "enable_isolate", label: "Enable Isolate" },
+        { id: "rotate_lease", label: "Rotate lease" },
+        { id: "switch_suggest", label: "Switch to Suggest" },
+        retry,
+      ],
+    };
+  }
+
+  if (lower.includes("contract_gate")) {
+    return {
+      kind: "contract_gate",
+      title: "Apply contract required",
+      summary:
+        "Act tools are blocked until the active eng-goal has acceptance criteria, out-of-scope, and a verify pointer (or ≤3 clarify / logged waive).",
+      autoFix: null,
+      actions: [
+        { id: "define_goal", label: "Define goal contract" },
+        { id: "switch_suggest", label: "Switch to Suggest" },
+        retry,
+      ],
+    };
+  }
+
+  if (lower.includes("risk_gate")) {
+    const categoryMatch = error.match(/category '([^']+)'/i);
+    const category = categoryMatch?.[1]?.toLowerCase() || "high";
+    const categories =
+      category === "high" || category === "critical"
+        ? []
+        : [category];
+    const tiers =
+      category === "high" || category === "critical"
+        ? [category]
+        : ["high"];
+    return {
+      kind: "risk_gate",
+      title: "High-risk action needs confirm",
+      summary:
+        "Secrets / infra / migrate / publish require an explicit human confirm even under Apply/Automate.",
+      autoFix: null,
+      actions: [
+        {
+          id: "approve_risk",
+          label: `Approve ${category} & retry`,
+          categories,
+          tiers,
+        },
+        { id: "switch_suggest", label: "Switch to Suggest" },
+        retry,
+      ],
     };
   }
 

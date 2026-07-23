@@ -12,6 +12,16 @@ use uuid::Uuid;
 
 pub const GOAL_SCHEMA: &str = "ade.goal/v1";
 
+/// Stable prefix for `AdeError::Authorization` when Act tools are blocked (Desktop matches).
+pub const CONTRACT_GATE_PREFIX: &str = "contract_gate:";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractWaive {
+    pub at: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EngGoal {
@@ -23,7 +33,10 @@ pub struct EngGoal {
     pub statement: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub success_criteria: Vec<String>,
-    /// `workspace` | `home` — maps to shell preferred cwd (G1).
+    /// Explicit non-goals / out of scope (master-gameplan G1 contract field).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub out_of_scope: Vec<String>,
+    /// `workspace` | `home` — maps to shell preferred cwd (orch G1).
     pub shell_scope: String,
     /// `propose` | `act` | `automate` (observe rare for goals).
     pub autonomy: String,
@@ -35,6 +48,12 @@ pub struct EngGoal {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_handoff_id: Option<String>,
+    /// Logged human waive of the Apply contract gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_waive: Option<ContractWaive>,
+    /// ≤3 clarify answers that unlock Apply when a full contract is not yet written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clarify_resolutions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +67,8 @@ pub struct GoalCreateInput {
     pub statement: String,
     #[serde(default)]
     pub success_criteria: Vec<String>,
+    #[serde(default)]
+    pub out_of_scope: Vec<String>,
     #[serde(default = "default_shell_scope")]
     pub shell_scope: String,
     #[serde(default = "default_autonomy")]
@@ -73,6 +94,61 @@ fn default_true() -> bool {
 }
 
 impl EngGoal {
+    /// Full Apply contract: AC + out-of-scope + verify pointer on an active goal.
+    pub fn is_contract_ready(&self) -> bool {
+        self.status == "active"
+            && self.success_criteria.iter().any(|c| !c.trim().is_empty())
+            && self.out_of_scope.iter().any(|c| !c.trim().is_empty())
+            && self
+                .verify_gate
+                .as_ref()
+                .is_some_and(|g| !g.trim().is_empty())
+    }
+
+    /// Clarify escape: 1..=3 recorded resolutions on an active goal.
+    pub fn clarify_unlocks_act(&self) -> bool {
+        self.status == "active"
+            && !self.clarify_resolutions.is_empty()
+            && self.clarify_resolutions.len() <= 3
+            && self
+                .clarify_resolutions
+                .iter()
+                .all(|c| !c.trim().is_empty())
+    }
+
+    /// Act/Automate tools may run when contract ready, waived, or clarify-resolved.
+    pub fn allows_act_tools(&self) -> bool {
+        self.is_contract_ready() || self.contract_waive.is_some() || self.clarify_unlocks_act()
+    }
+
+    pub fn contract_block_detail(&self) -> String {
+        let mut missing = Vec::new();
+        if !self.success_criteria.iter().any(|c| !c.trim().is_empty()) {
+            missing.push("acceptance criteria");
+        }
+        if !self.out_of_scope.iter().any(|c| !c.trim().is_empty()) {
+            missing.push("out-of-scope");
+        }
+        if !self
+            .verify_gate
+            .as_ref()
+            .is_some_and(|g| !g.trim().is_empty())
+        {
+            missing.push("verify pointer");
+        }
+        if missing.is_empty() {
+            format!(
+                "{CONTRACT_GATE_PREFIX} eng-goal '{}' is not active (status={})",
+                self.id, self.status
+            )
+        } else {
+            format!(
+                "{CONTRACT_GATE_PREFIX} Act tools blocked until eng-goal has {} (or ≤3 clarify / logged waive). Define a goal or switch to Suggest.",
+                missing.join(", ")
+            )
+        }
+    }
+
     pub fn prompt_block(&self) -> String {
         let mut lines = vec![
             format!("ENG GOAL (id={}):", self.id),
@@ -91,8 +167,35 @@ impl EngGoal {
                 lines.push(format!("  {}. {}", i + 1, c.trim()));
             }
         }
+        if !self.out_of_scope.is_empty() {
+            lines.push("Out of scope:".into());
+            for (i, c) in self.out_of_scope.iter().enumerate() {
+                lines.push(format!("  {}. {}", i + 1, c.trim()));
+            }
+        }
+        if !self.clarify_resolutions.is_empty() {
+            lines.push("Clarify resolutions:".into());
+            for (i, c) in self.clarify_resolutions.iter().enumerate() {
+                lines.push(format!("  {}. {}", i + 1, c.trim()));
+            }
+        }
+        if let Some(waive) = &self.contract_waive {
+            lines.push(format!(
+                "Contract waive: {} ({})",
+                waive.reason.trim(),
+                waive.at
+            ));
+        }
         if !self.owned_paths.is_empty() {
             lines.push(format!("Owned paths hint: {}", self.owned_paths.join(", ")));
+        }
+        if self.allows_act_tools() {
+            lines.push("Apply contract: unlocked for Act/Automate tools.".into());
+        } else {
+            lines.push(
+                "Apply contract: incomplete — Suggest/inspect only until AC + out-of-scope + verify (or waive/clarify)."
+                    .into(),
+            );
         }
         lines.push(
             "Treat this goal as the outcome to advance this turn; chat is the channel, not the product."
@@ -108,6 +211,13 @@ impl EngGoal {
             parts.push(String::new());
             parts.push("Success criteria:".into());
             for c in &self.success_criteria {
+                parts.push(format!("- {}", c.trim()));
+            }
+        }
+        if !self.out_of_scope.is_empty() {
+            parts.push(String::new());
+            parts.push("Out of scope:".into());
+            for c in &self.out_of_scope {
                 parts.push(format!("- {}", c.trim()));
             }
         }
@@ -157,6 +267,13 @@ impl GoalStore {
                 .filter(|c| !c.is_empty())
                 .take(12)
                 .collect(),
+            out_of_scope: input
+                .out_of_scope
+                .into_iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .take(12)
+                .collect(),
             shell_scope,
             autonomy,
             verify_gate: input
@@ -172,6 +289,8 @@ impl GoalStore {
                 .collect(),
             status: "active".into(),
             last_handoff_id: None,
+            contract_waive: None,
+            clarify_resolutions: Vec::new(),
         };
         self.save(&goal)?;
         if input.activate {
@@ -289,6 +408,85 @@ impl GoalStore {
         self.save(&goal)?;
         Ok(goal)
     }
+
+    /// Patch contract fields on an existing goal (AC / OOS / verify / clarify).
+    pub fn update_contract(
+        &self,
+        id: &str,
+        success_criteria: Option<Vec<String>>,
+        out_of_scope: Option<Vec<String>>,
+        verify_gate: Option<Option<String>>,
+        clarify_resolutions: Option<Vec<String>>,
+    ) -> Result<EngGoal, AdeError> {
+        let mut goal = self.load(id)?;
+        if let Some(criteria) = success_criteria {
+            goal.success_criteria = criteria
+                .into_iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .take(12)
+                .collect();
+        }
+        if let Some(oos) = out_of_scope {
+            goal.out_of_scope = oos
+                .into_iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .take(12)
+                .collect();
+        }
+        if let Some(gate) = verify_gate {
+            goal.verify_gate = gate.map(|g| g.trim().to_string()).filter(|g| !g.is_empty());
+        }
+        if let Some(clarify) = clarify_resolutions {
+            goal.clarify_resolutions = clarify
+                .into_iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .take(3)
+                .collect();
+        }
+        goal.updated_at = Utc::now().to_rfc3339();
+        self.save(&goal)?;
+        Ok(goal)
+    }
+
+    /// Log a human waive so Apply can proceed without a full contract.
+    pub fn waive_contract(&self, id: &str, reason: &str) -> Result<EngGoal, AdeError> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(AdeError::Config(
+                "contract waive reason cannot be empty".into(),
+            ));
+        }
+        let mut goal = self.load(id)?;
+        goal.contract_waive = Some(ContractWaive {
+            at: Utc::now().to_rfc3339(),
+            reason: reason.chars().take(500).collect(),
+        });
+        goal.updated_at = Utc::now().to_rfc3339();
+        self.save(&goal)?;
+        Ok(goal)
+    }
+}
+
+/// Authorization error when Act/Automate lacks a ready contract and no active goal.
+pub fn no_active_goal_contract_error() -> AdeError {
+    AdeError::Authorization(format!(
+        "{CONTRACT_GATE_PREFIX} Act tools blocked until an active eng-goal has acceptance criteria, out-of-scope, and verify pointer (or ≤3 clarify / logged waive). Define a goal or switch to Suggest."
+    ))
+}
+
+/// True for tool effects that mutate workspace/process (Apply-class).
+pub fn is_act_class_effect(effect: crate::authority::ToolEffect) -> bool {
+    use crate::authority::ToolEffect;
+    matches!(
+        effect,
+        ToolEffect::WorkspaceWrite
+            | ToolEffect::ExternalWrite
+            | ToolEffect::ProcessExecution
+            | ToolEffect::Unknown
+    )
 }
 
 fn validate_id(id: &str) -> Result<&str, AdeError> {
@@ -368,6 +566,7 @@ mod tests {
             .create(GoalCreateInput {
                 statement: "Organize Desktop into typed folders".into(),
                 success_criteria: vec!["No loose PDFs on Desktop".into()],
+                out_of_scope: vec!["Do not delete Documents".into()],
                 shell_scope: "home".into(),
                 autonomy: "act".into(),
                 verify_gate: Some("G3".into()),
@@ -376,14 +575,75 @@ mod tests {
             })
             .unwrap();
         assert_eq!(goal.shell_scope, "home");
+        assert!(goal.is_contract_ready());
+        assert!(goal.allows_act_tools());
         let active = store.load_active().unwrap().expect("active");
         assert_eq!(active.id, goal.id);
         assert!(active.prompt_block().contains("ENG GOAL"));
+        assert!(active.prompt_block().contains("Out of scope"));
         assert!(active.run_prompt().contains("Organize Desktop"));
 
         store.mark_status(&goal.id, "done").unwrap();
         assert!(store.load_active().unwrap().is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn contract_gate_requires_ac_oos_verify_or_waive() {
+        let root = std::env::temp_dir().join(format!("ade-goal-contract-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = GoalStore::new(&root);
+        let incomplete = store
+            .create(GoalCreateInput {
+                statement: "Ship G1".into(),
+                success_criteria: vec![],
+                out_of_scope: vec![],
+                shell_scope: "workspace".into(),
+                autonomy: "act".into(),
+                verify_gate: None,
+                owned_paths: vec![],
+                activate: true,
+            })
+            .unwrap();
+        assert!(!incomplete.is_contract_ready());
+        assert!(!incomplete.allows_act_tools());
+        assert!(incomplete
+            .contract_block_detail()
+            .starts_with(CONTRACT_GATE_PREFIX));
+
+        let ready = store
+            .update_contract(
+                &incomplete.id,
+                Some(vec!["Tests pass".into()]),
+                Some(vec!["No refactor".into()]),
+                Some(Some("G3".into())),
+                None,
+            )
+            .unwrap();
+        assert!(ready.is_contract_ready());
+
+        let root2 = std::env::temp_dir().join(format!("ade-goal-waive-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root2).unwrap();
+        let store2 = GoalStore::new(&root2);
+        let bare = store2
+            .create(GoalCreateInput {
+                statement: "Hotfix".into(),
+                success_criteria: vec![],
+                out_of_scope: vec![],
+                shell_scope: "workspace".into(),
+                autonomy: "act".into(),
+                verify_gate: None,
+                owned_paths: vec![],
+                activate: true,
+            })
+            .unwrap();
+        let waived = store2
+            .waive_contract(&bare.id, "emergency path fix")
+            .unwrap();
+        assert!(!waived.is_contract_ready());
+        assert!(waived.allows_act_tools());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root2);
     }
 
     #[test]
@@ -395,6 +655,7 @@ mod tests {
             .create(GoalCreateInput {
                 statement: "Ship G2".into(),
                 success_criteria: vec![],
+                out_of_scope: vec![],
                 shell_scope: "workspace".into(),
                 autonomy: "propose".into(),
                 verify_gate: None,

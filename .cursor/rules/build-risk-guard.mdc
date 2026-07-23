@@ -17,9 +17,9 @@ cargo clippy -- -D warnings; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Running `ade-desktop-app.exe` or `ade.exe serve` locks targets. Stop those processes, or scope builds (`--exclude ade-desktop-app`). Lock errors are environment issues — do not "fix" code for them.
 
-## Money: never reintroduce `f64`
+## Money
 
-All monetary values use `ade_core::Money` (i64 micro-dollars). Convert `f64`/USD only at UI/CLI boundaries.
+Follow rule `money-invariants` (`ade_core::Money` / i64 micros). Never reintroduce `f64` money math.
 
 ## const fn
 

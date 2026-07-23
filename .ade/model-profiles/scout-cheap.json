@@ -1,0 +1,13 @@
+﻿{
+  "schema": "ade.model-profile/v1",
+  "id": "scout-cheap",
+  "label": "Scout (cheap)",
+  "allowed_autonomy": ["observe", "propose"],
+  "tool_effect_deny": ["external_write"],
+  "effort_floor_steps": 4,
+  "spend_ceiling_usd": 0.5,
+  "slot_eligibility": ["planner"],
+  "require_verify": false,
+  "prefer_worktree": false,
+  "tags": ["cheap", "scout"]
+}

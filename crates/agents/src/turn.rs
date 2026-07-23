@@ -141,6 +141,15 @@ pub struct AgentTurnBuilder {
     verify_on_complete: Option<VerifyGate>,
     /// Default shell cwd when the model omits `cwd` (e.g. `~/Desktop` for Home scope).
     preferred_shell_cwd: Option<String>,
+    /// G2: human-confirmed risk categories / tiers for this turn.
+    approved_risk_categories: Vec<String>,
+    approved_risk_tiers: Vec<String>,
+    /// H2: claimed task id for heartbeat / claim_gate satisfaction.
+    claimed_task_id: Option<String>,
+    /// H2: allow free-form Act while ready queue is non-empty (audited).
+    waive_queue: bool,
+    /// H2: force Verifier (or other) slot instead of autonomy mapping.
+    slot_override: Option<crate::slots::SlotRole>,
 }
 
 impl AgentTurnBuilder {
@@ -163,6 +172,11 @@ impl AgentTurnBuilder {
             max_tokens: None,
             verify_on_complete: None,
             preferred_shell_cwd: None,
+            approved_risk_categories: Vec::new(),
+            approved_risk_tiers: Vec::new(),
+            claimed_task_id: None,
+            waive_queue: false,
+            slot_override: None,
         }
     }
 
@@ -240,6 +254,35 @@ impl AgentTurnBuilder {
         self
     }
 
+    /// G2: approve high-risk categories (publish/infra/migrate/secrets) for this turn.
+    pub fn approved_risk_categories(mut self, categories: Vec<String>) -> Self {
+        self.approved_risk_categories = categories;
+        self
+    }
+
+    pub fn approved_risk_tiers(mut self, tiers: Vec<String>) -> Self {
+        self.approved_risk_tiers = tiers;
+        self
+    }
+
+    pub fn claimed_task_id(mut self, task_id: Option<impl Into<String>>) -> Self {
+        self.claimed_task_id = task_id
+            .map(Into::into)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        self
+    }
+
+    pub fn waive_queue(mut self, waive: bool) -> Self {
+        self.waive_queue = waive;
+        self
+    }
+
+    pub fn slot_override(mut self, slot: Option<crate::slots::SlotRole>) -> Self {
+        self.slot_override = slot;
+        self
+    }
+
     pub fn key_vault(mut self, key_vault: Arc<dyn ProviderKeyVault>) -> Self {
         self.key_vault = key_vault;
         self
@@ -251,6 +294,14 @@ impl AgentTurnBuilder {
     }
 
     pub async fn prepare(self) -> Result<AgentTurnService, AdeError> {
+        let mut autonomy = self.autonomy;
+        if matches!(self.slot_override, Some(crate::slots::SlotRole::Verifier)) {
+            // Verifier is sensors-first: never mutate under this override.
+            if autonomy.allows_mutating_tools() {
+                autonomy = AutonomyLevel::Propose;
+            }
+        }
+
         let model = ModelConfig {
             id: self.spec.model.clone(),
             name: self.spec.model.clone(),
@@ -279,10 +330,24 @@ impl AgentTurnBuilder {
         let coordination_root = self
             .coordination_root
             .unwrap_or_else(|| self.spec.workspace_root.clone());
-        let owned_paths = match self.lease_agent_id {
-            Some(agent_id) => LeaseManager::new(&coordination_root)
-                .resolve_owned_paths(agent_id, &self.spec.owned_paths)?,
-            None => self.spec.owned_paths.clone(),
+
+        // H2 claim_gate: Act/Automate must claim (or waive) when ready work is queued.
+        enforce_claim_gate(
+            &coordination_root,
+            autonomy,
+            self.lease_agent_id,
+            self.claimed_task_id.as_deref(),
+            self.waive_queue,
+        )?;
+
+        let owned_paths = if matches!(self.slot_override, Some(crate::slots::SlotRole::Verifier)) {
+            Vec::new()
+        } else {
+            match self.lease_agent_id {
+                Some(agent_id) => LeaseManager::new(&coordination_root)
+                    .resolve_owned_paths(agent_id, &self.spec.owned_paths)?,
+                None => self.spec.owned_paths.clone(),
+            }
         };
         let authority = AuthorityEnforcer::load(&self.spec.workspace_root, owned_paths)?;
         let effective_owned_paths = authority.owned_paths();
@@ -322,12 +387,35 @@ impl AgentTurnBuilder {
             ),
             None => "SHELL SCOPE=Workspace: shell__run_command defaults to the attached workspace root. Set cwd to ~/Desktop (or $env:USERPROFILE\\\\Desktop) for Desktop/home goals.".into(),
         };
-        let eng_goal_clause = crate::goal::GoalStore::new(&coordination_root)
+        let eng_goal = crate::goal::GoalStore::new(&coordination_root)
             .load_active()
             .ok()
             .flatten()
-            .filter(|g| g.status == "active")
-            .map(|g| g.prompt_block());
+            .filter(|g| g.status == "active");
+        let (contract_allows_act, contract_block_detail) = if autonomy.allows_mutating_tools() {
+            match &eng_goal {
+                    Some(goal) if goal.allows_act_tools() => (true, None),
+                    Some(goal) => (false, Some(goal.contract_block_detail())),
+                    None => (
+                        false,
+                        Some(format!(
+                            "{} Act tools blocked until an active eng-goal has acceptance criteria, out-of-scope, and verify pointer (or ≤3 clarify / logged waive). Define a goal or switch to Suggest.",
+                            crate::goal::CONTRACT_GATE_PREFIX
+                        )),
+                    ),
+                }
+        } else {
+            (true, None)
+        };
+        let eng_goal_clause = eng_goal.as_ref().map(|g| g.prompt_block());
+        let contract_clause = if autonomy.allows_mutating_tools() && !contract_allows_act {
+            Some(
+                "CONTRACT GATE: Act/Automate dial is on but eng-goal contract is incomplete. Read/inspect only this turn — ask the user to fill acceptance criteria, out-of-scope, and verify (or waive). Do not attempt writes."
+                    .to_string(),
+            )
+        } else {
+            None
+        };
         let isolation_clause = if coordination_root != self.spec.workspace_root {
             format!(
                 "\n\nISOLATION=worktree: tools execute in `{}`; leases/PLAN/goals stay on the primary checkout.",
@@ -338,11 +426,15 @@ impl AgentTurnBuilder {
         };
         let assembled = PromptAssembler::daily(self.spec.context_limit).assemble(
             &format!(
-                "{}\n\n{}\n\n{}{}{}",
+                "{}\n\n{}\n\n{}{}{}{}",
                 StartPromptBuilder::new().build(),
-                self.autonomy.prompt_clause(),
+                autonomy.prompt_clause(),
                 scope_clause,
                 eng_goal_clause
+                    .as_deref()
+                    .map(|block| format!("\n\n{block}"))
+                    .unwrap_or_default(),
+                contract_clause
                     .as_deref()
                     .map(|block| format!("\n\n{block}"))
                     .unwrap_or_default(),
@@ -371,15 +463,36 @@ impl AgentTurnBuilder {
         };
         let session_id = Uuid::new_v4();
         let caps = self.spend_caps.unwrap_or_else(SpendCaps::from_env);
+        let session_cap = caps.session;
         let mut guard = SpendGuard::new(&coordination_root, session_id, caps, ledger.clone());
         if let Some(actor) = self.actor {
             guard = guard.with_actor(actor);
         }
 
-        let verify_on_complete = if self.autonomy.requires_verify_on_complete() {
+        let verify_on_complete = if autonomy.requires_verify_on_complete() {
             Some(self.verify_on_complete.unwrap_or(VerifyGate::G3))
         } else {
             self.verify_on_complete
+        };
+
+        let catalog = crate::model_profile::ModelProfileCatalog::load(&coordination_root);
+        let _ = crate::model_profile::ensure_default_profiles(&coordination_root);
+        let route = crate::model_profile::route(
+            &catalog,
+            &crate::model_profile::RouteInput {
+                provider: self.spec.provider.clone(),
+                model: self.spec.model.clone(),
+                autonomy,
+                max_tool_rounds: self.max_tool_rounds,
+                session_cap: Some(session_cap),
+                slot_override: self.slot_override,
+            },
+        );
+        let max_tool_rounds = route.effective_max_tool_rounds(self.max_tool_rounds);
+        let verify_on_complete = if route.require_verify && verify_on_complete.is_none() {
+            Some(VerifyGate::G3)
+        } else {
+            verify_on_complete
         };
 
         let mut session = AgentSession::new(
@@ -393,8 +506,19 @@ impl AgentTurnBuilder {
         .with_preferred_shell_cwd(self.preferred_shell_cwd.clone())
         .with_spend_guard(guard)
         .with_request_timeout(self.request_timeout)
-        .with_autonomy(self.autonomy)
-        .with_max_tool_rounds(self.max_tool_rounds)
+        .with_autonomy(autonomy)
+        .with_contract_gate(contract_allows_act, contract_block_detail)
+        .with_route(
+            route.profile_id.clone(),
+            route.reason.clone(),
+            route.slot.as_str(),
+            route.tool_effect_deny.clone(),
+        )
+        .with_risk_approvals(
+            self.approved_risk_categories.clone(),
+            self.approved_risk_tiers.clone(),
+        )
+        .with_max_tool_rounds(max_tool_rounds)
         .with_max_tokens(self.max_tokens);
         if let Some(cancel) = &self.cancel {
             session = session.with_cancel_flag(Arc::clone(cancel));
@@ -436,6 +560,43 @@ impl AgentTurnBuilder {
             caps.daily.micros()
         )
     }
+}
+
+/// H2: Act/Automate must hold a claim (or waive) when ready tasks are queued.
+pub fn enforce_claim_gate(
+    root: &Path,
+    autonomy: AutonomyLevel,
+    lease_agent_id: Option<Uuid>,
+    claimed_task_id: Option<&str>,
+    waive_queue: bool,
+) -> Result<(), AdeError> {
+    if !autonomy.allows_mutating_tools() {
+        return Ok(());
+    }
+    let coordinator = ade_workflow::tasks::TaskCoordinator::new(root);
+    let ready = coordinator.ready_queued_count()?;
+    if ready == 0 {
+        return Ok(());
+    }
+    let satisfied = match (claimed_task_id, lease_agent_id) {
+        (Some(task_id), Some(agent_id)) => coordinator.agent_holds_task(task_id, agent_id)?,
+        (None, Some(agent_id)) => coordinator.agent_has_active_claim(agent_id)?,
+        _ => false,
+    };
+    if satisfied {
+        return Ok(());
+    }
+    if waive_queue {
+        coordinator.log_queue_waive(
+            lease_agent_id,
+            ready,
+            "free-form Apply while queue non-empty",
+        )?;
+        return Ok(());
+    }
+    Err(AdeError::Authorization(format!(
+        "claim_gate: {ready} queued task(s) — Apply next or waive"
+    )))
 }
 
 pub struct AgentTurnService {
@@ -642,6 +803,8 @@ fn save_turn_capsule(
     capsule.context_compaction = Some(outcome.context_compaction);
     capsule.compact_summary = Some(capsule.prompt_summary(480));
     let id = HandoffManager::new(workspace_root).save_capsule(&capsule)?;
+    // C3 write-before-compact: durable facts on disk before summary is the only memory.
+    let _ = crate::handoff::write_continuity_last_write(workspace_root, &capsule, &id);
     if let Ok(Some(active)) = crate::goal::GoalStore::new(workspace_root).load_active() {
         let _ = crate::goal::GoalStore::new(workspace_root).attach_handoff(&active.id, &id);
     }

@@ -1,0 +1,75 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Tauri (Rust)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--manifest-path",
+                    "apps/desktop/src-tauri/Cargo.toml",
+                    "--no-default-features"
+                ],
+                "filter": {
+                    "name": "ade-desktop-app",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/apps/desktop",
+            "preLaunchTask": "tauri: build-debug"
+        },
+        {
+            "type": "chrome",
+            "request": "launch",
+            "name": "Debug Tauri Frontend (WebView)",
+            "url": "http://localhost:1420",
+            "webRoot": "${workspaceFolder}/apps/desktop/src",
+            "sourceMaps": true,
+            "skipFiles": [
+                "<node_internals>/**",
+                "**/node_modules/**"
+            ],
+            "preLaunchTask": "tauri: dev"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug Vite Dev Server",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "cwd": "${workspaceFolder}/apps/desktop",
+            "console": "integratedTerminal",
+            "skipFiles": ["<node_internals>/**"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug CLI (cargo run)",
+            "cargo": {
+                "args": ["run", "--bin", "ade"],
+                "filter": {
+                    "name": "ade",
+                    "kind": "bin"
+                }
+            },
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Unit Tests",
+            "cargo": {
+                "args": ["test", "--workspace", "--exclude", "ade-desktop-app"],
+                "filter": {
+                    "name": "ade",
+                    "kind": "lib"
+                }
+            },
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

@@ -20,7 +20,9 @@ AUTHORITY (high→low): law/security/human · CI/schemas/tests · AGENTS.md · .
 
 PHASES: unknown health → AUDIT · need checklist → PLAN · approved plan → EXECUTE. Never self-certify done; use verify gates.
 
-SKILLS: T1 catalog is in the system prompt. Load full skill bodies with ade__activate_skill {"name":"..."} when a listed skill is needed beyond always-on/match."#
+SKILLS: T1 catalog is in the system prompt. Load full skill bodies with ade__activate_skill {"name":"..."} when a listed skill is needed beyond always-on/match.
+
+COMPACT: After a sub-task resolves/converges, you may call ade__compact_context {"reason":"subtask_resolved",...}. Do not compact mid-derivation or while stuck debugging — occupancy ~70% is a harness safety net."#
             .to_string()
     }
 }
@@ -33,10 +35,11 @@ mod tests {
     fn t0_mentions_activate_skill_and_stays_compact() {
         let text = StartPromptBuilder::new().build();
         assert!(text.contains("ade__activate_skill"));
+        assert!(text.contains("ade__compact_context"));
         assert!(text.contains("AUTHORITY"));
         let approx_tokens = text.chars().count().div_ceil(4);
         assert!(
-            approx_tokens <= 400,
+            approx_tokens <= 450,
             "T0 too large: ~{approx_tokens} tokens"
         );
     }

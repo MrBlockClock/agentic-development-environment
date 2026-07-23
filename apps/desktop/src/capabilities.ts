@@ -191,7 +191,7 @@ export function desktopRequiredCopy(view: string): {
       return {
         title: "Workspaces need Desktop",
         body: "Opening, adopting, and switching folders uses the Desktop file dialog and local ADE state.",
-        next: "Open ADE Desktop → Workspaces to attach a folder, then use Environment to audit it.",
+        next: "Open ADE Desktop → Workspaces → New workspace (or Open/Adopt), then use Environment to audit it.",
       };
     default:
       return {

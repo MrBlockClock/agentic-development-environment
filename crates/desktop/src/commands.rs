@@ -33,7 +33,7 @@ impl AppState {
             .map_err(|error| format!("canonicalize workspace: {error}"))?;
         if !is_ade_workspace(&canonical) {
             return Err(
-                "folder is not an ADE workspace yet (missing AGENTS.md). Use Create / Adopt first."
+                "folder is not an ADE workspace yet (missing AGENTS.md). Use New workspace or Adopt first."
                     .into(),
             );
         }
@@ -193,6 +193,102 @@ fn workspace_display_name(root: &Path) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("workspace")
         .to_string()
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+fn user_desktop_dir() -> Option<PathBuf> {
+    let home = user_home_dir()?;
+    let desktop = home.join("Desktop");
+    if desktop.is_dir() {
+        Some(desktop)
+    } else {
+        None
+    }
+}
+
+/// Default parent for New workspace: Desktop when present, else home.
+fn default_workspace_parent() -> Option<PathBuf> {
+    user_desktop_dir().or_else(user_home_dir)
+}
+
+/// Folder name only — no path separators, no `..`, Windows-illegal chars stripped.
+fn sanitize_workspace_name(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("workspace name is required".into());
+    }
+    if trimmed.len() > 64 {
+        return Err("workspace name must be 64 characters or fewer".into());
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err("workspace name cannot be '.' or '..'".into());
+    }
+    if trimmed.contains(['/', '\\', ':']) || trimmed.contains("..") {
+        return Err("workspace name cannot contain path separators or '..'".into());
+    }
+    let cleaned: String = trimmed
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | '"' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.');
+    if cleaned.is_empty() {
+        return Err("workspace name is empty after sanitizing".into());
+    }
+    Ok(cleaned.to_string())
+}
+
+/// Persist workspace identity for attach + future multi-agent orchestrator binding.
+fn ensure_workspace_identity(root: &Path, project_name: &str) -> Result<(), String> {
+    let ade_dir = root.join(".ade");
+    if !ade_dir.is_dir() {
+        std::fs::create_dir_all(&ade_dir).map_err(|error| format!("create .ade: {error}"))?;
+    }
+    let identity_path = ade_dir.join("workspace.json");
+    if identity_path.is_file() {
+        return Ok(());
+    }
+    let payload = serde_json::json!({
+        "schema": "ade.workspace/v1",
+        "id": uuid::Uuid::new_v4().to_string(),
+        "name": project_name,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "created_by": "desktop",
+    });
+    std::fs::write(
+        &identity_path,
+        serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("write workspace.json: {error}"))?;
+
+    // Primary session slot — Orchestrator can later add worker entries beside this.
+    let session_dir = ade_dir.join("session");
+    std::fs::create_dir_all(&session_dir)
+        .map_err(|error| format!("create .ade/session: {error}"))?;
+    let active_session = session_dir.join("active.json");
+    if !active_session.is_file() {
+        let session = serde_json::json!({
+            "schema": "ade.session/v1",
+            "session_id": uuid::Uuid::new_v4().to_string(),
+            "role": "primary",
+            "workspace_id": payload.get("id").and_then(|v| v.as_str()),
+            "created_at": chrono::Utc::now().to_rfc3339(),
+        });
+        std::fs::write(
+            &active_session,
+            serde_json::to_string_pretty(&session).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("write session/active.json: {error}"))?;
+    }
+    Ok(())
 }
 
 fn minimal_agents_md(project_name: &str, root: &Path) -> String {
@@ -412,7 +508,7 @@ pub fn open_workspace(
     }
     if !is_ade_workspace(&root) {
         return Err(
-            "folder is not an ADE workspace yet (missing AGENTS.md). Use Adopt / Create first."
+            "folder is not an ADE workspace yet (missing AGENTS.md). Use New workspace or Adopt first."
                 .into(),
         );
     }
@@ -424,7 +520,79 @@ pub fn open_workspace(
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCreateDefaults {
+    pub parent: String,
+    pub desktop: Option<String>,
+    pub home: Option<String>,
+}
+
+/// Parent folder defaults for New workspace (Desktop when available).
+#[tauri::command]
+pub fn workspace_create_defaults() -> Result<WorkspaceCreateDefaults, String> {
+    let home = user_home_dir().map(|path| path.display().to_string());
+    let desktop = user_desktop_dir().map(|path| path.display().to_string());
+    let parent = default_workspace_parent()
+        .map(|path| path.display().to_string())
+        .or_else(|| home.clone())
+        .ok_or_else(|| "could not resolve home/Desktop for new workspaces".to_string())?;
+    Ok(WorkspaceCreateDefaults {
+        parent,
+        desktop,
+        home,
+    })
+}
+
+/// Create `{parent}/{name}`, write AGENTS.md + identity, attach, return root.
+#[tauri::command]
+pub fn create_named_workspace(
+    state: State<'_, AppState>,
+    name: String,
+    parent: Option<String>,
+    force: Option<bool>,
+) -> Result<DogfoodOpenResult, String> {
+    let name = sanitize_workspace_name(&name)?;
+    let parent_path = match parent
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => PathBuf::from(raw),
+        None => default_workspace_parent()
+            .ok_or_else(|| "could not resolve Desktop/home parent folder".to_string())?,
+    };
+    if !parent_path.exists() {
+        std::fs::create_dir_all(&parent_path)
+            .map_err(|error| format!("create parent folder: {error}"))?;
+    }
+    if !parent_path.is_dir() {
+        return Err(format!(
+            "parent is not a directory: {}",
+            parent_path.display()
+        ));
+    }
+    let root = parent_path.join(&name);
+    if root.exists() && !force.unwrap_or(false) {
+        if is_ade_workspace(&root) {
+            return Err(format!(
+                "workspace already exists at {}. Use Open or Adopt, or choose another name.",
+                root.display()
+            ));
+        }
+        if root.is_dir() {
+            // Empty-ish folder: adopt into it via create_workspace path below.
+        } else {
+            return Err(format!(
+                "path exists and is not a folder: {}",
+                root.display()
+            ));
+        }
+    }
+    create_workspace(state, root.display().to_string(), Some(name), force)
+}
+
 /// Adopt a folder as an ADE workspace: write AGENTS.md (unless present), ensure `.ade/`, then open.
+/// Also creates the folder when `path` does not exist (used by Create / named create).
 #[tauri::command]
 pub fn create_workspace(
     state: State<'_, AppState>,
@@ -433,6 +601,9 @@ pub fn create_workspace(
     force: Option<bool>,
 ) -> Result<DogfoodOpenResult, String> {
     let root = PathBuf::from(path.trim());
+    if root.as_os_str().is_empty() {
+        return Err("workspace path is required".into());
+    }
     if !root.exists() {
         std::fs::create_dir_all(&root).map_err(|error| format!("create folder: {error}"))?;
     }
@@ -442,21 +613,25 @@ pub fn create_workspace(
     let canonical = root
         .canonicalize()
         .map_err(|error| format!("canonicalize: {error}"))?;
-    let name = project_name
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| workspace_display_name(&canonical));
+    let name = match project_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => {
+            sanitize_workspace_name(raw).unwrap_or_else(|_| workspace_display_name(&canonical))
+        }
+        None => workspace_display_name(&canonical),
+    };
     let agents = canonical.join("AGENTS.md");
     let force = force.unwrap_or(false);
     if agents.is_file() && !force {
-        // Already a workspace — just open.
+        // Already a workspace — just open / refresh identity.
     } else {
         std::fs::write(&agents, minimal_agents_md(&name, &canonical))
             .map_err(|error| format!("write AGENTS.md: {error}"))?;
     }
-    let ade_dir = canonical.join(".ade");
-    if !ade_dir.is_dir() {
-        std::fs::create_dir_all(&ade_dir).map_err(|error| format!("create .ade: {error}"))?;
-    }
+    ensure_workspace_identity(&canonical, &name)?;
     let root = state.set_workspace_root(canonical)?;
     Ok(DogfoodOpenResult {
         workspace_root: root.display().to_string(),
@@ -884,6 +1059,12 @@ pub async fn run_agent_turn(
     preferred_shell_cwd: Option<String>,
     // G4: optional isolated checkout; leases/PLAN stay on primary via coordination_root.
     execution_root: Option<String>,
+    allow_unpriced: Option<bool>,
+    approved_risk_categories: Option<Vec<String>>,
+    approved_risk_tiers: Option<Vec<String>>,
+    claimed_task_id: Option<String>,
+    waive_queue: Option<bool>,
+    slot_override: Option<String>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
@@ -893,11 +1074,26 @@ pub async fn run_agent_turn(
         Some(profile) if !profile.trim().is_empty() => profile.trim().to_ascii_lowercase(),
         _ => "local".into(),
     };
-    let autonomy = autonomy
+    let mut autonomy = autonomy
         .as_deref()
         .unwrap_or("propose")
         .parse::<ade_agents::autonomy::AutonomyLevel>()
         .map_err(|error| error.to_string())?;
+    let slot_override = match slot_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => {
+            Some(ade_agents::slots::SlotRole::parse(raw).map_err(|error| error.to_string())?)
+        }
+        None => None,
+    };
+    if matches!(slot_override, Some(ade_agents::slots::SlotRole::Verifier))
+        && autonomy.allows_mutating_tools()
+    {
+        autonomy = ade_agents::autonomy::AutonomyLevel::Propose;
+    }
     let input_cost = ade_core::money::Money::try_from_usd_f64(input_cost_per_mtok)
         .map_err(|error| error.to_string())?;
     let output_cost = ade_core::money::Money::try_from_usd_f64(output_cost_per_mtok)
@@ -923,6 +1119,13 @@ pub async fn run_agent_turn(
         spend_caps.daily =
             ade_core::money::Money::try_from_usd_f64(value).map_err(|error| error.to_string())?;
     }
+    ade_agents::spend::require_priced_for_caps_with_override(
+        &spend_caps,
+        input_cost,
+        output_cost,
+        allow_unpriced.unwrap_or(false),
+    )
+    .map_err(|error| error.to_string())?;
 
     let parsed_verify_gate = match verify_gate.as_deref() {
         Some(raw) => Some(
@@ -974,7 +1177,11 @@ pub async fn run_agent_turn(
                 .map_err(|error| format!("invalid lease agent UUID: {error}"))?;
             // Frontend may miss bootstrap paths; claim leases here so Act prepare
             // does not fail "owned_path not covered by an active writable lease".
-            if approve_owned_paths.unwrap_or(false) && !owned_paths.is_empty() {
+            // Skip when Verifier override (sensors-only).
+            if approve_owned_paths.unwrap_or(false)
+                && !owned_paths.is_empty()
+                && !matches!(slot_override, Some(ade_agents::slots::SlotRole::Verifier))
+            {
                 let leases = ade_workflow::parallel::LeaseManager::new(&primary_root);
                 for path in &owned_paths {
                     match leases.acquire(
@@ -1024,12 +1231,19 @@ pub async fn run_agent_turn(
     .max_tool_rounds(max_steps.unwrap_or(32) as usize)
     .max_tokens(max_tokens)
     .verify_on_complete(verify_on_complete)
-    .preferred_shell_cwd(preferred_shell_cwd);
+    .preferred_shell_cwd(preferred_shell_cwd)
+    .approved_risk_categories(approved_risk_categories.unwrap_or_default())
+    .approved_risk_tiers(approved_risk_tiers.unwrap_or_default())
+    .claimed_task_id(claimed_task_id)
+    .waive_queue(waive_queue.unwrap_or(false))
+    .slot_override(slot_override);
     if execution_root != primary_root {
         builder = builder.coordination_root(primary_root);
     }
     if let Some(agent_id) = lease_agent {
-        builder = builder.lease_agent(agent_id);
+        if !matches!(slot_override, Some(ade_agents::slots::SlotRole::Verifier)) {
+            builder = builder.lease_agent(agent_id);
+        }
     }
     let service = builder.prepare().await.map_err(|error| error.to_string())?;
 
@@ -1351,6 +1565,62 @@ pub fn open_system_terminal(state: State<'_, AppState>) -> Result<String, String
     Ok(cwd_display)
 }
 
+/// Z1/Z2: open the attached workspace in Zed (coding eyes). Soft shell stays `ade acp`.
+#[tauri::command]
+pub fn open_in_zed(state: State<'_, AppState>) -> Result<String, String> {
+    let cwd = state.workspace_root();
+    let cwd_display = cwd.display().to_string();
+
+    #[cfg(windows)]
+    {
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let candidates = [
+            format!("{local}\\Programs\\Zed\\Zed.exe"),
+            "zed".into(),
+            "Zed.exe".into(),
+        ];
+        for bin in candidates {
+            if bin.contains('\\') && !std::path::Path::new(&bin).is_file() {
+                continue;
+            }
+            if std::process::Command::new(&bin)
+                .arg(&cwd_display)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(cwd_display);
+            }
+        }
+        return Err("Zed not found. Install Zed or add it to PATH, then retry Open in Zed.".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-a", "Zed", cwd.as_os_str()])
+            .spawn()
+            .map_err(|error| format!("open Zed: {error}"))?;
+        return Ok(cwd_display);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for bin in ["zed", "zeditor"] {
+            if std::process::Command::new(bin)
+                .arg(&cwd_display)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(cwd_display);
+            }
+        }
+        return Err("Zed not found on PATH (tried zed, zeditor)".into());
+    }
+
+    #[allow(unreachable_code)]
+    Err("open_in_zed unsupported on this platform".into())
+}
+
 #[tauri::command]
 pub fn chat_load(state: State<'_, AppState>) -> Result<ade_agents::chat::ChatThread, String> {
     ade_agents::chat::ChatStore::new(state.workspace_root())
@@ -1429,6 +1699,37 @@ pub fn goal_mark_status(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub fn goal_update_contract(
+    state: State<'_, AppState>,
+    id: String,
+    success_criteria: Option<Vec<String>>,
+    out_of_scope: Option<Vec<String>>,
+    verify_gate: Option<Option<String>>,
+    clarify_resolutions: Option<Vec<String>>,
+) -> Result<ade_agents::goal::EngGoal, String> {
+    ade_agents::goal::GoalStore::new(state.workspace_root())
+        .update_contract(
+            &id,
+            success_criteria,
+            out_of_scope,
+            verify_gate,
+            clarify_resolutions,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn goal_waive_contract(
+    state: State<'_, AppState>,
+    id: String,
+    reason: String,
+) -> Result<ade_agents::goal::EngGoal, String> {
+    ade_agents::goal::GoalStore::new(state.workspace_root())
+        .waive_contract(&id, &reason)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_agent_uuid(agent_id: &str) -> Result<uuid::Uuid, String> {
     uuid::Uuid::parse_str(agent_id.trim()).map_err(|error| format!("invalid agent UUID: {error}"))
 }
@@ -1440,7 +1741,19 @@ pub fn lease_acquire(
     path: String,
     mode: Option<String>,
     ttl_secs: Option<i64>,
+    autonomy: Option<String>,
 ) -> Result<ade_workflow::parallel::PathLease, String> {
+    let slot = match autonomy.as_deref() {
+        Some(raw) => {
+            let level = raw
+                .parse::<ade_agents::autonomy::AutonomyLevel>()
+                .map_err(|error| error.to_string())?;
+            ade_agents::slots::SlotRole::from_autonomy(level)
+        }
+        None => ade_agents::slots::SlotRole::Worker,
+    };
+    slot.require_write_lease()
+        .map_err(|error| error.to_string())?;
     let agent = parse_agent_uuid(&agent_id)?;
     let mode = ade_workflow::parallel::LeaseMode::parse(mode.as_deref().unwrap_or("strong"))
         .map_err(|error| error.to_string())?;
@@ -1496,7 +1809,19 @@ pub fn task_claim(
     state: State<'_, AppState>,
     agent_id: String,
     ttl_secs: Option<i64>,
+    autonomy: Option<String>,
 ) -> Result<Option<ade_workflow::tasks::AgentTask>, String> {
+    let slot = match autonomy.as_deref() {
+        Some(raw) => {
+            let level = raw
+                .parse::<ade_agents::autonomy::AutonomyLevel>()
+                .map_err(|error| error.to_string())?;
+            ade_agents::slots::SlotRole::from_autonomy(level)
+        }
+        None => ade_agents::slots::SlotRole::Worker,
+    };
+    slot.require_claim_tasks()
+        .map_err(|error| error.to_string())?;
     let agent = parse_agent_uuid(&agent_id)?;
     let ttl = chrono::Duration::seconds(ttl_secs.unwrap_or(300).max(30));
     ade_workflow::tasks::TaskCoordinator::new(state.workspace_root())
@@ -1510,7 +1835,19 @@ pub fn task_claim_id(
     task_id: String,
     agent_id: String,
     ttl_secs: Option<i64>,
+    autonomy: Option<String>,
 ) -> Result<ade_workflow::tasks::AgentTask, String> {
+    let slot = match autonomy.as_deref() {
+        Some(raw) => {
+            let level = raw
+                .parse::<ade_agents::autonomy::AutonomyLevel>()
+                .map_err(|error| error.to_string())?;
+            ade_agents::slots::SlotRole::from_autonomy(level)
+        }
+        None => ade_agents::slots::SlotRole::Worker,
+    };
+    slot.require_claim_tasks()
+        .map_err(|error| error.to_string())?;
     let agent = parse_agent_uuid(&agent_id)?;
     let ttl = chrono::Duration::seconds(ttl_secs.unwrap_or(300).max(30));
     ade_workflow::tasks::TaskCoordinator::new(state.workspace_root())
@@ -1697,7 +2034,11 @@ pub async fn handoff_resume(
         let workspace = root.clone();
         let command = next.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            host_run_next_safe_command(&workspace, &command)
+            ade_agents::handoff::host_run_next_safe_command(
+                &workspace,
+                &command,
+                std::time::Duration::from_secs(45),
+            )
         })
         .await
         .map_err(|error| format!("host next_safe_command task failed: {error}"))?
@@ -1705,81 +2046,6 @@ pub async fn handoff_resume(
         (false, None)
     };
     Ok(manager.resume_from_capsule_with(&id_label, &capsule, host_ran_next, host_exit_code))
-}
-
-/// Host-run Continuity first step when it is an `ade …` command (dogfood parity).
-/// Caps runtime so Desktop Continuity cannot freeze forever on `ade audit`.
-fn host_run_next_safe_command(workspace: &std::path::Path, command: &str) -> (bool, Option<i32>) {
-    let trimmed = command.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    if !(lower == "ade" || lower.starts_with("ade ")) {
-        return (false, None);
-    }
-    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    if parts.is_empty() {
-        return (false, None);
-    }
-    let bin = resolve_ade_cli_bin();
-    let args = &parts[1..];
-    let mut child = match std::process::Command::new(&bin)
-        .args(args)
-        .current_dir(workspace)
-        .env("RUST_LOG", "error")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return (false, None),
-    };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return (true, status.code()),
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                // Timed out — resume prompt keeps "Do next_safe_command first".
-                return (false, None);
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
-            Err(_) => return (false, None),
-        }
-    }
-}
-
-fn resolve_ade_cli_bin() -> std::path::PathBuf {
-    #[cfg(windows)]
-    let name = "ade.exe";
-    #[cfg(not(windows))]
-    let name = "ade";
-
-    let mut candidates = Vec::new();
-    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
-        let target = std::path::PathBuf::from(target);
-        candidates.push(target.join("debug").join(name));
-        candidates.push(target.join("release").join(name));
-    }
-    // Workspace-relative targets (CI / portable checkouts).
-    candidates.push(std::path::PathBuf::from("target").join("debug").join(name));
-    candidates.push(
-        std::path::PathBuf::from("target")
-            .join("release")
-            .join(name),
-    );
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("target").join("debug").join(name));
-        // Sibling ade-target layout used by this repo's cargo config.
-        if let Some(parent) = cwd.parent() {
-            candidates.push(parent.join("ade-target").join("debug").join(name));
-        }
-    }
-    for path in candidates {
-        if path.is_file() {
-            return path;
-        }
-    }
-    std::path::PathBuf::from(if cfg!(windows) { "ade.exe" } else { "ade" })
 }
 
 #[derive(Serialize)]
@@ -1825,7 +2091,14 @@ pub fn ensure_ignore_surfaces(state: State<'_, AppState>) -> Result<EnsureIgnore
 
 #[derive(Serialize)]
 pub struct SpendSummary {
+    /// Backward-compatible alias for used + reserved (what caps gate against).
     pub daily_usd: f64,
+    /// Committed actuals for the workspace day (invoice-class used $).
+    pub used_usd: f64,
+    /// Still-open reserved estimates for the workspace day.
+    pub reserved_usd: f64,
+    /// daily_cap − active (floored at 0).
+    pub remaining_usd: f64,
     pub daily_cap_usd: f64,
     pub session_cap_usd: f64,
     pub period_key: String,
@@ -1853,12 +2126,16 @@ pub async fn spend_summary(
     let ledger = ade_db::usage_ledger::UsageLedgerStore::new(
         db.connect().map_err(|error| error.to_string())?,
     );
-    let daily = ledger
-        .active_spend("workspace", &period_key, &workspace)
+    let breakdown = ledger
+        .active_spend_breakdown("workspace", &period_key, &workspace)
         .await
         .map_err(|error| error.to_string())?;
+    let remaining = caps.daily.saturating_sub(breakdown.active);
     Ok(SpendSummary {
-        daily_usd: daily.to_usd_f64(),
+        daily_usd: breakdown.active.to_usd_f64(),
+        used_usd: breakdown.used.to_usd_f64(),
+        reserved_usd: breakdown.reserved.to_usd_f64(),
+        remaining_usd: remaining.to_usd_f64(),
         daily_cap_usd: caps.daily.to_usd_f64(),
         session_cap_usd: caps.session.to_usd_f64(),
         period_key,
@@ -1882,6 +2159,89 @@ pub async fn spend_ledger_recent(
         .recent_for_workspace(&workspace, limit.unwrap_or(40))
         .await
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityActionRow {
+    pub at: Option<String>,
+    pub server: String,
+    pub tool: String,
+    pub effect: String,
+    pub paths: Vec<String>,
+    pub autonomy: String,
+    pub risk_tier: Option<String>,
+    pub risk_category: Option<String>,
+}
+
+/// E1: recent authorized action envelopes from `.ade/continuity/last-actions.json`.
+#[tauri::command]
+pub fn continuity_actions_recent(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<ContinuityActionRow>, String> {
+    let path = state
+        .workspace_root()
+        .join(".ade")
+        .join("continuity")
+        .join("last-actions.json");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("last-actions JSON: {e}"))?;
+    let actions = value
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let take = limit.unwrap_or(24) as usize;
+    let start = actions.len().saturating_sub(take);
+    Ok(actions[start..]
+        .iter()
+        .rev()
+        .map(|item| ContinuityActionRow {
+            at: item.get("at").and_then(|v| v.as_str()).map(str::to_string),
+            server: item
+                .get("server")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .into(),
+            tool: item
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .into(),
+            effect: item
+                .get("effect")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .into(),
+            paths: item
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| p.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            autonomy: item
+                .get("autonomy")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .into(),
+            risk_tier: item
+                .get("riskTier")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            risk_category: item
+                .get("riskCategory")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        })
+        .collect())
 }
 
 const WORKSPACE_TEXT_MAX_BYTES: u64 = 1_048_576;
@@ -2328,6 +2688,38 @@ mod tests {
         assert_eq!(read_abs, absolute);
         let body = std::fs::read_to_string(&read_abs).unwrap();
         assert_eq!(body, "# hello\n");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sanitize_workspace_name_rejects_paths() {
+        assert!(sanitize_workspace_name("").is_err());
+        assert!(sanitize_workspace_name("..").is_err());
+        assert!(sanitize_workspace_name("a/b").is_err());
+        assert!(sanitize_workspace_name("a\\b").is_err());
+        assert_eq!(
+            sanitize_workspace_name(" BoxingLove ").unwrap(),
+            "BoxingLove"
+        );
+        assert_eq!(sanitize_workspace_name("Love<>Game").unwrap(), "Love__Game");
+    }
+
+    #[test]
+    fn ensure_workspace_identity_writes_schema_files() {
+        let root = std::env::temp_dir().join(format!("ade-ws-id-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        ensure_workspace_identity(&root, "BoxingLove").unwrap();
+        let identity = std::fs::read_to_string(root.join(".ade").join("workspace.json")).unwrap();
+        assert!(identity.contains("ade.workspace/v1"));
+        assert!(identity.contains("BoxingLove"));
+        let session =
+            std::fs::read_to_string(root.join(".ade").join("session").join("active.json")).unwrap();
+        assert!(session.contains("ade.session/v1"));
+        assert!(session.contains("primary"));
+        // Idempotent
+        ensure_workspace_identity(&root, "Other").unwrap();
+        let identity2 = std::fs::read_to_string(root.join(".ade").join("workspace.json")).unwrap();
+        assert!(identity2.contains("BoxingLove"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

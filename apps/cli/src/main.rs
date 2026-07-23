@@ -194,6 +194,41 @@ enum Commands {
         #[arg(long, default_value = "G3")]
         verify_gate: String,
     },
+    /// Speak Agent Client Protocol on stdio (Zed / multi-host BYO agent)
+    Acp {
+        /// Print scaffold JSON and exit (no stdio JSON-RPC loop yet)
+        #[arg(long)]
+        probe: bool,
+    },
+    /// Continuity handoff capsules (thrift resume / last-write)
+    Handoff {
+        #[command(subcommand)]
+        action: HandoffAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HandoffAction {
+    /// Build thrift Continuity resume prompt (optionally host-run next_safe_command)
+    Resume {
+        /// Capsule id (default: latest)
+        #[arg(long)]
+        id: Option<String>,
+        /// Skip host-run (prompt tells the model to run next_safe itself)
+        #[arg(long = "no-host-run", default_value_t = false)]
+        no_host_run: bool,
+        /// Emit JSON (HandoffResume) instead of plain prompt text
+        #[arg(long)]
+        json: bool,
+        /// Host-run timeout seconds (default 45)
+        #[arg(long, default_value_t = 45)]
+        timeout_secs: u64,
+    },
+    /// Show `.ade/continuity/last-write.json` if present
+    LastWrite {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1810,6 +1845,81 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Acp { probe } => {
+            ade_acp::run_acp_agent(*probe).await?;
+        }
+        Commands::Handoff { action } => match action {
+            HandoffAction::Resume {
+                id,
+                no_host_run,
+                json,
+                timeout_secs,
+            } => {
+                let root = std::env::current_dir()?;
+                let manager = ade_agents::handoff::HandoffManager::new(&root);
+                let capsule_id = id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let (label, capsule) = match capsule_id {
+                    None | Some("latest") => ("latest".to_string(), manager.load_latest()?),
+                    Some(capsule_id) => (capsule_id.to_string(), manager.load_capsule(capsule_id)?),
+                };
+                let next = capsule
+                    .next_safe_command
+                    .clone()
+                    .unwrap_or_else(|| "ade audit".into());
+                let (host_ran_next, host_exit_code) = if *no_host_run {
+                    (false, None)
+                } else {
+                    ade_agents::handoff::host_run_next_safe_command(
+                        &root,
+                        &next,
+                        std::time::Duration::from_secs(*timeout_secs),
+                    )
+                };
+                let resume = manager.resume_from_capsule_with(
+                    &label,
+                    &capsule,
+                    host_ran_next,
+                    host_exit_code,
+                );
+                if *json {
+                    println!("{}", serde_json::to_string_pretty(&resume)?);
+                } else {
+                    if !resume.available {
+                        anyhow::bail!("no handoff capsule available");
+                    }
+                    if host_ran_next {
+                        eprintln!(
+                            "host next_safe_command ran (exit {:?}): {next}",
+                            host_exit_code
+                        );
+                    }
+                    println!("{}", resume.resume_prompt);
+                }
+            }
+            HandoffAction::LastWrite { json } => {
+                let path = std::env::current_dir()?
+                    .join(".ade")
+                    .join("continuity")
+                    .join("last-write.json");
+                if !path.is_file() {
+                    anyhow::bail!("missing {}", path.display());
+                }
+                let raw = std::fs::read_to_string(&path)?;
+                if *json {
+                    // Re-emit parsed JSON for pretty / validate.
+                    let value: serde_json::Value = serde_json::from_str(&raw)?;
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                } else {
+                    print!("{raw}");
+                    if !raw.ends_with('\n') {
+                        println!();
+                    }
+                }
+            }
+        },
         Commands::Agent {
             prompt,
             provider,

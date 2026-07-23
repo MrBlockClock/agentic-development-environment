@@ -28,13 +28,27 @@ type LedgerRow = {
   output_tokens: number;
 };
 
+type ActionRow = {
+  at: string | null;
+  server: string;
+  tool: string;
+  effect: string;
+  paths: string[];
+  autonomy: string;
+  riskTier?: string | null;
+  riskCategory?: string | null;
+  risk_tier?: string | null;
+  risk_category?: string | null;
+};
+
 type AuditViewerProps = {
   handoffs: HandoffHistoryItem[];
 };
 
-/** Recent Trust activity: handoff capsules + spend ledger rows, exportable JSON. */
+/** Recent Trust activity: handoffs + spend + action envelopes, exportable JSON. */
 export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
   const [rows, setRows] = useState<LedgerRow[]>([]);
+  const [actions, setActions] = useState<ActionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -42,6 +56,9 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
     void invoke<LedgerRow[]>("spend_ledger_recent", { limit: 40 })
       .then(setRows)
       .catch((reason) => setError(String(reason)));
+    void invoke<ActionRow[]>("continuity_actions_recent", { limit: 24 })
+      .then(setActions)
+      .catch(() => setActions([]));
   }, [handoffs.length]);
 
   const exportJson = () => {
@@ -49,6 +66,7 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
       exported_at: new Date().toISOString(),
       handoffs,
       ledger: rows,
+      actions,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
@@ -67,7 +85,7 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
         <div>
           <h3 className="text-sm font-semibold text-slate-100">Audit log</h3>
           <p className="mt-0.5 text-[12px] text-slate-500">
-            Recent handoffs and spend ledger entries for this workspace
+            Handoffs, spend ledger, and authorized action envelopes
           </p>
         </div>
         <button
@@ -119,6 +137,49 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
       </Disclosure>
 
       <Disclosure
+        title="Action envelopes"
+        summary={`${actions.length}`}
+        storageKey="ade-trust-actions-log"
+        className="mt-3"
+        defaultOpen={actions.length > 0}
+      >
+        <div className="mt-2 space-y-1.5">
+          {actions.length === 0 && (
+            <div className="text-[11px] text-slate-600">
+              No authorized envelopes yet.
+            </div>
+          )}
+          {actions.map((row, index) => {
+            const risk =
+              row.riskTier ?? row.risk_tier ?? null;
+            const category =
+              row.riskCategory ?? row.risk_category ?? null;
+            return (
+              <div
+                key={`${row.server}/${row.tool}-${row.at ?? index}`}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/6 bg-black/20 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="font-mono text-[11px] text-slate-200">
+                    {row.server}/{row.tool}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {row.at ?? "—"} · {row.effect} · {row.autonomy}
+                    {risk && risk !== "low"
+                      ? ` · risk ${category ?? risk}`
+                      : ""}
+                  </div>
+                </div>
+                <div className="max-w-[50%] truncate text-right font-mono text-[10px] text-slate-400">
+                  {row.paths.length > 0 ? row.paths.join(", ") : "—"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Disclosure>
+
+      <Disclosure
         title="Spend ledger"
         summary={`${rows.length}`}
         storageKey="ade-trust-spend-log"
@@ -143,6 +204,15 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
               </div>
               <div className="text-right font-mono text-[10px] text-slate-400">
                 ${row.actual_usd.toFixed(4)}
+                <div className="text-slate-600">
+                  reserved ${row.reserved_usd.toFixed(4)}
+                  {row.status === "committed" || row.reserved_usd > 0 ? (
+                    <span className="ml-1">
+                      · Δ $
+                      {(row.reserved_usd - row.actual_usd).toFixed(4)}
+                    </span>
+                  ) : null}
+                </div>
                 <div className="text-slate-600">
                   {row.input_tokens} in / {row.output_tokens} out
                 </div>

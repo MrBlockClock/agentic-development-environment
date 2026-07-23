@@ -12,6 +12,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ade-acp"
+version = "0.1.0"
+dependencies = [
+ "ade-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ade-agents"
 version = "0.1.0"
 dependencies = [
@@ -57,6 +70,7 @@ dependencies = [
 name = "ade-cli"
 version = "0.1.0"
 dependencies = [
+ "ade-acp",
  "ade-agents",
  "ade-core",
  "ade-db",

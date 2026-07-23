@@ -1,0 +1,28 @@
+{
+    "recommendations": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates",
+        "tauri-apps.tauri-vscode",
+        "usernamehw.errorlens",
+        "hdevalke.rust-test-lens",
+        "vadimcn.vscode-lldb",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "yoavbls.pretty-ts-errors",
+        "bradlc.vscode-tailwindcss",
+        "antfu.vite",
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        "github.vscode-github-actions",
+        "github.vscode-pull-request-github",
+        "vitest.explorer",
+        "streetsidesoftware.code-spell-checker",
+        "formulahendry.auto-close-tag",
+        "formulahendry.auto-rename-tag",
+        "aaron-bond.better-comments",
+        "gruntfuggly.todo-tree",
+        "humao.rest-client"
+    ],
+    "unwantedRecommendations": []
+}

@@ -35,12 +35,30 @@ pub struct AgentTurnResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionEnvelope {
+    pub effect: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    pub autonomy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_category: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
     Started {
         session_id: Uuid,
         provider: String,
         model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        route_reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot: Option<String>,
     },
     TextDelta {
         text: String,
@@ -50,12 +68,22 @@ pub enum AgentEvent {
         tool: String,
         arguments: Value,
         effect: ToolEffect,
+        /// E1 thin: authorized envelope snapshot for the feed / Continuity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<ActionEnvelope>,
     },
     ToolResult {
         server: String,
         tool: String,
         is_error: bool,
         text: String,
+    },
+    /// C2: mid-turn boundary / occupancy capsule applied to the model window.
+    ContextCompacted {
+        trigger: String,
+        tokens_before: u64,
+        tokens_after: u64,
+        occupancy_before: f64,
     },
     Usage {
         input_tokens: u64,
@@ -107,6 +135,19 @@ pub struct AgentSession {
     max_tool_rounds: usize,
     max_tokens: Option<u64>,
     preferred_shell_cwd: Option<String>,
+    /// When autonomy is Act/Automate, Act-class tools require a ready eng-goal contract.
+    /// Suggest/Observe ignore this (mutating tools already blocked by autonomy).
+    contract_allows_act: bool,
+    contract_block_detail: Option<String>,
+    /// H3: effects denied by the active model profile.
+    profile_effect_deny: Vec<String>,
+    /// H3: visible route annotation for Started.
+    route_profile_id: Option<String>,
+    route_reason: Option<String>,
+    route_slot: Option<String>,
+    /// G2: human-confirmed risk categories / tiers for this turn.
+    approved_risk_categories: Vec<String>,
+    approved_risk_tiers: Vec<String>,
 }
 
 impl AgentSession {
@@ -131,6 +172,14 @@ impl AgentSession {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_tokens: None,
             preferred_shell_cwd: None,
+            contract_allows_act: true,
+            contract_block_detail: None,
+            profile_effect_deny: Vec::new(),
+            route_profile_id: None,
+            route_reason: None,
+            route_slot: None,
+            approved_risk_categories: Vec::new(),
+            approved_risk_tiers: Vec::new(),
         }
     }
 
@@ -152,6 +201,70 @@ impl AgentSession {
     pub fn with_autonomy(mut self, autonomy: AutonomyLevel) -> Self {
         self.autonomy = autonomy;
         self
+    }
+
+    /// Master-gameplan G1: pass `false` + detail when Act/Automate lacks eng-goal contract.
+    pub fn with_contract_gate(mut self, allows_act: bool, block_detail: Option<String>) -> Self {
+        self.contract_allows_act = allows_act;
+        self.contract_block_detail = block_detail;
+        self
+    }
+
+    /// H3: attach model-profile route annotation + optional effect deny mask.
+    pub fn with_route(
+        mut self,
+        profile_id: impl Into<String>,
+        reason: impl Into<String>,
+        slot: impl Into<String>,
+        effect_deny: Vec<String>,
+    ) -> Self {
+        self.route_profile_id = Some(profile_id.into());
+        self.route_reason = Some(reason.into());
+        self.route_slot = Some(slot.into());
+        self.profile_effect_deny = effect_deny;
+        self
+    }
+
+    /// G2: human-confirmed risk categories/tiers for this turn (e.g. publish, infra, high).
+    pub fn with_risk_approvals(mut self, categories: Vec<String>, tiers: Vec<String>) -> Self {
+        self.approved_risk_categories = categories;
+        self.approved_risk_tiers = tiers;
+        self
+    }
+
+    fn profile_allows_effect(&self, effect: ToolEffect) -> bool {
+        let needle = match effect {
+            ToolEffect::ReadOnly => "read_only",
+            ToolEffect::WorkspaceWrite => "workspace_write",
+            ToolEffect::ExternalWrite => "external_write",
+            ToolEffect::ProcessExecution => "process_execution",
+            ToolEffect::Unknown => "unknown",
+        };
+        !self
+            .profile_effect_deny
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(needle))
+    }
+
+    fn contract_allows_effect(&self, effect: ToolEffect) -> bool {
+        if !self.autonomy.allows_mutating_tools() {
+            return true;
+        }
+        if !crate::goal::is_act_class_effect(effect) {
+            return true;
+        }
+        self.contract_allows_act
+    }
+
+    fn contract_deny_message(&self) -> String {
+        self.contract_block_detail
+            .clone()
+            .unwrap_or_else(|| {
+                format!(
+                    "{} Act tools blocked until an active eng-goal has acceptance criteria, out-of-scope, and verify pointer (or ≤3 clarify / logged waive). Define a goal or switch to Suggest.",
+                    crate::goal::CONTRACT_GATE_PREFIX
+                )
+            })
     }
 
     /// Apply/Automate without PLAN owned_paths: the dial is the human write approval.
@@ -248,6 +361,9 @@ impl AgentSession {
                 session_id: self.session_id,
                 provider: provider_name.clone(),
                 model: self.model.id.clone(),
+                profile_id: self.route_profile_id.clone(),
+                route_reason: self.route_reason.clone(),
+                slot: self.route_slot.clone(),
             })
             .await;
 
@@ -281,7 +397,20 @@ impl AgentSession {
                     return Err(AdeError::Budget(detail));
                 }
             }
-            let estimate = self.model.max_round_cost()?;
+            let input_est = crate::context_edit::estimate_messages_tokens(&messages);
+            let out_budget = self
+                .max_tokens
+                .map(|cap| cap.saturating_sub(total_usage.output_tokens))
+                .unwrap_or(self.model.output_limit)
+                .min(self.model.output_limit.max(256))
+                .max(256);
+            // Prefer last-round input when available (closer to provider truth).
+            let input_tokens = if total_usage.input_tokens > 0 {
+                total_usage.input_tokens.max(input_est)
+            } else {
+                input_est
+            };
+            let estimate = self.model.estimate_round_cost(input_tokens, out_budget)?;
             let (reservations, outcomes) = spend
                 .reserve(estimate, &provider_name, &self.model.id)
                 .await?;
@@ -304,8 +433,37 @@ impl AgentSession {
                 }
             }
 
+            let masked = crate::context_edit::mask_stale_tool_results(
+                &messages,
+                crate::context_edit::tool_result_keep_rounds_from_env(),
+            );
+            // C2: ~70% occupancy safety net → structured boundary capsule (mask first).
+            let mut round_messages = masked;
+            if crate::context_edit::should_compact_at_occupancy(
+                &round_messages,
+                self.model.context_limit,
+                crate::context_edit::compact_occupancy_from_env(),
+            ) {
+                let (compacted, summary) = self.apply_and_persist_boundary(
+                    &round_messages,
+                    "occupancy_70",
+                    None,
+                    None,
+                    None,
+                );
+                round_messages = compacted;
+                messages = round_messages.clone();
+                let _ = events
+                    .send(AgentEvent::ContextCompacted {
+                        trigger: summary.trigger,
+                        tokens_before: summary.tokens_before,
+                        tokens_after: summary.tokens_after,
+                        occupancy_before: summary.occupancy_before,
+                    })
+                    .await;
+            }
             let completion = match self
-                .stream_provider_round(&messages, &provider_tools, &events)
+                .stream_provider_round(&round_messages, &provider_tools, &events)
                 .await
             {
                 Ok(completion) => completion,
@@ -326,14 +484,26 @@ impl AgentSession {
                 )));
             }
 
-            let actual = completion.usage.cost_money(&self.model);
-            if let Err(error) = spend
-                .reconcile(
-                    &reservations,
-                    actual,
+            let missing_usage = self.model.is_priced()
+                && completion.usage.input_tokens == 0
+                && completion.usage.output_tokens == 0
+                && (!completion.text.is_empty() || !completion.tool_calls.is_empty());
+            // Invoice honesty: never commit $0 when provider omitted usage on a priced turn.
+            let actual = if missing_usage {
+                estimate
+            } else {
+                completion.usage.cost_money(&self.model)
+            };
+            let (reconcile_in, reconcile_out) = if missing_usage {
+                (input_tokens, 0)
+            } else {
+                (
                     completion.usage.input_tokens,
                     completion.usage.output_tokens,
                 )
+            };
+            if let Err(error) = spend
+                .reconcile(&reservations, actual, reconcile_in, reconcile_out)
                 .await
             {
                 let _ = spend.release(&reservations).await;
@@ -341,7 +511,13 @@ impl AgentSession {
             }
 
             all_text.push_str(&completion.text);
-            total_usage.input_tokens += completion.usage.input_tokens;
+            total_usage.input_tokens += if completion.usage.input_tokens > 0 {
+                completion.usage.input_tokens
+            } else if missing_usage {
+                reconcile_in
+            } else {
+                0
+            };
             total_usage.output_tokens += completion.usage.output_tokens;
 
             if let Some(max_tokens) = self.max_tokens {
@@ -432,33 +608,89 @@ impl AgentSession {
                         self.autonomy.as_str()
                     )));
                 }
+                if !self.contract_allows_effect(effect) {
+                    return Err(AdeError::Authorization(self.contract_deny_message()));
+                }
+                if !self.profile_allows_effect(effect) {
+                    return Err(AdeError::Authorization(format!(
+                        "tool {}/{} ({effect:?}) blocked by model profile deny mask",
+                        route.server, route.tool
+                    )));
+                }
+                let risk = crate::risk::assess_tool(&route.server, &route.tool, &arguments, effect);
+                if risk.requires_hitl()
+                    && !crate::risk::risk_is_approved(
+                        &risk,
+                        &self.approved_risk_categories,
+                        &self.approved_risk_tiers,
+                    )
+                {
+                    return Err(AdeError::Authorization(crate::risk::risk_deny_message(
+                        &risk,
+                    )));
+                }
                 // Act/Automate is the human gate for full process tools. Suggest/Propose
                 // may run inspect-only shell (validated before authorize).
-                if matches!(effect, ToolEffect::ProcessExecution) {
-                    if self.autonomy.allows_mutating_tools() {
+                // G2: high-risk still requires explicit approved_risk_* even under Act.
+                if matches!(
+                    effect,
+                    ToolEffect::ProcessExecution | ToolEffect::ExternalWrite | ToolEffect::Unknown
+                ) {
+                    if risk.requires_hitl() {
                         auth_request.human_approved = true;
-                    } else if self.autonomy == AutonomyLevel::Propose {
-                        let cmd = arguments
-                            .get("command")
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        if crate::shell::is_inspect_command(cmd) {
+                        let _ = crate::risk::log_risk_waive(
+                            &self.workspace_root,
+                            &crate::risk::RiskWaiveRecord {
+                                at: chrono::Utc::now().to_rfc3339(),
+                                category: risk.category.as_str().into(),
+                                tier: risk.tier.as_str().into(),
+                                reason: risk.reason.clone(),
+                                autonomy: self.autonomy.as_str().into(),
+                                server: route.server.clone(),
+                                tool: route.tool.clone(),
+                            },
+                        );
+                    } else if matches!(effect, ToolEffect::ProcessExecution) {
+                        if self.autonomy.allows_mutating_tools() {
                             auth_request.human_approved = true;
-                        } else {
-                            return Err(AdeError::Authorization(
-                                "Suggest shell is inspect-only (list/read). Switch to Apply for mkdir/move/write commands."
-                                    .into(),
-                            ));
+                        } else if self.autonomy == AutonomyLevel::Propose {
+                            let cmd = arguments
+                                .get("command")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if crate::shell::is_inspect_command(cmd) {
+                                auth_request.human_approved = true;
+                            } else {
+                                return Err(AdeError::Authorization(
+                                    "Suggest shell is inspect-only (list/read). Switch to Apply for mkdir/move/write commands."
+                                        .into(),
+                                ));
+                            }
                         }
                     }
                 }
                 self.authority.authorize_tool_call(&auth_request)?;
+                let paths = paths_from_tool_arguments(&arguments);
+                let envelope = ActionEnvelope {
+                    effect: format!("{effect:?}"),
+                    paths,
+                    autonomy: self.autonomy.as_str().into(),
+                    risk_tier: Some(risk.tier.as_str().into()),
+                    risk_category: Some(risk.category.as_str().into()),
+                };
+                let _ = crate::handoff::record_action_envelope(
+                    &self.workspace_root,
+                    &route.server,
+                    &route.tool,
+                    &envelope,
+                );
                 let _ = events
                     .send(AgentEvent::ToolCall {
                         server: route.server.clone(),
                         tool: route.tool.clone(),
                         arguments: arguments.clone(),
                         effect,
+                        envelope: Some(envelope),
                     })
                     .await;
                 let (is_error, text, content) = if route.host {
@@ -472,7 +704,7 @@ impl AgentSession {
                 } else {
                     let result = self
                         .mcp
-                        .call_tool(&route.server, &route.tool, arguments)
+                        .call_tool(&route.server, &route.tool, arguments.clone())
                         .await?;
                     (
                         result.is_error,
@@ -484,6 +716,16 @@ impl AgentSession {
                         },
                     )
                 };
+                let raw_for_model = if text.is_empty() {
+                    serde_json::to_string(&content)?
+                } else {
+                    text.clone()
+                };
+                let (model_content, _truncated) =
+                    crate::context_edit::compact_tool_result_for_context(
+                        &raw_for_model,
+                        crate::context_edit::tool_result_max_chars_from_env(),
+                    );
                 let _ = events
                     .send(AgentEvent::ToolResult {
                         server: route.server.clone(),
@@ -495,12 +737,29 @@ impl AgentSession {
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": if text.is_empty() {
-                        serde_json::to_string(&content)?
-                    } else {
-                        text
-                    },
+                    "content": model_content,
                 }));
+                // C4 thin: model-invoked compact at resolve boundary.
+                if !is_error && route.server == "ade" && route.tool == "compact_context" {
+                    let reason = arguments
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("model_compact");
+                    let intent = arguments.get("intent").and_then(Value::as_str);
+                    let next = arguments.get("next").and_then(Value::as_str);
+                    let verify = arguments.get("verify").and_then(Value::as_str);
+                    let (compacted, summary) =
+                        self.apply_and_persist_boundary(&messages, reason, intent, next, verify);
+                    messages = compacted;
+                    let _ = events
+                        .send(AgentEvent::ContextCompacted {
+                            trigger: summary.trigger,
+                            tokens_before: summary.tokens_before,
+                            tokens_after: summary.tokens_after,
+                            occupancy_before: summary.occupancy_before,
+                        })
+                        .await;
+                }
             }
         }
 
@@ -517,6 +776,74 @@ impl AgentSession {
             })
             .await;
         Err(AdeError::Budget(detail))
+    }
+
+    fn apply_and_persist_boundary(
+        &self,
+        messages: &[Value],
+        trigger: &str,
+        intent: Option<&str>,
+        next: Option<&str>,
+        verify: Option<&str>,
+    ) -> (Vec<Value>, crate::context_edit::BoundaryCapsuleSummary) {
+        let keep = crate::context_edit::tool_result_keep_rounds_from_env();
+        let (compacted, summary) = crate::context_edit::apply_boundary_compact(
+            messages,
+            keep,
+            trigger,
+            self.model.context_limit,
+            crate::context_edit::BoundaryCompactExtras {
+                intent,
+                decisions: &[],
+                paths: &[],
+                failing: None,
+                next,
+                verify,
+            },
+        );
+        let mut capsule = ade_core::handoff::HandoffCapsule::new(
+            intent.unwrap_or("boundary compact"),
+            "boundary_compact",
+        );
+        capsule.session_id = Some(self.session_id.to_string());
+        capsule.provider = Some(self.provider.name().to_string());
+        capsule.model = Some(self.model.id.clone());
+        capsule.turn_status = Some(format!("compacted:{trigger}"));
+        capsule.next_safe_command = next.map(str::to_string);
+        capsule.compact_summary = Some(summary.summary.clone());
+        fill_capsule_from_boundary_summary(&mut capsule, &summary.summary);
+        capsule.context_compaction = Some(ade_core::handoff::HandoffContextCompaction {
+            tokens_estimated: summary.tokens_after as u32,
+            status: if summary.occupancy_before >= 0.70 {
+                "warning".into()
+            } else {
+                "green".into()
+            },
+            sections: vec![ade_core::handoff::HandoffPromptSection {
+                name: "boundary_capsule".into(),
+                tokens: summary.tokens_after as u32,
+                truncated: true,
+            }],
+        });
+        let _ = crate::handoff::HandoffManager::new(&self.workspace_root).save_capsule(&capsule);
+        let id = "boundary".to_string();
+        let _ = crate::handoff::write_continuity_last_write(&self.workspace_root, &capsule, &id);
+        let dir = self.workspace_root.join(".ade").join("continuity");
+        let _ = std::fs::create_dir_all(&dir);
+        let snap = json!({
+            "schema": "ade.continuity-last-boundary/v1",
+            "kind": "boundary_compact",
+            "trigger": trigger,
+            "tokensBefore": summary.tokens_before,
+            "tokensAfter": summary.tokens_after,
+            "occupancyBefore": summary.occupancy_before,
+            "summary": summary.summary,
+        });
+        let _ = std::fs::write(
+            dir.join("last-boundary.json"),
+            serde_json::to_string_pretty(&snap).unwrap_or_default(),
+        );
+        (compacted, summary)
     }
 
     async fn stream_provider_round(
@@ -597,6 +924,39 @@ impl AgentSession {
                     .trim();
                 let skill = SkillLoader::new(&self.workspace_root).activate(name)?;
                 Ok(skill_body_block(&skill))
+            }
+            "compact_context" => {
+                // C4: rubric gate — require non-empty reason; reject mid-stuck patterns.
+                let reason = arguments
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if reason.is_empty() {
+                    return Err(AdeError::Config(
+                        "ade.compact_context: reason is required (e.g. subtask_resolved, converging, handoff)"
+                            .into(),
+                    ));
+                }
+                let reason_l = reason.to_ascii_lowercase();
+                if reason_l.contains("stuck")
+                    || reason_l.contains("debugging")
+                    || reason_l.contains("mid-derivation")
+                    || reason_l.contains("mid_derivation")
+                {
+                    return Err(AdeError::Config(
+                        "ade.compact_context: suppressed — rubric says do not compact while stuck/debugging or mid-derivation; finish the sub-task or raise Effort first"
+                            .into(),
+                    ));
+                }
+                let intent = arguments
+                    .get("intent")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                Ok(format!(
+                    "ade.compact_context: accepted trigger={reason}; intent={intent}. Harness will emit a boundary capsule and clear older tool blobs. Fire when a sub-task is resolved/converging; suppress mid-derivation or while stuck debugging."
+                ))
             }
             "web_fetch" => {
                 let url = arguments
@@ -736,6 +1096,9 @@ impl AgentSession {
             if !self.autonomy.allows_tool_effect(effect) {
                 continue;
             }
+            if !self.contract_allows_effect(effect) {
+                continue;
+            }
             let name = provider_tool_name(&host.server, &host.tool);
             if routes
                 .insert(
@@ -772,6 +1135,9 @@ impl AgentSession {
                 human_approved: false,
             });
             if !self.autonomy.allows_tool_effect(effect) {
+                continue;
+            }
+            if !self.contract_allows_effect(effect) {
                 continue;
             }
             let name = provider_tool_name(&tool.server, &tool.name);
@@ -819,6 +1185,78 @@ struct HostToolDef {
     annotations: ToolAnnotations,
 }
 
+fn fill_capsule_from_boundary_summary(
+    capsule: &mut ade_core::handoff::HandoffCapsule,
+    summary: &str,
+) {
+    let mut section = "";
+    for line in summary.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("decisions:") {
+            section = "decisions";
+            continue;
+        }
+        if trimmed.starts_with("paths:") {
+            section = "paths";
+            continue;
+        }
+        if trimmed.starts_with("failing:")
+            || trimmed.starts_with("next:")
+            || trimmed.starts_with("verify:")
+            || trimmed.starts_with("intent:")
+            || trimmed.starts_with("trigger:")
+            || trimmed.starts_with("note:")
+            || trimmed.starts_with("ade.boundary-capsule")
+        {
+            section = "";
+            continue;
+        }
+        let Some(item) = trimmed.strip_prefix("- ") else {
+            continue;
+        };
+        if item == "(none)" {
+            continue;
+        }
+        match section {
+            "decisions" if capsule.decisions_touched.len() < 8 => {
+                capsule.decisions_touched.push(item.to_string());
+            }
+            "paths" if capsule.changed_paths.len() < 12 => {
+                capsule.changed_paths.push(item.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collect workspace-relative paths (and path-like args) for E1 envelopes.
+pub fn paths_from_tool_arguments(arguments: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(obj) = arguments.as_object() else {
+        return out;
+    };
+    for key in ["path", "file", "filename", "target", "cwd", "owned_path"] {
+        if let Some(Value::String(s)) = obj.get(key) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() && !out.iter().any(|p| p == trimmed) {
+                out.push(trimmed.to_string());
+            }
+        }
+    }
+    if let Some(Value::Array(paths)) = obj.get("paths") {
+        for item in paths {
+            if let Some(s) = item.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() && !out.iter().any(|p| p == trimmed) {
+                    out.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    out.truncate(12);
+    out
+}
+
 fn host_tools() -> Vec<HostToolDef> {
     vec![
         HostToolDef {
@@ -855,6 +1293,39 @@ fn host_tools() -> Vec<HostToolDef> {
                     }
                 },
                 "required": ["query"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "ade".into(),
+            tool: "compact_context".into(),
+            description: "SelfCompact-style context compaction (C4). Fire when a sub-task is resolved or converging; suppress mid-derivation or while stuck. Writes a structured boundary capsule and clears older tool blobs.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Why compact now (e.g. subtask_resolved, occupancy, handoff)"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "description": "One-line intent for the capsule"
+                    },
+                    "next": {
+                        "type": "string",
+                        "description": "Next safe step after compact"
+                    },
+                    "verify": {
+                        "type": "string",
+                        "description": "Verify pointer / gate if known"
+                    }
+                },
+                "required": ["reason"],
                 "x-ade-effect": "read_only"
             }),
             annotations: ToolAnnotations {

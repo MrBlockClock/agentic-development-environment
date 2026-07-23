@@ -117,6 +117,56 @@ impl SpendCaps {
             SpendPolicy::daily_workspace(self.daily),
         ]
     }
+
+    /// True when session/daily caps are finite and non-zero (SpendGuard can bind).
+    pub fn has_enforced_caps(&self) -> bool {
+        let unlimited = Money::from_micros(i64::MAX / 4);
+        (self.session > Money::ZERO && self.session < unlimited)
+            || (self.daily > Money::ZERO && self.daily < unlimited)
+    }
+}
+
+/// When caps are enforced, rates must be non-zero unless allowed unpriced.
+pub fn require_priced_for_caps(
+    caps: &SpendCaps,
+    input_cost: Money,
+    output_cost: Money,
+) -> Result<(), AdeError> {
+    require_priced_for_caps_with_override(caps, input_cost, output_cost, false)
+}
+
+pub fn require_priced_for_caps_with_override(
+    caps: &SpendCaps,
+    input_cost: Money,
+    output_cost: Money,
+    allow_unpriced: bool,
+) -> Result<(), AdeError> {
+    if !caps.has_enforced_caps() {
+        return Ok(());
+    }
+    let priced = input_cost > Money::ZERO || output_cost > Money::ZERO;
+    if priced {
+        return Ok(());
+    }
+    if allow_unpriced || allow_unpriced_from_env() {
+        return Ok(());
+    }
+    Err(AdeError::Config(
+        "spend_honesty: session/daily caps are set but Input/Output $/MTok are $0 — \
+         caps cannot reserve real dollars. Set rates to your provider invoice class, \
+         confirm unmetered for this turn, or set ADE_ALLOW_UNPRICED=1."
+            .into(),
+    ))
+}
+
+fn allow_unpriced_from_env() -> bool {
+    matches!(
+        std::env::var("ADE_ALLOW_UNPRICED")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -14,6 +14,7 @@ ade-service = { path = "../../crates/service" }
 ade-workflow = { path = "../../crates/workflow" }
 ade-db = { path = "../../crates/db" }
 ade-plugins = { path = "../../crates/plugins" }
+ade-acp = { path = "../../crates/acp" }
 clap = { workspace = true }
 turso = { workspace = true }
 tokio = { workspace = true }

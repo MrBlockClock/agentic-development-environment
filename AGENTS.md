@@ -1,74 +1,83 @@
 # ADE — Agent Contract
 
-This is the canonical agent contract for the ADE project itself (dogfooding).
+Canonical contract for the ADE project (dogfooding).
 
-## Product DNA (layers — do not blur)
+## Product DNA (do not blur)
 
-ADE is a **local harness / Agent Development Environment**, not an IDE fork.
+ADE is a **local harness / Agent Development Environment** and **multi-host agent OS** — not an IDE fork.
 
 | Layer | Owns | Must not own |
 |-------|------|----------------|
 | **Model** | Reasoning + tool_use proposals | Filesystem, secrets, false “no tools” claims |
 | **Harness / loop** | Tool schemas, ToolEffect auth, budgets, compaction | Pixel UI |
-| **Host (Desktop)** | Sessions, Suggest/Apply, streaming, human gates | Being an editor |
+| **Hosts** | ADE Desktop (control plane); Zed via ACP (DEC-A-013: no VSCodium) | Being “the only editor” / day-one Zed fork |
 | **Eng-goal product** | Outcome + scope + verify-as-done | Endless chat theater |
 
-**Autonomy map:** Suggest (Propose) ≈ planner/inspect · Apply (Act) ≈ worker under leases · Automate ≈ Apply + required verify.
+**Multi-host:** one ADE brain · many eyes — `docs/decisions/DEC-A-010-multi-host-agent-os.md`, `docs/architecture/REPO_LAYOUT.md`.  
+**Critical path:** harness / multi-agent Orchestrator (**DEC-A-014**). Zed ACP = optional path, not a blocker.
 
-**Turn law:** every turn must terminate in the feed (`completed` | `failed` | `cancelled`). Never leave an orphan YOU bubble.
+**Autonomy:** Suggest ≈ planner/inspect · Apply ≈ worker under leases · Automate ≈ Apply + required verify.
 
-Orchestration roadmap: `docs/platform/ORCHESTRATION_ENG_GOAL_PLAN.md`. Ideal spine: `docs/platform/IDEAL_ADE_DEVELOPMENT_PLAN.md`.
+**Apply contract (G1):** Act/Automate tools require an active eng-goal with acceptance criteria + out-of-scope + verify pointer (or ≤3 clarify resolutions / logged waive). Suggest stays inspect-only without a contract.
+
+**Spend honesty (H1):** Non-zero $/MTok when session/daily caps are set (or confirm unmetered / `ADE_ALLOW_UNPRICED=1`). Reserves use estimated message size, not full context window. Trust shows **used / reserved / remaining**; ledger rows show reserved − actual (Δ). Missing provider usage on priced turns falls back to the reserve estimate (never $0).
+
+**Slots (H2):** Suggest = Planner (no write leases / task claims); Apply/Automate = Worker. Backend enforces `slot_gate`. Claimed Apply heartbeats at TTL/3 (`task_heartbeat`). Act/Automate with a ready queue requires claim (`claim_gate`) or audited waive (`.ade/tasks/queue-waives.jsonl`). **Verify (judge)** = Verifier slot (sensors-first; no write leases).
+
+**Model profiles (H3):** `ade.model-profile/v1` under `.ade/model-profiles/`. Router annotates each turn with profile + “why this model” (no silent mid-task swap). Effort floors and tool-effect deny masks apply.
+
+**Risk HITL (G2):** Secrets / infra / migrate / publish require explicit confirm even under Apply/Automate (`risk_gate:`). Waives log to `.ade/risk/waives.jsonl`.
+
+**Channel (C1–C4):** Mask tool blobs; boundary capsule @~70% occupancy (`ade.boundary-capsule/v1`); write-before-compact to `.ade/continuity/last-write.json` (intent·decisions·paths·failing·next·verify); optional `ade__compact_context` (SelfCompact rubric). Thrift resume via Desktop Continue or `ade handoff resume` (host `next_safe`, no paste).
+
+**Lease conflict (H4):** Blocked Apply offers Wait · Isolate · Rotate lease · Suggest.
+
+**Gold races (H5):** `ade eval --gold` includes dual-writer, wrong-slot, spend honesty, occupancy compact, risk/publish, contract gate, Isolate worktree, model router (g52–g60). H2 depth: heartbeat / claim_gate / verifier (g66–g68). Invoice Δ: g69. Continuity thrift: g70–g71. E1 envelopes: g72. C4 SelfCompact rubric: g73.
+
+**Compaction gold (C5):** g61–g65 measure mask/capsule savings + fidelity and format fertility (compact JSON beats prose; invented ciphers lose).
+
+**ACP soft shell (Z1):** `ade acp` JSON-RPC stdio for Zed; modes Suggest/Apply/Automate. Desktop **Zed** button opens coding eyes.
+
+**Fork ladder (Z2):** DEC-A-015 — stay L1 unless written chrome gaps force L3/L4.
+
+**Dogfood polish (W5):** Lease/spend/slot failures use feed CTAs (not alerts); Continuity strip stays visible while busy; Debug chips for Continuity/Isolate; gold dogfood on g52–g65.
+
+**Turn law:** every turn ends in the feed (`completed` | `failed` | `cancelled`).
+
+**Action envelopes (E1):** Authorized tools persist effect·paths·autonomy·risk under `.ade/continuity/last-actions.json`; feed + Trust Audit show them.
+
+**SelfCompact (C4):** `ade__compact_context` requires a reason; stuck/debugging mid-derivation is rejected; T0 nudges when to fire.
+
+**Next:** Critical harness path closed (Mission Control / Zed fork deferred). See Master Gameplan.
+
+Roadmaps: `docs/research/ADE-Master-Gameplan.md`, `docs/platform/ORCHESTRATION_ENG_GOAL_PLAN.md`, `docs/platform/IDEAL_ADE_DEVELOPMENT_PLAN.md`.
 
 ## Authority Order
 
 1. Law/security/human direction
 2. CI, tests, schemas
 3. This AGENTS.md
-4. Global guidance (`<ade-home>/guidance/rules`) + `.ade/rules/` (workspace wins body; deny-writes union)
-5. Global + `.ade/skills/` on-demand skills (`*/SKILL.md`)
+4. Global guidance + `.ade/rules/` (workspace wins body; deny-writes union)
+5. Global + `.ade/skills/` on demand
 6. Task/issue acceptance criteria
 7. Provider/adapter files
 8. Chat memory
 
 ## Rules & Skills
 
-- Rules: Global guidance + `.ade/rules/*.mdc` — merged into agent authority; workspace stem wins prompt body; `globs:` + `write: deny` union across scopes.
-- Skills: Global + `.ade/skills/<name>/SKILL.md` — catalogs merge; full body when `alwaysApply: true`, match, or `activate_skill`.
-- Profiles: `.ade/profiles/*.toml` and Global profiles filter `pack:`-tagged items (`active-profile.txt`).
-- Cursor IDE mirrors: `.cursor/rules/` and `.cursor/skills/` (for Cursor agents; ADE runtime uses Global + `.ade/`).
-- Atlas / Plan Map: Full/Debug views for authority+work graph and Trust Route (AUDIT→PLAN→EXECUTE→VERIFY).
+- **ADE runtime:** `.ade/rules/*.mdc` + `.ade/skills/*/SKILL.md`
+- **Cursor IDE mirror:** `.cursor/rules` + `.cursor/skills` — keep in sync via `scripts/sync-cursor-guidance.ps1` (author in `.ade/`, then sync)
+- Phases: rule `golden-path` · Verify gates: skill `verify-ladder`
+- Profiles: `.ade/profiles/*.toml` + `active-profile.txt`
 
 ## Golden Path
 
-- **Runtime:** Local (Windows) or WSL2
-- **Root:** `C:\Dev\ade`
-- **Rust:** stable (rust-toolchain.toml)
-- **Node:** v22.14.0
-- **Commands:**
-  - Build: `cargo build`
-  - Lint: `cargo clippy -- -D warnings`
-  - Format: `cargo fmt --check`
-  - Test: `cargo test`
-
-## Phases
-
-The ADE follows AUDIT → PLAN → EXECUTE routing.
-
-- **AUDIT:** Read-only discovery and scoring. No code changes.
-- **PLAN:** Phases, gates, ownership. Read-mostly. Drafts in `docs/` or `.ade/` only.
-- **EXECUTE:** Apply approved phases only. Never expand scope.
+- **Root:** `C:\Dev\ade` · **Rust:** stable · **Node:** v22.14.0
+- Build `cargo build` · Lint `cargo clippy -- -D warnings` · Fmt `cargo fmt --check` · Test `cargo test`
 
 ## Security
 
 - NEVER read/quote `.env`, `*.pem`, `*.key`, `*credentials*.json`, or secrets
 - NEVER commit two write-capable agents on one checkout
-- NEVER merge or deploy without human approval
+- NEVER merge/deploy without human approval
 - NEVER disable security tools to "make AI work"
-
-## Verify Ladder
-
-| Gate | Command |
-|------|---------|
-| G0 | cargo locate-project |
-| G2 | cargo fmt --check + cargo clippy -- -D warnings |
-| G3 | cargo test |

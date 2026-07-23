@@ -1,17 +1,29 @@
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  
-**Status:** Active · Ideal spine shipped · **N1–N7 · T1 · C1 · A1 · E2** · Orch **G0–G4** · 2026-07-22  
-**Canvas:** ADE-next-gameplan.canvas.tsx (live) · Ideal-ADE-development-plan.canvas.tsx (archive) · ADE-orchestration-eng-goal.canvas.tsx  
-**Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard · **ORCHESTRATION_ENG_GOAL_PLAN.md** (harness DNA / eng-goal)
+**Status:** Active · Ideal spine shipped · **Multi-host north star** (DEC-A-010) · Orch **G0–G4** · Effort **B0–B4** · 2026-07-22  
+**Canvas:** **ADE-multihost-gameplan.canvas.tsx** (master) · Ideal-ADE-development-plan.canvas.tsx (archive) · ADE-orchestration-eng-goal.canvas.tsx  
+**ADRs:** `docs/decisions/DEC-A-010` … `DEC-A-012` · Layout: `docs/architecture/REPO_LAYOUT.md`  
+**Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard · **ORCHESTRATION_ENG_GOAL_PLAN.md**
 
 ## North star
 
-Browser + Desktop **Agent Development Environment**: local harness control plane,
-do-work Home, verify-as-truth, BYOK honesty, progressive disclosure.
-Coexist with Cursor/Claude — do not become another IDE fork (see **E1** for shell options).
+**Cursor-shaped job · Rust agent OS · multi-host eyes.** ADE is the harness control plane
+(Suggest/Apply, leases, verify, Continuity, spend, Orchestrator). Coding surfaces are hosts:
+
+| Host | Role |
+|------|------|
+| ADE Desktop (Tauri) | Harness UI |
+| Zed | Primary editor via `ade acp` (ACP) |
+| VSCodium | Open VSX companion (“Open in…”) |
+
+Do **not** fork Electron/VS Code/Zed as ADE core. Coexist with Cursor — do not become another IDE fork (see **E1** + DEC-A-010).
 
 **Audit is a Trust feature, not the brand.**
+
+## Multi-host phases (forward)
+
+See canvas **ADE-multihost-gameplan** — M0 identity · M1 harness · M2 `ade acp` · M3 Open-in · M4 Orchestrator · M5 cohesion.
 
 ## Early goal: ADE builds itself + Dev/Debug
 

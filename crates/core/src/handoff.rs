@@ -226,7 +226,9 @@ impl HandoffCapsule {
                     .join("; ")
             )
         };
-        let thrift = "Do not run long shell discovery loops, rebuilds, or broad edits.\n\
+        let facts = self.thrift_continuity_facts();
+        let thrift = "Do not paste prior chat or full transcripts.\n\
+             Do not run long shell discovery loops, rebuilds, or broad edits.\n\
              Prefer one focused owned-path action or verify, then stop.";
         if host_ran_next {
             let exit = host_exit
@@ -237,6 +239,7 @@ impl HandoffCapsule {
                  Prior goal: {goal}\n\
                  Host already ran next_safe_command: `{next}`{exit}.\n\
                  Do not re-run it unless that output clearly failed.{blockers}\n\
+                 {facts}\
                  Stay inside approved owned_paths / leases.\n\
                  {thrift}"
             )
@@ -245,10 +248,48 @@ impl HandoffCapsule {
                 "Continue from the latest ADE handoff (status: {status}).\n\
                  Prior goal: {goal}\n\
                  Do next_safe_command first: `{next}`{blockers}\n\
+                 {facts}\
                  Stay inside approved owned_paths / leases. Prefer verify before expanding scope.\n\
                  {thrift}"
             )
         }
+    }
+
+    /// Compact durable facts for thrift resume (disk under `.ade/continuity/`, not chat paste).
+    fn thrift_continuity_facts(&self) -> String {
+        let paths = if self.changed_paths.is_empty() {
+            "(see `.ade/continuity/last-write.json`)".into()
+        } else {
+            self.changed_paths
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let decisions = if self.decisions_touched.is_empty() {
+            "(none recorded)".into()
+        } else {
+            self.decisions_touched
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let verify = if self.verify_results.is_empty() {
+            "(unchanged)".into()
+        } else {
+            self.verify_results
+                .iter()
+                .take(6)
+                .map(|item| format!("{}={}", item.gate, item.status))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "Durable Continuity (`.ade/continuity/last-write.json`): paths={paths}; decisions={decisions}; verify={verify}.\n"
+        )
     }
 
     /// Budgeted prompt injection — never dump the full capsule JSON.
@@ -420,11 +461,16 @@ mod tests {
         let mut capsule = HandoffCapsule::new("Ship N4 continuity", "agent_turn");
         capsule.next_safe_command = Some("ade audit".into());
         capsule.turn_status = Some("budget_exhausted".into());
+        capsule.changed_paths = vec![".ade/dogfood/continuity-acceptance.md".into()];
+        capsule.decisions_touched = vec!["prefer Continuity thrift over paste".into()];
         let prompt = capsule.resume_user_prompt_with(true, Some(0));
         assert!(prompt.contains("Host already ran next_safe_command"));
         assert!(prompt.contains("exit 0"));
         assert!(!prompt.contains("Do next_safe_command first"));
         assert!(prompt.contains("discovery loops"));
+        assert!(prompt.contains("Do not paste prior chat"));
+        assert!(prompt.contains(".ade/continuity/last-write.json"));
+        assert!(prompt.contains("continuity-acceptance.md"));
         let summary = capsule.prompt_summary_with(800, true);
         assert!(summary.contains("Host already ran next_safe_command"));
     }

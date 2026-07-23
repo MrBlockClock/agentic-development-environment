@@ -1,4 +1,4 @@
-# N4 Dogfood: Continuity resume (Continue last handoff) with raised tool-round budget
+# Continuity thrift dogfood: host next_safe → thrift resume → owned-path evidence
 # Usage:
 #   pwsh -File scripts/dogfood-continuity.ps1
 # Optional: -Provider opencode -Model deepseek-v4-flash-free -MaxSteps 24
@@ -20,7 +20,7 @@ $ade = if (Test-Path "C:\Dev\ade-target\debug\ade.exe") {
   "ade"
 }
 
-Write-Host "=== N4 Dogfood Continuity ==="
+Write-Host "=== Continuity thrift dogfood ==="
 Write-Host "Root: $root"
 Write-Host "ADE:  $ade"
 Write-Host "Prov: $Provider / $Model"
@@ -39,52 +39,80 @@ if (-not (Test-Path $latestPath)) {
   exit 1
 }
 
-$capsule = Get-Content $latestPath -Raw | ConvertFrom-Json
-$next = if ($capsule.next_safe_command) { [string]$capsule.next_safe_command } else { "ade audit" }
-$status = if ($capsule.turn_status) { [string]$capsule.turn_status } else { "unknown" }
-$blocker = ""
-if ($capsule.blockers -and $capsule.blockers.Count -gt 0) {
-  $blocker = [string]$capsule.blockers[0]
+$env:RUST_LOG = "error"
+Write-Host "-- ade handoff resume (host next_safe + thrift prompt) --"
+$resumeJson = & $ade handoff resume --json 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+  Write-Host $resumeJson
+  Write-Host "FAIL ade handoff resume exit $LASTEXITCODE"
+  exit $LASTEXITCODE
 }
 
-Write-Host "-- latest handoff --"
+try {
+  $resume = $resumeJson | ConvertFrom-Json
+} catch {
+  Write-Host $resumeJson
+  Write-Host "FAIL resume JSON parse"
+  exit 1
+}
+
+if (-not $resume.available) {
+  Write-Host "FAIL handoff resume not available"
+  exit 1
+}
+
+$next = [string]$resume.nextSafeCommand
+if (-not $next) { $next = [string]$resume.next_safe_command }
+if (-not $next) { $next = "ade audit" }
+
+$status = [string]$resume.turnStatus
+if (-not $status) { $status = [string]$resume.turn_status }
+if (-not $status) { $status = "unknown" }
+
+$hostRan = $false
+if ($null -ne $resume.hostRanNext) { $hostRan = [bool]$resume.hostRanNext }
+elseif ($null -ne $resume.host_ran_next) { $hostRan = [bool]$resume.host_ran_next }
+
+$prompt = [string]$resume.resumePrompt
+if (-not $prompt) { $prompt = [string]$resume.resume_prompt }
+
 Write-Host "  status:   $status"
 Write-Host "  next:     $next"
-if ($blocker) { Write-Host "  blocker:  $blocker" }
-Write-Host ""
-
-Write-Host "-- next_safe_command (host) --"
-$env:RUST_LOG = "error"
-# Prefer the documented Continuity first step; audit may be slow — allow verify G0 as fallback.
-$hostCmd = $next.Trim()
-if ($hostCmd -match "^ade\s+") {
-  $parts = $hostCmd -split "\s+"
-  $adeArgs = $parts[1..($parts.Length - 1)]
-  & $ade @adeArgs 2>&1 | Select-Object -Last 25 | ForEach-Object { Write-Host $_ }
-  Write-Host "  host exit=$LASTEXITCODE"
-} else {
-  Write-Host "  skip non-ade next_safe_command: $hostCmd"
+Write-Host "  hostRan:  $hostRan"
+if ($prompt -notmatch "Do not paste prior chat") {
+  Write-Host "FAIL thrift resume missing no-paste guard"
+  exit 1
+}
+if ($prompt -notmatch "\.ade/continuity/last-write\.json") {
+  Write-Host "WARN resume does not mention last-write.json (continuing)"
 }
 Write-Host ""
 
 New-Item -ItemType Directory -Force -Path (Join-Path $root $OwnedPath) | Out-Null
 $stamp = (Get-Date).ToUniversalTime().ToString("o")
 
-$prompt = @"
-N4 Continuity dogfood (raised tool budget).
+if ($hostRan) {
+  $hostLine = "Host already ran next_safe_command: ``$next``."
+} else {
+  $hostLine = "Do next_safe_command first: ``$next``."
+}
 
-Host already ran next_safe_command: ``$next`` (status was $status).
-$(if ($blocker) { "Prior blocker: $blocker" } else { "No prior blockers." })
+$agentPrompt = @"
+Continuity thrift dogfood (raised tool budget).
+
+Prior handoff status: $status.
+$hostLine
 
 Using fs__write_file, create or update ONLY ``$OwnedPath/continuity-acceptance.md`` with:
 - ISO time: $stamp
-- continuity resume dogfood = pass
+- continuity thrift dogfood = pass
 - max_steps=$MaxSteps
 - next_safe_command=$next
+- host_ran_next=$hostRan
 - prior_handoff_status=$status
-- one sentence: Continuity resume completed under owned path $OwnedPath
+- one sentence: Continuity thrift resume completed under owned path $OwnedPath without pasting prior chat
 
-Do not edit crates/, apps/, docs/, or run long shell discovery loops.
+Do not paste prior chat. Do not edit crates/, apps/, docs/, or run long shell discovery loops.
 Do not rebuild binaries. Prefer one write then stop.
 "@
 
@@ -99,7 +127,7 @@ $out = & $ade agent `
   --max-steps $MaxSteps `
   --input-cost-per-mtok 0 `
   --output-cost-per-mtok 0 `
-  $prompt 2>&1 | Out-String
+  $agentPrompt 2>&1 | Out-String
 
 $code = $LASTEXITCODE
 Write-Host $out
@@ -115,6 +143,13 @@ Write-Host ""
 Write-Host "-- evidence --"
 Get-Content $evidence | ForEach-Object { Write-Host $_ }
 
+$lastWrite = Join-Path $root ".ade\continuity\last-write.json"
+if (Test-Path $lastWrite) {
+  Write-Host ""
+  Write-Host "-- last-write --"
+  & $ade handoff last-write 2>&1 | Select-Object -First 20 | ForEach-Object { Write-Host $_ }
+}
+
 $latest2 = Get-Content $latestPath -Raw | ConvertFrom-Json
 Write-Host ""
 Write-Host "-- handoff after --"
@@ -127,5 +162,5 @@ if ($code -ne 0) {
 }
 
 Write-Host ""
-Write-Host "PASS Continuity dogfood — evidence under $OwnedPath/continuity-acceptance.md"
+Write-Host "PASS Continuity thrift dogfood — evidence under $OwnedPath/continuity-acceptance.md"
 exit 0

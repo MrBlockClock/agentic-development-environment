@@ -1,9 +1,21 @@
 # Economic Tokenization — Science, Evidence, ADE Mapping
 
 **Schema:** `ade.token-econ-research/v1`  
-**Status:** Research synthesis · 2026-07-22  
+**Status:** Research synthesis · 2026-07-22 · **vocab revised 2026-07-23**  
 **Canvas:** `ADE-token-economics-research.canvas.tsx`  
-**Companions:** `EFFORT_TURN_BUDGET_PLAN.md` · `money.rs` · `spend.rs`
+**Companions:** `EFFORT_TURN_BUDGET_PLAN.md` · `money.rs` · `spend.rs`  
+**Product PDF (Tokenomics = I/O·context·usage):** `docs/research/ADE-Tokenomics-IO-Context-Usage.md`  
+**Deep dive (compaction · fertility · custom language limits):** `docs/research/ADE-Token-Usage-Compaction-Fertility-Deep-Dive.md`
+
+## Vocabulary lock
+
+| Say | Mean |
+|-----|------|
+| **Tokenomics** | Input composition, output discipline, context hygiene, usage patterns |
+| **SpendGuard / $ metering** | USD caps, rates, reserve/reconcile, invoice honesty |
+| **Effort** | Per-turn rounds + **output** token gas tank |
+
+Do not use “tokenomics” for pricing tables alone.
 
 ## Thesis
 

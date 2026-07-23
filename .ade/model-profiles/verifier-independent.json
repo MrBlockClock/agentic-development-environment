@@ -1,0 +1,12 @@
+﻿{
+  "schema": "ade.model-profile/v1",
+  "id": "verifier-independent",
+  "label": "Verifier (independent)",
+  "allowed_autonomy": ["observe", "propose"],
+  "tool_effect_deny": ["workspace_write", "external_write", "process_execution"],
+  "effort_floor_steps": 8,
+  "slot_eligibility": ["verifier"],
+  "require_verify": true,
+  "prefer_worktree": false,
+  "tags": ["independent"]
+}

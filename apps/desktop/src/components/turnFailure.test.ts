@@ -109,3 +109,67 @@ test("budget stop offers continue_handoff action", () => {
   assert.equal(advice.kind, "tool_round_limit");
   assert.ok(advice.actions.some((action) => action.id === "continue_handoff"));
 });
+
+test("classifies contract_gate Apply block", () => {
+  const advice = evaluateTurnFailure({
+    error:
+      "Authorization error: contract_gate: Act tools blocked until an active eng-goal has acceptance criteria, out-of-scope, and verify pointer",
+    providerId: "opencode",
+    model: "big-pickle",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "contract_gate");
+  assert.equal(advice.autoFix, null);
+  assert.ok(advice.actions.some((action) => action.id === "define_goal"));
+  assert.ok(advice.actions.some((action) => action.id === "switch_suggest"));
+});
+
+test("slot_gate primary CTA is Switch to Apply", () => {
+  const advice = evaluateTurnFailure({
+    error: "slot_gate: Planner cannot acquire write leases",
+    providerId: "opencode",
+    model: "big-pickle",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "lease_conflict");
+  assert.equal(advice.actions[0]?.id, "switch_apply");
+});
+
+test("spend honesty offers confirm unmetered", () => {
+  const advice = evaluateTurnFailure({
+    error:
+      "spend_honesty: set Input/Output $/MTok to match your provider, or confirm unmetered.",
+    providerId: "opencode",
+    model: "big-pickle",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "spend_cap");
+  assert.ok(advice.actions.some((action) => action.id === "confirm_unmetered"));
+  assert.ok(advice.actions.some((action) => action.id === "open_spend_rates"));
+});
+
+test("another-agent write lease surfaces H4 CTAs", () => {
+  const advice = evaluateTurnFailure({
+    error:
+      "lease conflict: another agent (abcd1234) holds a write lease on .ade/dogfood",
+    providerId: "opencode",
+    model: "big-pickle",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "lease_conflict");
+  assert.ok(advice.actions.some((action) => action.id === "wait_refresh"));
+  assert.ok(advice.actions.some((action) => action.id === "enable_isolate"));
+  assert.ok(advice.actions.some((action) => action.id === "rotate_lease"));
+});
+
+test("claim_gate offers Apply next and waive", () => {
+  const advice = evaluateTurnFailure({
+    error: "claim_gate: 2 queued task(s) — Apply next or waive",
+    providerId: "opencode",
+    model: "big-pickle",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "lease_conflict");
+  assert.ok(advice.actions.some((action) => action.id === "apply_next"));
+  assert.ok(advice.actions.some((action) => action.id === "waive_queue"));
+});

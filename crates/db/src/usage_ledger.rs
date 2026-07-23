@@ -82,20 +82,32 @@ impl UsageLedgerStore {
         period_key: &str,
         workspace_root: &str,
     ) -> Result<Money, AdeError> {
+        let breakdown = self
+            .active_spend_breakdown(scope, period_key, workspace_root)
+            .await?;
+        Ok(breakdown.active)
+    }
+
+    /// Invoice-class split: committed actuals vs still-open reserves.
+    pub async fn active_spend_breakdown(
+        &self,
+        scope: &str,
+        period_key: &str,
+        workspace_root: &str,
+    ) -> Result<SpendBreakdown, AdeError> {
         self.expire_stale().await?;
         let now = Utc::now().to_rfc3339();
         let mut rows = self
             .connection
             .query(
-                "SELECT COALESCE(SUM(
-                    CASE
-                        WHEN status = 'committed' THEN actual_micros
+                "SELECT
+                    COALESCE(SUM(CASE WHEN status = 'committed' THEN actual_micros ELSE 0 END), 0),
+                    COALESCE(SUM(CASE
                         WHEN status = 'reserved'
                              AND (expires_at IS NULL OR expires_at > ?1)
                         THEN reserved_micros
                         ELSE 0
-                    END
-                 ), 0)
+                    END), 0)
                  FROM usage_ledger_entries
                  WHERE scope = ?2
                    AND period_key = ?3
@@ -114,12 +126,21 @@ impl UsageLedgerStore {
             .await
             .map_err(|error| AdeError::Database(error.to_string()))?
         else {
-            return Ok(Money::ZERO);
+            return Ok(SpendBreakdown::default());
         };
-        let micros: i64 = row
+        let used_micros: i64 = row
             .get(0)
             .map_err(|error| AdeError::Database(error.to_string()))?;
-        Ok(Money::from_micros(micros.max(0)))
+        let reserved_micros: i64 = row
+            .get(1)
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        let used = Money::from_micros(used_micros.max(0));
+        let reserved = Money::from_micros(reserved_micros.max(0));
+        Ok(SpendBreakdown {
+            used,
+            reserved,
+            active: used.saturating_add(reserved),
+        })
     }
 
     pub async fn reserve(&self, request: ReserveRequest) -> Result<Reservation, AdeError> {
@@ -363,6 +384,16 @@ impl UsageLedgerStore {
         }
         Ok(out)
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SpendBreakdown {
+    /// Committed actuals (invoice-class used $).
+    pub used: Money,
+    /// Still-open reserved estimates.
+    pub reserved: Money,
+    /// used + reserved (what caps see).
+    pub active: Money,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

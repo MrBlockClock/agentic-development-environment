@@ -126,6 +126,82 @@ impl TaskCoordinator {
         self.with_registry(|registry| Ok(registry.tasks.clone()))
     }
 
+    /// Count tasks that are queued and whose dependencies are complete.
+    pub fn ready_queued_count(&self) -> Result<usize, AdeError> {
+        self.with_registry_mut(|registry| {
+            self.requeue_expired_locked(registry)?;
+            Ok(self.ready_queued_indices(registry).len())
+        })
+    }
+
+    /// True when this agent holds a Claimed or Running task.
+    pub fn agent_has_active_claim(&self, agent_id: Uuid) -> Result<bool, AdeError> {
+        self.with_registry_mut(|registry| {
+            self.requeue_expired_locked(registry)?;
+            Ok(registry.tasks.iter().any(|task| {
+                task.agent_id == Some(agent_id)
+                    && matches!(task.status, TaskStatus::Claimed | TaskStatus::Running)
+            }))
+        })
+    }
+
+    /// True when `task_id` is Claimed/Running and held by `agent_id`.
+    pub fn agent_holds_task(&self, task_id: &str, agent_id: Uuid) -> Result<bool, AdeError> {
+        self.with_registry_mut(|registry| {
+            self.requeue_expired_locked(registry)?;
+            Ok(registry.tasks.iter().any(|task| {
+                task.id == task_id
+                    && task.agent_id == Some(agent_id)
+                    && matches!(task.status, TaskStatus::Claimed | TaskStatus::Running)
+            }))
+        })
+    }
+
+    /// Append an auditable queue-waive line (free-form Apply while tasks are ready).
+    pub fn log_queue_waive(
+        &self,
+        agent_id: Option<Uuid>,
+        ready_count: usize,
+        reason: &str,
+    ) -> Result<(), AdeError> {
+        let dir = self.root.join(".ade").join("tasks");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("queue-waives.jsonl");
+        let line = serde_json::json!({
+            "schema": "ade.task.queue-waive/v1",
+            "at": Utc::now().to_rfc3339(),
+            "agent_id": agent_id.map(|id| id.to_string()),
+            "ready_count": ready_count,
+            "reason": reason.trim(),
+        });
+        use std::io::Write;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        writeln!(file, "{line}")?;
+        Ok(())
+    }
+
+    fn ready_queued_indices(&self, registry: &TaskRegistry) -> Vec<usize> {
+        let completed = registry
+            .tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Completed)
+            .map(|task| task.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        registry
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                task.status == TaskStatus::Queued
+                    && task
+                        .depends_on
+                        .iter()
+                        .all(|dependency| completed.contains(dependency.as_str()))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     /// Claim the oldest ready task for `agent_id`.
     ///
     /// The task-registry lock remains held while leases are acquired. If any
@@ -135,19 +211,7 @@ impl TaskCoordinator {
         validate_ttl(ttl)?;
         self.with_registry_mut(|registry| {
             self.requeue_expired_locked(registry)?;
-            let completed = registry
-                .tasks
-                .iter()
-                .filter(|task| task.status == TaskStatus::Completed)
-                .map(|task| task.id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            let Some(index) = registry.tasks.iter().position(|task| {
-                task.status == TaskStatus::Queued
-                    && task
-                        .depends_on
-                        .iter()
-                        .all(|dependency| completed.contains(dependency.as_str()))
-            }) else {
+            let Some(index) = self.ready_queued_indices(registry).into_iter().next() else {
                 return Ok(None);
             };
 

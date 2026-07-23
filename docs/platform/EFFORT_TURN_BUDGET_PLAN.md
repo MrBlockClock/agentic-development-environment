@@ -1,8 +1,8 @@
 # Effort / Turn Budget Honesty Plan
 
 **Schema:** `ade.effort-budget/v1`  
-**Status:** **B0–B4 shipped** · Next track: SpendGuard /$ (held)  
-**Canvas:** `ADE-effort-budget-gameplan.canvas.tsx`  
+**Status:** **B0–B4 shipped** · Next track: SpendGuard /$ **or** Orchestrator (see multi-host M1)  
+**Canvas:** ADE-effort-budget-gameplan.canvas.tsx (condensed) · **ADE-multihost-gameplan.canvas.tsx** (master)  
 **Depends on:** N4 Continuity · turnFailure Fix&retry · Product DNA (harness owns budgets)
 
 ## Verdict

@@ -562,6 +562,7 @@ fn tool_registry() -> &'static BTreeMap<String, ToolEffect> {
             ("ade", "ade_key_status", ToolEffect::ReadOnly),
             ("ade", "ade_lease_list", ToolEffect::ReadOnly),
             ("ade", "activate_skill", ToolEffect::ReadOnly),
+            ("ade", "compact_context", ToolEffect::ReadOnly),
             ("ade", "web_fetch", ToolEffect::ReadOnly),
             ("ade", "web_search", ToolEffect::ReadOnly),
             ("fs", "read_file", ToolEffect::ReadOnly),

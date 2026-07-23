@@ -1,0 +1,12 @@
+﻿{
+  "schema": "ade.model-profile/v1",
+  "id": "worker-strong",
+  "label": "Worker (strong)",
+  "allowed_autonomy": ["act", "automate"],
+  "tool_effect_deny": [],
+  "effort_floor_steps": 16,
+  "slot_eligibility": ["worker"],
+  "require_verify": false,
+  "prefer_worktree": true,
+  "tags": ["strong"]
+}

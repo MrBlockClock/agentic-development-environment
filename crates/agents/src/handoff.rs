@@ -1,8 +1,11 @@
 use ade_core::error::AdeError;
 use ade_core::handoff::HandoffCapsule;
 use ade_core::ignore::SensitivePathPolicy;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HandoffMetrics {
@@ -318,6 +321,180 @@ impl HandoffManager {
     }
 }
 
+/// C3 write-before-compact: durable Continuity facts under `.ade/continuity/last-write.json`.
+pub fn write_continuity_last_write(
+    workspace_root: &Path,
+    capsule: &HandoffCapsule,
+    handoff_id: &str,
+) -> Result<(), AdeError> {
+    let dir = workspace_root.join(".ade").join("continuity");
+    std::fs::create_dir_all(&dir)?;
+    let verify: Vec<serde_json::Value> = capsule
+        .verify_results
+        .iter()
+        .map(|item| {
+            json!({
+                "gate": item.gate,
+                "status": item.status,
+            })
+        })
+        .collect();
+    let failing = capsule
+        .blockers
+        .first()
+        .cloned()
+        .or_else(|| {
+            capsule
+                .verify_results
+                .iter()
+                .find(|item| item.status != "pass")
+                .map(|item| format!("{}={}", item.gate, item.status))
+        })
+        .unwrap_or_else(|| "(none)".into());
+    let snapshot = json!({
+        "schema": "ade.continuity-last-write/v1",
+        "handoffId": handoff_id,
+        "kind": "write_before_compact",
+        "goal": capsule.goal,
+        "status": capsule.turn_status,
+        "intent": capsule.goal,
+        "decisions": capsule.decisions_touched,
+        "paths": capsule.changed_paths,
+        "failing": failing,
+        "next": capsule.next_safe_command,
+        "verify": verify,
+        "blockers": capsule.blockers,
+        "nextSafeCommand": capsule.next_safe_command,
+        "updatedAt": Utc::now().to_rfc3339(),
+    });
+    write_atomic(
+        &dir.join("last-write.json"),
+        &serde_json::to_vec_pretty(&snapshot)?,
+    )?;
+    Ok(())
+}
+
+/// E1: append an authorized action envelope and refresh `last-actions.json` (recent window).
+pub fn record_action_envelope(
+    workspace_root: &Path,
+    server: &str,
+    tool: &str,
+    envelope: &crate::session::ActionEnvelope,
+) -> Result<(), AdeError> {
+    let dir = workspace_root.join(".ade").join("continuity");
+    std::fs::create_dir_all(&dir)?;
+    let entry = json!({
+        "at": Utc::now().to_rfc3339(),
+        "server": server,
+        "tool": tool,
+        "effect": envelope.effect,
+        "paths": envelope.paths,
+        "autonomy": envelope.autonomy,
+        "riskTier": envelope.risk_tier,
+        "riskCategory": envelope.risk_category,
+    });
+    let line = format!("{}\n", serde_json::to_string(&entry)?);
+    let jsonl = dir.join("actions.jsonl");
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&jsonl)?;
+    file.write_all(line.as_bytes())?;
+
+    let raw = std::fs::read_to_string(&jsonl).unwrap_or_default();
+    let mut recent: Vec<serde_json::Value> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if recent.len() > 40 {
+        recent = recent.split_off(recent.len() - 40);
+    }
+    let snapshot = json!({
+        "schema": "ade.continuity-last-actions/v1",
+        "updatedAt": Utc::now().to_rfc3339(),
+        "count": recent.len(),
+        "actions": recent,
+    });
+    write_atomic(
+        &dir.join("last-actions.json"),
+        &serde_json::to_vec_pretty(&snapshot)?,
+    )?;
+    Ok(())
+}
+
+/// Host-run Continuity first step when it is an `ade …` command (dogfood / Desktop parity).
+/// Caps runtime so Continuity cannot freeze forever on slow audits.
+pub fn host_run_next_safe_command(
+    workspace: &Path,
+    command: &str,
+    timeout: Duration,
+) -> (bool, Option<i32>) {
+    let trimmed = command.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower == "ade" || lower.starts_with("ade ")) {
+        return (false, None);
+    }
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.is_empty() {
+        return (false, None);
+    }
+    let bin = resolve_ade_cli_bin();
+    let args = &parts[1..];
+    let mut child = match std::process::Command::new(&bin)
+        .args(args)
+        .current_dir(workspace)
+        .env("RUST_LOG", "error")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return (false, None),
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return (true, status.code()),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // Timed out — resume prompt keeps "Do next_safe_command first".
+                return (false, None);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(200)),
+            Err(_) => return (false, None),
+        }
+    }
+}
+
+fn resolve_ade_cli_bin() -> PathBuf {
+    #[cfg(windows)]
+    let name = "ade.exe";
+    #[cfg(not(windows))]
+    let name = "ade";
+
+    let mut candidates = Vec::new();
+    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        let target = PathBuf::from(target);
+        candidates.push(target.join("debug").join(name));
+        candidates.push(target.join("release").join(name));
+    }
+    candidates.push(PathBuf::from("C:\\Dev\\ade-target\\debug").join(name));
+    candidates.push(PathBuf::from("C:\\Dev\\ade-target\\release").join(name));
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("target").join("debug").join(name));
+        candidates.push(cwd.join("target").join("release").join(name));
+    }
+    for candidate in candidates {
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(name)
+}
+
 fn write_atomic(path: &Path, payload: &[u8]) -> Result<(), AdeError> {
     let temporary = path.with_extension("json.tmp");
     std::fs::write(&temporary, payload)?;
@@ -409,6 +586,23 @@ mod tests {
         assert!(resume
             .resume_prompt
             .contains("ade verify --gate G0 --through"));
+        assert!(resume.resume_prompt.contains("Do not paste prior chat"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_continuity_last_write_has_sections() {
+        let root = fixture();
+        let mut capsule = HandoffCapsule::new("Persist facts", "agent_turn");
+        capsule.changed_paths = vec!["src/main.rs".into()];
+        capsule.decisions_touched = vec!["keep thrift".into()];
+        capsule.next_safe_command = Some("ade audit".into());
+        write_continuity_last_write(&root, &capsule, "test-id").unwrap();
+        let raw = std::fs::read_to_string(root.join(".ade/continuity/last-write.json")).unwrap();
+        assert!(raw.contains("ade.continuity-last-write/v1"));
+        assert!(raw.contains("\"paths\""));
+        assert!(raw.contains("\"decisions\""));
+        assert!(raw.contains("\"verify\""));
         let _ = std::fs::remove_dir_all(root);
     }
 
