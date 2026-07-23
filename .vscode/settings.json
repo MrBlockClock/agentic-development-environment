@@ -29,22 +29,18 @@
     "pretty-ts-errors.showFullCompilationError": false,
     "git-graph.date.type": "ISO",
     "git-graph.commitOrdering": "date",
+    "cSpell.enabled": true,
+    "cSpell.import": ["cspell.json"],
+    "cSpell.diagnosticLevel": "Warning",
     "cSpell.ignorePaths": [
         "**/ade-target/**",
         "**/node_modules/**",
         "**/.git/**",
         "**/Cargo.lock",
-        "**/package-lock.json"
-    ],
-    "cSpell.words": [
-        "ade",
-        "tauri",
-        "micros",
-        "clippy",
-        "rustfmt",
-        "vite",
-        "tailwindcss",
-        "monorepo",
-        "rustc"
+        "**/package-lock.json",
+        "**/*.pdf",
+        "**/apps/desktop/data/**",
+        "**/dist/**",
+        "**/target/**"
     ]
 }
