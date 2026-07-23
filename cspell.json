@@ -262,6 +262,8 @@
     "**/apps/desktop/data/**",
     "**/apps/desktop/src-tauri/gen/**",
     "**/data/**",
+    "**/.vscode/**",
+    "**/.zed/**",
     "**/.ade/dogfood/**",
     "**/.ade/verify/**",
     "**/.ade/verify-*.json",

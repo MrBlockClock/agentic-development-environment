@@ -41,6 +41,8 @@
         "**/*.pdf",
         "**/apps/desktop/data/**",
         "**/dist/**",
-        "**/target/**"
+        "**/target/**",
+        "**/.vscode/**",
+        "**/.zed/**"
     ]
 }
