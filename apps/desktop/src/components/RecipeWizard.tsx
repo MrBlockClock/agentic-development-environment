@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "../ipc";
-import { Disclosure, Hint } from "./ui";
+import { Disclosure } from "./ui";
 
 export type StackRecipe = {
   id: string;
@@ -312,162 +312,21 @@ export function RecipeWizard({
   );
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_360px]">
-      <div className="space-y-4">
-        <section className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5">
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-100">Stack Fit</h2>
-            <Hint text="Answer a few variables — ADE ranks trust contracts (verify ladder + G5), not just templates. Why chips include matches and mismatches." />
-            <button
-              type="button"
-              onClick={() => {
-                setAutoPicked(true);
-                setFit(suggestedFit());
-              }}
-              className="ml-auto rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 hover:bg-white/10"
-            >
-              Suggested defaults
-            </button>
-          </div>
-          <div className="space-y-3">
-            {FIT_FIELDS.filter((field) =>
-              simpleMode
-                ? ["intent", "primary_runtime", "ui_surface", "evidence", "compliance"].includes(
-                    field.key,
-                  )
-                : true,
-            ).map((field) => (
-              <div key={field.key}>
-                <div className="mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">
-                  {field.label}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {field.options.map((opt) =>
-                    selectChip(
-                      field.key,
-                      opt.value,
-                      opt.label,
-                      fit[field.key] === opt.value,
-                    ),
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+    <div className="mx-auto max-w-xl space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold text-slate-100">Choose a stack</h2>
+        <p className="mt-1 text-[11px] leading-5 text-slate-500">
+          Pick a project setup that matches your work — ADE ranks options by fit, not just
+          templates.
+        </p>
+      </div>
 
-          <div className="mt-5">
-            <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-600">
-              Best matches
-            </div>
-            {topMatches.length === 0 ? (
-              <p className="text-[11px] text-slate-600">Ranking recipes…</p>
-            ) : (
-              <div className="space-y-2">
-                {topMatches.map((item, index) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setAutoPicked(false);
-                      setSelected(item.id);
-                    }}
-                    className={`w-full rounded-xl border p-3 text-left transition ${
-                      selected === item.id
-                        ? "border-blue-400/40 bg-blue-500/10"
-                        : "border-white/7 bg-white/2 hover:border-white/15"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-slate-200">
-                        {index + 1}. {item.name}
-                      </span>
-                      {!simpleMode && (
-                        <span className="font-mono text-[10px] text-slate-500">
-                          {item.score}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {item.why.slice(0, 3).map((reason) => (
-                        <span
-                          key={reason}
-                          className={`rounded border px-1.5 py-0.5 text-[10px] ${
-                            reason.toLowerCase().includes("mismatch")
-                              || reason.toLowerCase().includes("weaker")
-                              || reason.toLowerCase().includes("not marked")
-                              ? "border-amber-400/20 bg-amber-400/5 text-amber-100/80"
-                              : "border-white/8 bg-white/4 text-slate-400"
-                          }`}
-                        >
-                          {reason}
-                        </span>
-                      ))}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <Disclosure
-          title="Browse all recipes"
-          subtitle="Eras, domains, search — catalog never hidden"
-          summary={`${filtered.length}`}
-          defaultOpen={false}
-          storageKey="ade_recipes_browse_open"
-        >
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {["", "classic", "modern", "frontier"].map((era) => (
-              <button
-                key={era || "all-era"}
-                type="button"
-                onClick={() => setEraFilter(era)}
-                className={`rounded-md border px-2 py-1 text-[11px] ${
-                  eraFilter === era
-                    ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
-                    : "border-white/10 text-slate-500 hover:text-slate-300"
-                }`}
-              >
-                {era ? eraLabel(era) : "All eras"}
-              </button>
-            ))}
-          </div>
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              onClick={() => setDomainFilter("")}
-              className={`rounded-md border px-2 py-1 text-[11px] ${
-                !domainFilter
-                  ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
-                  : "border-white/10 text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              All domains
-            </button>
-            {domains.map((domain) => (
-              <button
-                key={domain}
-                type="button"
-                onClick={() => setDomainFilter(domain)}
-                className={`rounded-md border px-2 py-1 text-[11px] ${
-                  domainFilter === domain
-                    ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
-                    : "border-white/10 text-slate-500 hover:text-slate-300"
-                }`}
-              >
-                {domain}
-              </button>
-            ))}
-          </div>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search name, tags…"
-            className="mb-3 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200"
-          />
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {filtered.map((item) => (
+      <div>
+        {topMatches.length === 0 ? (
+          <p className="text-[11px] text-slate-600">Ranking recipes…</p>
+        ) : (
+          <div className="space-y-2">
+            {topMatches.map((item, index) => (
               <button
                 key={item.id}
                 type="button"
@@ -475,36 +334,208 @@ export function RecipeWizard({
                   setAutoPicked(false);
                   setSelected(item.id);
                 }}
-                className={`rounded-xl border p-3 text-left transition ${
+                className={`w-full rounded-xl border p-3 text-left transition ${
                   selected === item.id
                     ? "border-blue-400/40 bg-blue-500/10"
                     : "border-white/7 bg-white/2 hover:border-white/15"
                 }`}
               >
-                <div className="text-sm font-medium text-slate-200">{item.name}</div>
-                {!simpleMode && (
-                  <div className="mt-0.5 font-mono text-[10px] text-blue-300/70">{item.id}</div>
-                )}
-                <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-slate-500">
-                  <span>{eraLabel(item.era)}</span>
-                  {item.domain ? <span>· {item.domain}</span> : null}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-slate-200">
+                    {index + 1}. {item.name}
+                  </span>
+                  {!simpleMode && (
+                    <span className="font-mono text-[10px] text-slate-500">
+                      {item.score}
+                    </span>
+                  )}
                 </div>
-                <p className="mt-2 text-[11px] leading-5 text-slate-500">{item.description}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {item.why.slice(0, 3).map((reason) => (
+                    <span
+                      key={reason}
+                      className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                        reason.toLowerCase().includes("mismatch")
+                          || reason.toLowerCase().includes("weaker")
+                          || reason.toLowerCase().includes("not marked")
+                          ? "border-amber-400/20 bg-amber-400/5 text-amber-100/80"
+                          : "border-white/8 bg-white/4 text-slate-400"
+                      }`}
+                    >
+                      {reason}
+                    </span>
+                  ))}
+                </div>
               </button>
             ))}
           </div>
-        </Disclosure>
+        )}
       </div>
 
-      <section className="rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5">
-        <div className="mb-5">
-          <h2 className="text-sm font-semibold">{recipe?.name ?? "Recipe setup"}</h2>
-          <p className="mt-1 text-[11px] text-slate-600">
-            Preview files, then initialize the trust contract
-          </p>
+      {recipe ? (
+        <div className="space-y-3 rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5">
+          <div className="text-sm font-semibold text-slate-100">{recipe.name}</div>
+          <label className="block text-[11px] text-slate-500">
+            Project name (optional)
+            <input
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => onInitialize({ recipe: recipe.id, projectName, force })}
+            disabled={busy || !!planError}
+            className="w-full rounded-lg bg-violet-500 px-4 py-2.5 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
+          >
+            {busy ? "Initializing…" : `Initialize ${recipe.name}`}
+          </button>
         </div>
+      ) : (
+        <div className="py-8 text-center text-xs text-slate-500">Loading recipes…</div>
+      )}
+
+      <Disclosure
+        title="Adjust recommendations"
+        summary="fit questions"
+        defaultOpen={false}
+        storageKey="ade_recipes_fit"
+      >
+        <div className="space-y-3 px-4 pb-4 sm:px-5">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setAutoPicked(true);
+                setFit(suggestedFit());
+              }}
+              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 hover:bg-white/10"
+            >
+              Suggested defaults
+            </button>
+          </div>
+          {FIT_FIELDS.filter((field) =>
+            simpleMode
+              ? ["intent", "primary_runtime", "ui_surface", "evidence", "compliance"].includes(
+                  field.key,
+                )
+              : true,
+          ).map((field) => (
+            <div key={field.key}>
+              <div className="mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">
+                {field.label}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {field.options.map((opt) =>
+                  selectChip(
+                    field.key,
+                    opt.value,
+                    opt.label,
+                    fit[field.key] === opt.value,
+                  ),
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Disclosure>
+
+      <Disclosure
+        title="Browse all recipes"
+        subtitle="Eras, domains, search — catalog never hidden"
+        summary={`${filtered.length}`}
+        defaultOpen={false}
+        storageKey="ade_recipes_browse_open"
+      >
+        <div className="mb-3 flex flex-wrap gap-1.5 px-4 sm:px-5">
+          {["", "classic", "modern", "frontier"].map((era) => (
+            <button
+              key={era || "all-era"}
+              type="button"
+              onClick={() => setEraFilter(era)}
+              className={`rounded-md border px-2 py-1 text-[11px] ${
+                eraFilter === era
+                  ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
+                  : "border-white/10 text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {era ? eraLabel(era) : "All eras"}
+            </button>
+          ))}
+        </div>
+        <div className="mb-3 flex flex-wrap gap-1.5 px-4 sm:px-5">
+          <button
+            type="button"
+            onClick={() => setDomainFilter("")}
+            className={`rounded-md border px-2 py-1 text-[11px] ${
+              !domainFilter
+                ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
+                : "border-white/10 text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            All domains
+          </button>
+          {domains.map((domain) => (
+            <button
+              key={domain}
+              type="button"
+              onClick={() => setDomainFilter(domain)}
+              className={`rounded-md border px-2 py-1 text-[11px] ${
+                domainFilter === domain
+                  ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
+                  : "border-white/10 text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {domain}
+            </button>
+          ))}
+        </div>
+        <div className="px-4 sm:px-5">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, tags…"
+            className="mb-3 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200"
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-2 px-4 pb-4 sm:px-5">
+          {filtered.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => {
+                setAutoPicked(false);
+                setSelected(item.id);
+              }}
+              className={`rounded-xl border p-3 text-left transition ${
+                selected === item.id
+                  ? "border-blue-400/40 bg-blue-500/10"
+                  : "border-white/7 bg-white/2 hover:border-white/15"
+              }`}
+            >
+              <div className="text-sm font-medium text-slate-200">{item.name}</div>
+              {!simpleMode && (
+                <div className="mt-0.5 font-mono text-[10px] text-blue-300/70">{item.id}</div>
+              )}
+              <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-slate-500">
+                <span>{eraLabel(item.era)}</span>
+                {item.domain ? <span>· {item.domain}</span> : null}
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-slate-500">{item.description}</p>
+            </button>
+          ))}
+        </div>
+      </Disclosure>
+
+      <Disclosure
+        title="What will change"
+        summary={plan?.length ? `${plan.length} files` : "preview"}
+        defaultOpen={false}
+        storageKey="ade_recipes_preview"
+      >
         {recipe ? (
-          <div className="space-y-4">
+          <div className="space-y-4 px-4 pb-4 sm:px-5">
             {whyForSelected.length > 0 && (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-600">
@@ -531,14 +562,6 @@ export function RecipeWizard({
                 </div>
               </div>
             )}
-            <label className="block text-[11px] text-slate-500">
-              Project name (optional)
-              <input
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-                className="mt-1.5 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200"
-              />
-            </label>
             <div>
               <div className="text-[10px] uppercase tracking-wider text-slate-600">Toolchain</div>
               <div className="mt-2 space-y-1 text-xs text-slate-400">
@@ -597,14 +620,6 @@ export function RecipeWizard({
               />
               Replace existing AGENTS.md (keep off to preserve authority)
             </label>
-            <button
-              type="button"
-              onClick={() => onInitialize({ recipe: recipe.id, projectName, force })}
-              disabled={busy || !!planError}
-              className="w-full rounded-lg bg-violet-500 px-4 py-2.5 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
-            >
-              {busy ? "Initializing…" : `Initialize ${recipe.name}`}
-            </button>
 
             {lastResult ? (
               <div className="rounded-lg border border-white/8 bg-white/2 p-3">
@@ -630,9 +645,9 @@ export function RecipeWizard({
             ) : null}
           </div>
         ) : (
-          <div className="py-16 text-center text-xs text-slate-500">Loading recipes…</div>
+          <p className="px-4 pb-4 text-xs text-slate-500 sm:px-5">Select a recipe to preview.</p>
         )}
-      </section>
+      </Disclosure>
     </div>
   );
 }

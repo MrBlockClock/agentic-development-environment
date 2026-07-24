@@ -1,127 +1,263 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "../ipc";
 import { DesktopRequired } from "./DesktopRequired";
 
-const PRESETS = [
-  { label: "Docs", url: "https://docs.rs/" },
-  { label: "crates.io", url: "https://crates.io/" },
-  { label: "MDN", url: "https://developer.mozilla.org/" },
-  { label: "DuckDuckGo", url: "https://duckduckgo.com/" },
-];
-
-function normalizeUrl(raw: string): string {
+/** Prefer http for local servers; https for public hosts. */
+export function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return "";
-  if (trimmed.includes("://")) return trimmed;
-  return `https://${trimmed}`;
+  if (!trimmed) return "https://www.google.com/";
+  if (trimmed.includes("://") || trimmed.toLowerCase() === "about:blank") {
+    return trimmed;
+  }
+  const local =
+    /^localhost(?::\d+)?(?:\/.*)?$/i.test(trimmed) ||
+    /^127\.0\.0\.1(?::\d+)?(?:\/.*)?$/i.test(trimmed) ||
+    /^\[::1\](?::\d+)?(?:\/.*)?$/i.test(trimmed);
+  if (local) {
+    return `http://${trimmed}`;
+  }
+  if (/^[\w.-]+\.[a-z]{2,}([/:].*)?$/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
-export function BrowserView() {
-  const [url, setUrl] = useState("https://duckduckgo.com/");
-  const [openUrl, setOpenUrl] = useState<string | null>(null);
+function hostLabel(url: string): string {
+  try {
+    const parsed = new URL(normalizeUrl(url));
+    if (parsed.protocol === "about:") return "New tab";
+    return parsed.hostname.replace(/^www\./, "") || "Browser";
+  } catch {
+    return "Browser";
+  }
+}
+
+type BrowserViewProps = {
+  instanceId: string;
+  initialUrl?: string;
+  active?: boolean;
+  onTitleChange?: (title: string) => void;
+};
+
+/**
+ * In-ADE Chromium/WebView2 pane.
+ */
+export function BrowserView({
+  instanceId,
+  initialUrl = "https://www.google.com/",
+  active = true,
+  onTitleChange,
+}: BrowserViewProps) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const label = `ade-browser-${instanceId}`;
+  const [draft, setDraft] = useState(initialUrl);
+  const [current, setCurrent] = useState(initialUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const readyRef = useRef(false);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  const waitForHost = useCallback(async () => {
+    for (let i = 0; i < 30; i += 1) {
+      const el = hostRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width >= 8 && rect.height >= 8) return el;
+      }
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    }
+    return hostRef.current;
+  }, []);
+
+  const syncBounds = useCallback(async () => {
+    if (!isTauri() || !hostRef.current || !readyRef.current) return;
+    const rect = hostRef.current.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return;
+    try {
+      await invoke("browser_set_bounds", {
+        label,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+    } catch {
+      /* pane may not exist yet */
+    }
+  }, [label]);
+
+  const embed = useCallback(
+    async (url: string) => {
+      if (!isTauri()) return;
+      const host = await waitForHost();
+      if (!host) {
+        setError("Browser host not ready.");
+        return;
+      }
+      const rect = host.getBoundingClientRect();
+      const next = normalizeUrl(url);
+      setBusy(true);
+      setError(null);
+      try {
+        const opened = await invoke<string>("browser_embed", {
+          label,
+          url: next,
+          x: Math.max(0, rect.left),
+          y: Math.max(0, rect.top),
+          width: Math.max(120, rect.width || 640),
+          height: Math.max(120, rect.height || 480),
+        });
+        readyRef.current = true;
+        setReady(true);
+        setCurrent(opened);
+        setDraft(opened);
+        onTitleChange?.(hostLabel(opened));
+        if (!activeRef.current) {
+          await invoke("browser_set_visible", { label, visible: false });
+        } else {
+          await invoke("browser_set_visible", { label, visible: true });
+          await syncBounds();
+        }
+      } catch (reason) {
+        setError(String(reason));
+        setReady(false);
+        readyRef.current = false;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [label, onTitleChange, syncBounds, waitForHost],
+  );
+
+  const go = useCallback(
+    async (raw?: string) => {
+      const next = normalizeUrl(raw ?? draft);
+      if (!readyRef.current) {
+        await embed(next);
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const opened = await invoke<string>("browser_navigate", {
+          label,
+          url: next,
+        });
+        setCurrent(opened);
+        setDraft(opened);
+        onTitleChange?.(hostLabel(opened));
+        if (activeRef.current) {
+          await invoke("browser_set_visible", { label, visible: true });
+        }
+      } catch {
+        await embed(next);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [draft, embed, label, onTitleChange],
+  );
 
   useEffect(() => {
     if (!isTauri()) return;
-    void invoke<string | null>("browser_window_url")
-      .then((current) => {
-        if (current) {
-          setOpenUrl(current);
-          setUrl(current);
-        }
-      })
-      .catch(() => {
-        /* window may not exist yet */
-      });
-  }, []);
+    void embed(initialUrl);
+    return () => {
+      readyRef.current = false;
+      setReady(false);
+      void invoke("close_browser_window", { label }).catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per tab
+  }, [instanceId]);
+
+  useEffect(() => {
+    if (!isTauri() || !readyRef.current) return;
+    void invoke("browser_set_visible", { label, visible: active }).catch(
+      () => {},
+    );
+    if (active) void syncBounds();
+  }, [active, label, syncBounds]);
+
+  useEffect(() => {
+    if (!isTauri() || !hostRef.current) return;
+    const node = hostRef.current;
+    const ro = new ResizeObserver(() => {
+      if (activeRef.current) void syncBounds();
+    });
+    ro.observe(node);
+    const onWin = () => {
+      if (activeRef.current) void syncBounds();
+    };
+    window.addEventListener("resize", onWin);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onWin);
+    };
+  }, [syncBounds]);
 
   if (!isTauri()) {
     return <DesktopRequired view="Browser" />;
   }
 
-  const open = async (target?: string) => {
-    const next = normalizeUrl(target ?? url);
-    if (!next) {
-      setError("Enter a URL first.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const opened = await invoke<string>("open_browser_window", { url: next });
-      setOpenUrl(opened);
-      setUrl(opened);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-white/8 bg-[#0d121a] p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-100">In-app Browser</h2>
-            <p className="mt-1 max-w-xl text-xs leading-5 text-slate-500">
-              Opens a separate WebView2 / Chromium window (not the main ADE shell). Agents can
-              always use built-in <span className="font-mono text-slate-400">web_search</span> and{" "}
-              <span className="font-mono text-slate-400">web_fetch</span> without this window.
-            </p>
-          </div>
-          {openUrl && (
-            <span className="rounded-md border border-emerald-400/20 bg-emerald-400/8 px-2 py-1 text-[10px] text-emerald-200/90">
-              Window open
-            </span>
-          )}
-        </div>
-
-        <form
-          className="mt-4 flex flex-wrap gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void open();
-          }}
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/8 bg-[#0a0e14]">
+      <form
+        className="flex shrink-0 items-center gap-1.5 border-b border-white/8 px-2 py-1.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void go();
+        }}
+      >
+        <button
+          type="button"
+          title="Reload"
+          disabled={busy}
+          className="grid size-7 place-items-center rounded-md text-slate-500 hover:bg-white/6 hover:text-slate-200 disabled:opacity-40"
+          onClick={() => void go(current)}
         >
-          <input
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            placeholder="https://…"
-            className="min-w-[16rem] flex-1 rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-sm text-slate-200"
-          />
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
-          >
-            {busy ? "Opening…" : openUrl ? "Go" : "Open"}
-          </button>
-        </form>
+          ↻
+        </button>
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          spellCheck={false}
+          placeholder="Search Google or type a URL"
+          className="min-w-0 flex-1 rounded-md border border-white/10 bg-[#101620] px-2.5 py-1.5 text-[12px] text-slate-200 outline-hidden focus:border-blue-400/40"
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-md bg-blue-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+        >
+          {busy ? "…" : "Go"}
+        </button>
+      </form>
 
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.url}
-              type="button"
-              onClick={() => void open(preset.url)}
-              className="rounded-md border border-white/8 bg-white/3 px-2 py-1 text-[11px] text-slate-400 hover:bg-white/6 hover:text-slate-200"
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-
+      <div ref={hostRef} className="relative min-h-0 flex-1 bg-[#101620]">
+        {!ready && !error && (
+          <div className="absolute inset-0 grid place-items-center text-[12px] text-slate-500">
+            Starting Chromium…
+          </div>
+        )}
         {error && (
-          <p className="mt-3 text-xs text-red-300/90">{error}</p>
+          <div className="absolute inset-0 grid place-items-center p-6 text-center">
+            <div>
+              <p className="text-sm font-semibold text-slate-200">
+                Browser failed to start
+              </p>
+              <p className="mt-1 max-w-md text-[11px] text-red-300/90">{error}</p>
+              <button
+                type="button"
+                className="mt-3 rounded-md bg-blue-500 px-3 py-1.5 text-[11px] font-semibold text-white"
+                onClick={() => void embed("https://www.google.com/")}
+              >
+                Retry Google
+              </button>
+            </div>
+          </div>
         )}
-        {openUrl && (
-          <p className="mt-3 truncate font-mono text-[10px] text-slate-600" title={openUrl}>
-            {openUrl}
-          </p>
-        )}
-      </section>
+      </div>
     </div>
   );
 }

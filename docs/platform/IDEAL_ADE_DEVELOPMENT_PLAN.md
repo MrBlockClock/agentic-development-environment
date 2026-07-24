@@ -2,7 +2,7 @@
 
 **Schema:** `ade.ideal-dev-plan/v1`  
 **Status:** Active · Ideal spine shipped · **Multi-host north star** (DEC-A-010) · Orch **G0–G4** · Effort **B0–B4** · 2026-07-22  
-**Canvas:** **ADE-multihost-gameplan.canvas.tsx** (master) · Ideal-ADE-development-plan.canvas.tsx (archive) · ADE-orchestration-eng-goal.canvas.tsx  
+**Canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `Ideal-ADE-development-plan` · `ADE-orchestration-eng-goal` · `ADE-multihost-gameplan` under `canvases/_archive/`  
 **ADRs:** `docs/decisions/DEC-A-010` … `DEC-A-012` · Layout: `docs/architecture/REPO_LAYOUT.md`  
 **Depends on:** IDEAL_ADE_MASTERPLAN.md · COMPETITIVE_RESEARCH_PACK.md · protocol scorecard · **ORCHESTRATION_ENG_GOAL_PLAN.md**
 
@@ -23,7 +23,7 @@ Do **not** fork Electron/VS Code/Zed as ADE core. Coexist with Cursor — do not
 
 ## Multi-host phases (forward)
 
-See canvas **ADE-multihost-gameplan** — M0 identity · M1 harness · M2 `ade acp` · M3 Open-in · M4 Orchestrator · M5 cohesion.
+See canvas **ADE-master-gameplan** (live) · archive **ADE-multihost-gameplan** — M0 identity · M1 harness · M2 `ade acp` · M3 Open-in · M4 Orchestrator · M5 cohesion.
 
 ## Early goal: ADE builds itself + Dev/Debug
 
@@ -256,14 +256,14 @@ Goal: get **editor + extensions** without abandoning ADE’s harness identity.
 
 | WP | Work | Status |
 |----|------|--------|
-| WP37 | `docs/platform/N3_DOGFOOD_AUTOMATE.md` + canvas ADE-n3-dogfood | Done |
+| WP37 | `docs/platform/N3_DOGFOOD_AUTOMATE.md` + canvas ADE-n3-dogfood (now `_archive/`) | Done |
 | WP38 | `scripts/dogfood-automate.ps1` (Automate + owned `.ade/dogfood` + G3) | Done |
 | WP39 | Debug Home chip “Dogfood Automate” | Done |
 | WP40 | Live pass evidence on ADE repo (`scripts/dogfood-automate.ps1` exit 0) | Done |
 
 ## Orchestration / eng-goal (DNA alignment)
 
-Canonical: [`ORCHESTRATION_ENG_GOAL_PLAN.md`](./ORCHESTRATION_ENG_GOAL_PLAN.md) · canvas `ADE-orchestration-eng-goal`.
+Canonical: [`ORCHESTRATION_ENG_GOAL_PLAN.md`](./ORCHESTRATION_ENG_GOAL_PLAN.md) · live `ADE-master-gameplan` · archive `ADE-orchestration-eng-goal`.
 
 | Phase | Name | Status |
 |-------|------|--------|

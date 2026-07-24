@@ -39,6 +39,8 @@ if (-not (Test-Path $latestPath)) {
   exit 1
 }
 
+# Dogfood uses $0 rates; default session/daily caps still apply — allow unpriced.
+$env:ADE_ALLOW_UNPRICED = "1"
 $env:RUST_LOG = "error"
 Write-Host "-- ade handoff resume (host next_safe + thrift prompt) --"
 $resumeJson = & $ade handoff resume --json 2>&1 | Out-String
@@ -117,6 +119,7 @@ Do not rebuild binaries. Prefer one write then stop.
 "@
 
 Write-Host "-- agent turn (act + owned paths + max-steps $MaxSteps) --"
+$env:RUST_LOG = "error"
 $out = & $ade agent `
   --provider $Provider `
   --base-url $BaseUrl `
@@ -125,8 +128,8 @@ $out = & $ade agent `
   --approve-owned-paths `
   --owned-path $OwnedPath `
   --max-steps $MaxSteps `
-  --input-cost-per-mtok 0 `
-  --output-cost-per-mtok 0 `
+  --input-cost-per-mtok 0.01 `
+  --output-cost-per-mtok 0.01 `
   $agentPrompt 2>&1 | Out-String
 
 $code = $LASTEXITCODE

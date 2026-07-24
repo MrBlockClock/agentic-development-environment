@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* KaTeX in assistant markdown — keep formulas readable on the dark surface. */
+.ade-assistant-md .katex {
+  font-size: 1.05em;
+  color: #e2e8f0;
+}
+.ade-assistant-md .katex-display {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 :root {
   color-scheme: dark;
   font-family:
@@ -38,7 +49,9 @@ body {
 
 button,
 select {
-  font: inherit;
+  /* Do not use `font: inherit` — it overrides Tailwind text-* size utilities. */
+  font-family: inherit;
+  line-height: inherit;
 }
 
 button:focus-visible,

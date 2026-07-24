@@ -2,7 +2,7 @@
 
 **Schema:** `ade.orch-eng-goal/v1`  
 **Status:** G0–G4 shipped (G4 = isolated Apply worktree; no Mission Control)  
-**Canvas:** `ADE-orchestration-eng-goal.canvas.tsx`  
+**Canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `canvases/_archive/ADE-orchestration-eng-goal.canvas.tsx`  
 **Depends on:** `IDEAL_ADE_DEVELOPMENT_PLAN.md` · competitive research pack · `AGENTS.md` Product DNA
 
 ## Verdict

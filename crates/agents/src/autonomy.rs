@@ -63,7 +63,7 @@ impl AutonomyLevel {
                 "AUTONOMY=Observe: read-only. Explain and point at evidence. Do not propose file patches or claim you applied changes."
             }
             Self::Propose => {
-                "AUTONOMY=Propose (Suggest): read tools + shell__run_command in inspect mode (list/pwd/Get-Content). Use cwd for Desktop/home paths. Do not write/move/mkdir via shell — ask the user to switch to Apply for that. When offering choices, prefer a fenced ```ade.next-actions block with schema ade.next-actions/v1 and ≥2 items (label + optional prompt); otherwise a short numbered list. Prefer Queue PLAN→tasks on Desktop rather than self-claiming work."
+                "AUTONOMY=Propose (Suggest): read tools + shell__run_command in inspect mode (list/pwd/Get-Content). Only set cwd to Desktop/home when the user asks about those paths. Do not write/move/mkdir via shell — ask the user to switch to Apply for that. When offering choices, prefer a fenced ```ade.next-actions block with schema ade.next-actions/v1 and ≥2 items (label + optional prompt); otherwise a short numbered list. Prefer Queue PLAN→tasks over self-claiming work when role-split applies."
             }
             Self::Act => {
                 "AUTONOMY=Act (Apply): human approved writes for this turn. Prefer approved PLAN owned_paths / leases when present; if none, workspace writes are still allowed (AGENTS.md + sensitive-path policy still apply). shell__run_command is full (minus dangerous wipes); set cwd for Desktop/home. Execute ONE claimed task when role-split is active. Prefer verify after mutations."

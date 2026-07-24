@@ -23,4 +23,6 @@ pub mod smoke;
 pub mod spend;
 pub mod start_prompt;
 pub mod turn;
+pub mod vision;
 pub mod web;
+pub mod workspace_scaffold;

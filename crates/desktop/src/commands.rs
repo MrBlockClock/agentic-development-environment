@@ -8,6 +8,7 @@ use ade_core::verify::{VerifyGate, VerifyResult};
 use ade_workflow::verify::VerifyRunner;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tauri::{ipc::Channel, AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 
@@ -16,6 +17,8 @@ pub struct AppState {
     pub mcp: McpHost,
     pub key_vault: Arc<dyn ade_db::secrets::ProviderKeyVault>,
     pub pty: crate::pty::PtyHub,
+    /// Cancel flag for the in-flight `run_agent_turn` (if any).
+    pub turn_cancel: RwLock<Option<Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -63,10 +66,12 @@ impl AppState {
         let current = std::env::current_dir()
             .ok()
             .filter(|root| is_ade_workspace(root));
-        let source_root = Self::ade_source_root();
+        // First-run / no preferred: land in Default scratch, not ADE source.
+        // Dogfooders still use "Open ADE source" or a remembered preferred root.
         let workspace_root = configured
             .or(current)
-            .or(source_root)
+            .or_else(|| ensure_default_workspace().ok())
+            .or_else(Self::ade_source_root)
             .unwrap_or_else(|| PathBuf::from("."))
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from("."));
@@ -106,6 +111,7 @@ impl AppState {
             mcp: McpHost::new(),
             key_vault,
             pty: crate::pty::PtyHub::default(),
+            turn_cancel: RwLock::new(None),
         }
     }
 }
@@ -114,16 +120,74 @@ fn is_ade_workspace(root: &Path) -> bool {
     root.is_dir() && root.join("AGENTS.md").is_file()
 }
 
+/// Machine-local ADE home (`%LOCALAPPDATA%/ade` or `~/.local/share/ade`).
+fn ade_machine_home() -> Option<PathBuf> {
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        return Some(PathBuf::from(base).join("ade"));
+    }
+    user_home_dir().map(|home| home.join(".local").join("share").join("ade"))
+}
+
 fn preferred_workspace_path() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|base| base.join("ade").join("workspace-root.txt"))
+    ade_machine_home().map(|base| base.join("workspace-root.txt"))
 }
 
 fn recent_workspaces_path() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|base| base.join("ade").join("recent-workspaces.json"))
+    ade_machine_home().map(|base| base.join("recent-workspaces.json"))
+}
+
+/// Built-in scratch workspace: `%LOCALAPPDATA%/ade/workspaces/Default`.
+fn default_workspace_path() -> Option<PathBuf> {
+    ade_machine_home().map(|base| base.join("workspaces").join("Default"))
+}
+
+fn is_default_workspace(root: &Path) -> bool {
+    default_workspace_path().is_some_and(|default| same_path(&default, root))
+}
+
+fn default_agents_md(root: &Path) -> String {
+    format!(
+        r#"# Default — Scratch workspace
+
+This is ADE's built-in starting folder. Use it to try chats, paste files, and explore before you create a real project.
+
+## Golden Path
+
+- **Root:** `{root}`
+- For a new app/demo website: call **workspace__create_named**, then write files under **Apply** in the next turn — do not dump full project blueprints into chat.
+- Open a local server with **browser__open** and `http://localhost:PORT`.
+- Or use **New project…** / **Open folder…** under Workspaces.
+
+## Notes
+
+- Chat and `.ade/` state here are local to this scratch pad.
+- Switching to Default never deletes your other project folders.
+"#,
+        root = root.display()
+    )
+}
+
+/// Ensure the Default scratch workspace exists (AGENTS.md + `.ade/` identity).
+fn ensure_default_workspace() -> Result<PathBuf, String> {
+    let root = default_workspace_path()
+        .ok_or_else(|| "could not resolve Default workspace path".to_string())?;
+    if !root.exists() {
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("create Default workspace: {error}"))?;
+    }
+    if !root.is_dir() {
+        return Err(format!(
+            "Default workspace path is not a directory: {}",
+            root.display()
+        ));
+    }
+    let agents = root.join("AGENTS.md");
+    if !agents.is_file() {
+        std::fs::write(&agents, default_agents_md(&root))
+            .map_err(|error| format!("write Default AGENTS.md: {error}"))?;
+    }
+    ensure_workspace_identity(&root, "Default")?;
+    Ok(root.canonicalize().unwrap_or(root))
 }
 
 fn load_preferred_workspace() -> Option<PathBuf> {
@@ -349,6 +413,7 @@ pub struct ProviderKeySmokeResult {
 pub struct DashboardSnapshot {
     pub workspace_root: String,
     pub is_dogfood: bool,
+    pub is_default: bool,
     pub ade_source_root: Option<String>,
     pub has_recipe: bool,
     pub has_provider_key: bool,
@@ -394,6 +459,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
     Ok(DashboardSnapshot {
         workspace_root: workspace_root.display().to_string(),
         is_dogfood,
+        is_default: is_default_workspace(&workspace_root),
         ade_source_root: ade_source.map(|path| path.display().to_string()),
         has_recipe,
         has_provider_key,
@@ -429,6 +495,7 @@ pub struct WorkspaceEntry {
     pub has_recipe: bool,
     pub is_current: bool,
     pub is_ade_source: bool,
+    pub is_default: bool,
 }
 
 #[derive(Serialize)]
@@ -458,11 +525,27 @@ pub fn open_ade_on_itself(state: State<'_, AppState>) -> Result<DogfoodOpenResul
 }
 
 #[tauri::command]
+pub fn open_default_workspace(state: State<'_, AppState>) -> Result<DogfoodOpenResult, String> {
+    let root = ensure_default_workspace()?;
+    let root = state.set_workspace_root(root)?;
+    Ok(DogfoodOpenResult {
+        workspace_root: root.display().to_string(),
+        already_dogfood: false,
+    })
+}
+
+#[tauri::command]
 pub fn list_workspaces(state: State<'_, AppState>) -> Result<WorkspaceList, String> {
     let current = state.workspace_root();
     let ade_source = AppState::ade_source_root();
+    let default_root = ensure_default_workspace().ok();
     let mut paths: Vec<PathBuf> = Vec::new();
     paths.push(current.clone());
+    if let Some(default) = &default_root {
+        if !paths.iter().any(|item| same_path(item, default)) {
+            paths.push(default.clone());
+        }
+    }
     for recent in load_recent_workspaces() {
         if !paths.iter().any(|item| same_path(item, &recent)) {
             paths.push(recent);
@@ -479,11 +562,16 @@ pub fn list_workspaces(state: State<'_, AppState>) -> Result<WorkspaceList, Stri
             let has_agents = path.join("AGENTS.md").is_file();
             let has_recipe = path.join(".ade").join("recipe.json").is_file();
             WorkspaceEntry {
-                name: workspace_display_name(&path),
+                name: if is_default_workspace(&path) {
+                    "Default".to_string()
+                } else {
+                    workspace_display_name(&path)
+                },
                 is_current: same_path(&path, &current),
                 is_ade_source: ade_source
                     .as_ref()
                     .is_some_and(|source| same_path(source, &path)),
+                is_default: is_default_workspace(&path),
                 has_agents,
                 has_recipe,
                 path: path.display().to_string(),
@@ -1033,10 +1121,11 @@ pub async fn mcp_call_tool(
         .map_err(|error| error.to_string())
 }
 
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub async fn run_agent_turn(
-    state: State<'_, AppState>,
+/// Bundled turn request — keeps Channel as a sibling IPC arg so bools like
+/// `allowUnpriced` cannot be confused with the Channel map payload.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunAgentTurnArgs {
     prompt: String,
     provider: String,
     base_url: String,
@@ -1057,7 +1146,7 @@ pub async fn run_agent_turn(
     approve_owned_paths: Option<bool>,
     owned_paths: Option<Vec<String>>,
     preferred_shell_cwd: Option<String>,
-    // G4: optional isolated checkout; leases/PLAN stay on primary via coordination_root.
+    /// G4: optional isolated checkout; leases/PLAN stay on primary via coordination_root.
     execution_root: Option<String>,
     allow_unpriced: Option<bool>,
     approved_risk_categories: Option<Vec<String>>,
@@ -1065,8 +1154,47 @@ pub async fn run_agent_turn(
     claimed_task_id: Option<String>,
     waive_queue: Option<bool>,
     slot_override: Option<String>,
+    /// Absolute or workspace-relative image paths for multimodal content.
+    image_paths: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub async fn run_agent_turn(
+    state: State<'_, AppState>,
+    args: RunAgentTurnArgs,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
+    let RunAgentTurnArgs {
+        prompt,
+        provider,
+        base_url,
+        model,
+        input_cost_per_mtok,
+        output_cost_per_mtok,
+        context_limit,
+        output_limit,
+        session_cap_usd,
+        daily_cap_usd,
+        profile,
+        lease_agent_id,
+        autonomy,
+        max_steps,
+        max_tokens,
+        verify_on_complete,
+        verify_gate,
+        approve_owned_paths,
+        owned_paths,
+        preferred_shell_cwd,
+        execution_root,
+        allow_unpriced,
+        approved_risk_categories,
+        approved_risk_tiers,
+        claimed_task_id,
+        waive_queue,
+        slot_override,
+        image_paths,
+    } = args;
+
     if prompt.trim().is_empty() {
         return Err("prompt cannot be empty".into());
     }
@@ -1222,6 +1350,7 @@ pub async fn run_agent_turn(
         workspace_root: execution_root.clone(),
         owned_paths,
         handoff_chars: 1_500,
+        image_paths: image_paths.unwrap_or_default(),
     })
     .mcp(state.mcp.clone())
     .ledger(ledger)
@@ -1245,7 +1374,26 @@ pub async fn run_agent_turn(
             builder = builder.lease_agent(agent_id);
         }
     }
-    let service = builder.prepare().await.map_err(|error| error.to_string())?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = state
+            .turn_cancel
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(Arc::clone(&cancel));
+    }
+    builder = builder.cancel_flag(Arc::clone(&cancel));
+    let service = match builder.prepare().await {
+        Ok(service) => service,
+        Err(error) => {
+            let mut slot = state
+                .turn_cancel
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *slot = None;
+            return Err(error.to_string());
+        }
+    };
 
     let mut events = service.start();
     while let Some(event) = events.recv().await {
@@ -1253,12 +1401,41 @@ pub async fn run_agent_turn(
             event,
             AgentEvent::Failed { .. } | AgentEvent::Cancelled { .. } | AgentEvent::Completed { .. }
         );
-        on_event.send(event).map_err(|error| error.to_string())?;
+        let send_result = on_event.send(event).map_err(|error| error.to_string());
+        if terminal {
+            let mut slot = state
+                .turn_cancel
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *slot = None;
+        }
+        send_result?;
         if terminal {
             break;
         }
     }
+    {
+        let mut slot = state
+            .turn_cancel
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = None;
+    }
     Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_agent_turn(state: State<'_, AppState>) -> bool {
+    let guard = state
+        .turn_cancel
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(flag) = guard.as_ref() {
+        flag.store(true, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
 }
 
 #[tauri::command]
@@ -1399,23 +1576,180 @@ fn parse_browser_url(raw: &str) -> Result<Url, String> {
     if trimmed.is_empty() {
         return Err("url is required".into());
     }
+    if trimmed.eq_ignore_ascii_case("about:blank") {
+        return Url::parse("about:blank").map_err(|error| format!("invalid url: {error}"));
+    }
+    let local_host = trimmed.starts_with("localhost")
+        || trimmed.starts_with("127.0.0.1")
+        || trimmed.starts_with("[::1]");
     let with_scheme = if trimmed.contains("://") {
         trimmed.to_string()
-    } else {
+    } else if local_host {
+        format!("http://{trimmed}")
+    } else if trimmed.contains('.') {
         format!("https://{trimmed}")
+    } else {
+        format!(
+            "https://www.google.com/search?q={}",
+            urlencoding_fallback(trimmed)
+        )
     };
     let parsed = Url::parse(&with_scheme).map_err(|error| format!("invalid url: {error}"))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("only http and https urls are allowed".into());
+    if !matches!(parsed.scheme(), "http" | "https" | "about") {
+        return Err("only http, https, and about:blank are allowed".into());
     }
     Ok(parsed)
 }
 
-/// Open (or focus + navigate) a dedicated Chromium/WebView2 window for browsing.
+fn urlencoding_fallback(raw: &str) -> String {
+    raw.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            ' ' => "+".to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect()
+}
+
+fn resolve_browser_label(label: Option<String>) -> String {
+    let trimmed = label.unwrap_or_default();
+    let trimmed = trimmed.trim();
+    if trimmed.is_empty() {
+        return BROWSER_WINDOW_LABEL.to_string();
+    }
+    if trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        trimmed.to_string()
+    } else {
+        BROWSER_WINDOW_LABEL.to_string()
+    }
+}
+
+fn main_window(app: &AppHandle) -> Result<tauri::Window, String> {
+    if let Some(window) = app.get_window("main") {
+        return Ok(window);
+    }
+    let webview = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window missing".to_string())?;
+    Ok(webview.as_ref().window())
+}
+
+/// Embed (or update) a Chromium/WebView2 pane inside the main ADE window.
+/// Async on purpose: sync commands run on the UI thread; `Window::add_child`
+/// also schedules on that thread and would deadlock if called synchronously.
 #[tauri::command]
-pub fn open_browser_window(app: AppHandle, url: String) -> Result<String, String> {
+pub async fn browser_embed(
+    app: AppHandle,
+    label: String,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<String, String> {
+    let label = resolve_browser_label(Some(label));
     let parsed = parse_browser_url(&url)?;
-    if let Some(window) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
+    let width = width.max(32.0);
+    let height = height.max(32.0);
+    let position = tauri::LogicalPosition::new(x.max(0.0), y.max(0.0));
+    let size = tauri::LogicalSize::new(width, height);
+
+    // Close legacy separate-window browsers with the same label.
+    if let Some(window) = app.get_webview_window(&label) {
+        if window.label() == label && app.get_webview(&label).is_none() {
+            let _ = window.close();
+        }
+    }
+
+    if let Some(webview) = app.get_webview(&label) {
+        webview
+            .set_position(position)
+            .map_err(|error| format!("browser position: {error}"))?;
+        webview
+            .set_size(size)
+            .map_err(|error| format!("browser size: {error}"))?;
+        webview
+            .navigate(parsed.clone())
+            .map_err(|error| format!("browser navigate: {error}"))?;
+        let _ = webview.show();
+        return Ok(parsed.to_string());
+    }
+
+    let parent = main_window(&app)?;
+    let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(parsed.clone()));
+    parent
+        .add_child(builder, position, size)
+        .map_err(|error| format!("embed browser: {error}"))?;
+    Ok(parsed.to_string())
+}
+
+#[tauri::command]
+pub fn browser_set_bounds(
+    app: AppHandle,
+    label: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let label = resolve_browser_label(Some(label));
+    let Some(webview) = app.get_webview(&label) else {
+        return Ok(());
+    };
+    webview
+        .set_position(tauri::LogicalPosition::new(x.max(0.0), y.max(0.0)))
+        .map_err(|error| format!("browser position: {error}"))?;
+    webview
+        .set_size(tauri::LogicalSize::new(width.max(32.0), height.max(32.0)))
+        .map_err(|error| format!("browser size: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_navigate(app: AppHandle, label: String, url: String) -> Result<String, String> {
+    let label = resolve_browser_label(Some(label));
+    let parsed = parse_browser_url(&url)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "browser pane not found".to_string())?;
+    webview
+        .navigate(parsed.clone())
+        .map_err(|error| format!("browser navigate: {error}"))?;
+    Ok(parsed.to_string())
+}
+
+#[tauri::command]
+pub fn browser_set_visible(app: AppHandle, label: String, visible: bool) -> Result<(), String> {
+    let label = resolve_browser_label(Some(label));
+    let Some(webview) = app.get_webview(&label) else {
+        return Ok(());
+    };
+    if visible {
+        webview
+            .show()
+            .map_err(|error| format!("browser show: {error}"))?;
+    } else {
+        webview
+            .hide()
+            .map_err(|error| format!("browser hide: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Open (or focus + navigate) a dedicated Chromium/WebView2 window for browsing.
+/// Kept for compatibility; prefer [`browser_embed`] for in-shell browsing.
+#[tauri::command]
+pub fn open_browser_window(
+    app: AppHandle,
+    url: String,
+    label: Option<String>,
+) -> Result<String, String> {
+    let parsed = parse_browser_url(&url)?;
+    let window_label = resolve_browser_label(label);
+    if let Some(window) = app.get_webview_window(&window_label) {
         window
             .navigate(parsed.clone())
             .map_err(|error| format!("navigate browser: {error}"))?;
@@ -1423,28 +1757,51 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<String, String
         let _ = window.set_focus();
         return Ok(parsed.to_string());
     }
-    WebviewWindowBuilder::new(
-        &app,
-        BROWSER_WINDOW_LABEL,
-        WebviewUrl::External(parsed.clone()),
-    )
-    .title("ADE Browser")
-    .inner_size(1180.0, 820.0)
-    .resizable(true)
-    .build()
-    .map_err(|error| format!("open browser: {error}"))?;
+    WebviewWindowBuilder::new(&app, &window_label, WebviewUrl::External(parsed.clone()))
+        .title("ADE Browser")
+        .inner_size(1180.0, 820.0)
+        .resizable(true)
+        .build()
+        .map_err(|error| format!("open browser: {error}"))?;
     Ok(parsed.to_string())
 }
 
 #[tauri::command]
-pub fn browser_window_url(app: AppHandle) -> Result<Option<String>, String> {
-    let Some(window) = app.get_webview_window(BROWSER_WINDOW_LABEL) else {
+pub fn browser_window_url(
+    app: AppHandle,
+    label: Option<String>,
+) -> Result<Option<String>, String> {
+    let window_label = resolve_browser_label(label.clone());
+    if let Some(webview) = app.get_webview(&window_label) {
+        return webview
+            .url()
+            .map(|url| Some(url.to_string()))
+            .map_err(|error| format!("browser url: {error}"));
+    }
+    let Some(window) = app.get_webview_window(&window_label) else {
         return Ok(None);
     };
     window
         .url()
         .map(|url| Some(url.to_string()))
         .map_err(|error| format!("browser url: {error}"))
+}
+
+#[tauri::command]
+pub fn close_browser_window(app: AppHandle, label: Option<String>) -> Result<(), String> {
+    let window_label = resolve_browser_label(label);
+    if let Some(webview) = app.get_webview(&window_label) {
+        webview
+            .close()
+            .map_err(|error| format!("close browser: {error}"))?;
+        return Ok(());
+    }
+    if let Some(window) = app.get_webview_window(&window_label) {
+        window
+            .close()
+            .map_err(|error| format!("close browser: {error}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -2450,6 +2807,286 @@ pub fn workspace_text_diff(
     })
 }
 
+const CHAT_INBOX_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedAttachment {
+    pub name: String,
+    pub path: String,
+    pub absolute: String,
+    pub bytes: u64,
+    pub staged: bool,
+    #[serde(default)]
+    pub is_dir: bool,
+}
+
+fn sanitize_inbox_name(name: &str) -> String {
+    let base = Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "file".into()
+    } else {
+        cleaned
+    }
+}
+
+fn chat_inbox_dir(root: &Path) -> Result<PathBuf, String> {
+    let dir = root.join(".ade").join("inbox");
+    std::fs::create_dir_all(&dir).map_err(|error| format!("create .ade/inbox: {error}"))?;
+    Ok(dir)
+}
+
+fn path_under_root(root: &Path, candidate: &Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    let Ok(cand) = candidate.canonicalize() else {
+        return false;
+    };
+    cand.starts_with(&root)
+}
+
+/// Stage a file for chat: keep workspace paths; copy outsiders into `.ade/inbox/`.
+#[tauri::command]
+pub fn chat_stage_path(
+    state: State<'_, AppState>,
+    source_path: String,
+) -> Result<StagedAttachment, String> {
+    let root = state.workspace_root();
+    let source = PathBuf::from(source_path.trim());
+    if source_path.trim().is_empty() {
+        return Err("path required".into());
+    }
+    if !source.exists() {
+        return Err(format!("path not found: {}", source.display()));
+    }
+    let meta = std::fs::metadata(&source).map_err(|error| error.to_string())?;
+    let is_dir = meta.is_dir();
+    if !is_dir && !meta.is_file() {
+        return Err(format!("not a file or folder: {}", source.display()));
+    }
+    if !is_dir && meta.len() > CHAT_INBOX_MAX_BYTES {
+        return Err(format!(
+            "file too large ({} bytes; max {CHAT_INBOX_MAX_BYTES})",
+            meta.len()
+        ));
+    }
+    let name = source
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(if is_dir { "folder" } else { "file" })
+        .to_string();
+    if let Some(reason) = refuse_attachment_name(&name) {
+        return Err(reason);
+    }
+
+    if path_under_root(&root, &source) {
+        let absolute = source
+            .canonicalize()
+            .unwrap_or_else(|_| source.clone())
+            .display()
+            .to_string();
+        let root_abs = root.canonicalize().unwrap_or_else(|_| root.clone());
+        let path = PathBuf::from(&absolute)
+            .strip_prefix(&root_abs)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| absolute.clone());
+        return Ok(StagedAttachment {
+            name,
+            path,
+            absolute,
+            bytes: if is_dir { 0 } else { meta.len() },
+            staged: false,
+            is_dir,
+        });
+    }
+
+    if is_dir {
+        // Outside-workspace folders: attach as absolute path (no recursive copy).
+        let absolute = source
+            .canonicalize()
+            .unwrap_or_else(|_| source.clone())
+            .display()
+            .to_string();
+        return Ok(StagedAttachment {
+            name,
+            path: absolute.clone(),
+            absolute,
+            bytes: 0,
+            staged: false,
+            is_dir: true,
+        });
+    }
+
+    let inbox = chat_inbox_dir(&root)?;
+    let safe = sanitize_inbox_name(&name);
+    let dest_name = format!("{}-{}", chrono_lite_stamp(), safe);
+    let dest = inbox.join(&dest_name);
+    std::fs::copy(&source, &dest).map_err(|error| format!("copy to inbox: {error}"))?;
+    let absolute = dest.canonicalize().unwrap_or(dest).display().to_string();
+    Ok(StagedAttachment {
+        name,
+        path: format!(".ade/inbox/{dest_name}"),
+        absolute,
+        bytes: meta.len(),
+        staged: true,
+        is_dir: false,
+    })
+}
+
+/// Write pasted/dropped bytes into `.ade/inbox/` (no native path available).
+#[tauri::command]
+pub fn chat_stage_bytes(
+    state: State<'_, AppState>,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<StagedAttachment, String> {
+    let root = state.workspace_root();
+    if bytes.len() as u64 > CHAT_INBOX_MAX_BYTES {
+        return Err(format!(
+            "file too large ({} bytes; max {CHAT_INBOX_MAX_BYTES})",
+            bytes.len()
+        ));
+    }
+    let safe = sanitize_inbox_name(&file_name);
+    if let Some(reason) = refuse_attachment_name(&safe) {
+        return Err(reason);
+    }
+    let inbox = chat_inbox_dir(&root)?;
+    let dest = inbox.join(format!("{}-{}", chrono_lite_stamp(), safe));
+    std::fs::write(&dest, &bytes).map_err(|error| format!("write inbox: {error}"))?;
+    let absolute = dest
+        .canonicalize()
+        .unwrap_or(dest.clone())
+        .display()
+        .to_string();
+    let name = dest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&safe)
+        .to_string();
+    Ok(StagedAttachment {
+        name: safe.clone(),
+        path: format!(".ade/inbox/{name}"),
+        absolute,
+        bytes: bytes.len() as u64,
+        staged: true,
+        is_dir: false,
+    })
+}
+
+fn refuse_attachment_name(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if lower == ".env" || lower.starts_with(".env.") {
+        return Some(format!("refused secret-looking file: {name}"));
+    }
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(
+        ext.as_str(),
+        "pem" | "key" | "p12" | "pfx" | "exe" | "dll" | "bat" | "cmd" | "msi" | "scr"
+    ) {
+        return Some(format!("refused blocked type (.{ext}): {name}"));
+    }
+    None
+}
+
+fn chrono_lite_stamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{ms}")
+}
+
+/// Open a local path or URL with the OS default handler.
+#[tauri::command]
+pub fn chat_open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path required".into());
+    }
+    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", trimmed])
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg(trimmed)
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            std::process::Command::new("xdg-open")
+                .arg(trimmed)
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+    }
+    let raw = PathBuf::from(trimmed);
+    let p = if raw.is_absolute() {
+        raw
+    } else {
+        state.workspace_root().join(raw)
+    };
+    if !p.exists() {
+        return Err(format!("path not found: {trimmed}"));
+    }
+    let open_target = p.display().to_string();
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &open_target])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&open_target)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&open_target)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("chat_open_path unsupported on this platform".into())
+}
+
 fn current_branch(root: &std::path::Path) -> Option<String> {
     std::process::Command::new("git")
         .args(["branch", "--show-current"])
@@ -2580,8 +3217,14 @@ mod tests {
     #[test]
     fn discovers_a_workspace_root() {
         let state = AppState::discover();
-        assert!(state.workspace_root().join("Cargo.toml").is_file());
-        assert!(state.workspace_root().join("AGENTS.md").is_file());
+        let root = state.workspace_root();
+        // Preferred / Default scratch are valid ADE workspaces (AGENTS.md) but may
+        // not be the monorepo — do not require Cargo.toml.
+        assert!(
+            is_ade_workspace(&root),
+            "expected AGENTS.md workspace, got {}",
+            root.display()
+        );
     }
 
     #[test]
@@ -2721,5 +3364,19 @@ mod tests {
         let identity2 = std::fs::read_to_string(root.join(".ade").join("workspace.json")).unwrap();
         assert!(identity2.contains("BoxingLove"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ensure_default_workspace_creates_agents_and_identity() {
+        // Uses real machine home when available; skip soft if path helpers fail.
+        let Ok(root) = ensure_default_workspace() else {
+            return;
+        };
+        assert!(root.join("AGENTS.md").is_file());
+        assert!(root.join(".ade").join("workspace.json").is_file());
+        assert!(is_default_workspace(&root));
+        // Idempotent
+        let again = ensure_default_workspace().unwrap();
+        assert!(same_path(&root, &again));
     }
 }

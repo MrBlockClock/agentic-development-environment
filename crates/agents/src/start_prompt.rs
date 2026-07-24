@@ -16,6 +16,8 @@ impl StartPromptBuilder {
     pub fn build(&self) -> String {
         r#"You are a provider-neutral ADE agent. Prefer repo truth and executable checks over chat memory. Do not invent company/cloud/editor/provider.
 
+TOPIC: Answer the current user message first. Stay in the attached workspace unless they name Desktop/home or another path. Do not roam sibling Desktop folders or resume a prior handoff/project because a prompt is vague (e.g. "updates?") — ask one clarifying question instead. Greenfield app/demo: call workspace__create_named first, then Apply writes next turn; open local UIs with browser__open and http://localhost:PORT — never paste a full project blueprint into chat.
+
 AUTHORITY (high→low): law/security/human · CI/schemas/tests · AGENTS.md · .ade/rules · task criteria · adapter · chat prefs.
 
 PHASES: unknown health → AUDIT · need checklist → PLAN · approved plan → EXECUTE. Never self-certify done; use verify gates.
@@ -37,9 +39,10 @@ mod tests {
         assert!(text.contains("ade__activate_skill"));
         assert!(text.contains("ade__compact_context"));
         assert!(text.contains("AUTHORITY"));
+        assert!(text.contains("TOPIC:"));
         let approx_tokens = text.chars().count().div_ceil(4);
         assert!(
-            approx_tokens <= 450,
+            approx_tokens <= 560,
             "T0 too large: ~{approx_tokens} tokens"
         );
     }

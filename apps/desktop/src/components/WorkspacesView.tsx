@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
 import { invoke, isTauri } from "../ipc";
 import { DesktopRequired } from "./DesktopRequired";
+import { Disclosure } from "./ui";
 
 export type WorkspaceEntry = {
   path: string;
@@ -10,6 +11,7 @@ export type WorkspaceEntry = {
   has_recipe: boolean;
   is_current: boolean;
   is_ade_source: boolean;
+  is_default: boolean;
 };
 
 type WorkspaceList = {
@@ -44,7 +46,7 @@ export function WorkspacesView({
 }: {
   onOpened: (intent?: WorkspaceOpenIntent) => void;
   onOpenEnvironment: () => void;
-  /** Open with the New workspace form already expanded (header + Workspace). */
+  /** Open with the New workspace form already expanded (header shortcut). */
   startWithNew?: boolean;
   onStartWithNewConsumed?: () => void;
 }) {
@@ -133,12 +135,12 @@ export function WorkspacesView({
   const createNamed = async () => {
     const name = suggestFolderName(newName);
     if (!name) {
-      setError("Enter a workspace name (e.g. BoxingLove).");
+      setError("Enter a project name (e.g. BoxingLove).");
       return;
     }
     const parent = newParent.trim() || defaults?.parent || "";
     if (!parent) {
-      setError("Choose a parent folder (Desktop is the default).");
+      setError("Choose where to put the folder (Desktop is fine).");
       return;
     }
     setBusy(true);
@@ -164,27 +166,27 @@ export function WorkspacesView({
     const selected = await open({
       directory: true,
       multiple: false,
-      title: "Open ADE workspace folder",
+      title: "Open project folder",
     });
     if (!selected || Array.isArray(selected)) return;
-    await openPath(selected, "audit");
+    await openPath(selected, "work");
   };
 
   const pickAdopt = async () => {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: "Adopt existing folder as ADE workspace",
+      title: "Choose a folder to set up with ADE",
     });
     if (!selected || Array.isArray(selected)) return;
-    await adoptPath(selected, "audit");
+    await adoptPath(selected, "work");
   };
 
   const pickParent = async () => {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: "Parent folder for new workspace",
+      title: "Where should the new folder live?",
       defaultPath: newParent || defaults?.parent || undefined,
     });
     if (!selected || Array.isArray(selected)) return;
@@ -205,79 +207,89 @@ export function WorkspacesView({
     }
   };
 
+  const openDefault = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("open_default_workspace");
+      await refresh();
+      onOpened("work");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const previewPath =
     newName.trim() && (newParent.trim() || defaults?.parent)
       ? `${(newParent.trim() || defaults?.parent || "").replace(/[\\/]+$/, "")}\\${suggestFolderName(newName) || "…"}`
       : null;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
+    <div className="mx-auto max-w-lg space-y-4">
       <section className="rounded-xl border border-white/8 bg-[#0d121a] p-4">
-        <h2 className="text-sm font-semibold text-slate-100">Workspaces</h2>
+        <h2 className="text-sm font-semibold text-slate-100">Your project folder</h2>
         <p className="mt-1 text-xs leading-5 text-slate-500">
-          Attach the folder ADE works in.{" "}
-          <span className="text-slate-400">New workspace</span> creates a named folder (default:
-          Desktop), writes <span className="font-mono text-slate-400">AGENTS.md</span>, and opens
-          Home. Agents and future parallel workers bind to that folder — not to ADE dogfood.
+          ADE works in one folder at a time. Start in Default (scratch), create a new
+          project, or open an existing one.
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setShowNew(true);
-              setError(null);
-              if (!newParent && defaults?.parent) setNewParent(defaults.parent);
-            }}
-            className="rounded-lg bg-blue-500 px-3.5 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
-          >
-            New workspace…
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void pickOpen()}
-            className="rounded-lg border border-white/10 bg-white/4 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-white/8 disabled:opacity-50"
-          >
-            Open folder…
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void pickAdopt()}
-            className="rounded-lg border border-white/10 px-3.5 py-2 text-xs font-semibold text-slate-400 hover:bg-white/6 hover:text-slate-200 disabled:opacity-50"
-          >
-            Adopt existing…
-          </button>
-          {list?.ade_source_root && (
+
+        {!showNew ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy || Boolean(list?.entries.some((e) => e.is_default && e.is_current))}
+              onClick={() => void openDefault()}
+              className="rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-3.5 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
+              title="Built-in scratch workspace under your ADE app data folder"
+            >
+              {list?.entries.some((e) => e.is_default && e.is_current)
+                ? "In Default"
+                : "Start in Default"}
+            </button>
             <button
               type="button"
               disabled={busy}
-              onClick={() => void openAdeSource()}
-              className="rounded-lg border border-white/10 px-3.5 py-2 text-xs font-semibold text-slate-400 hover:bg-white/6 hover:text-slate-200 disabled:opacity-50"
+              onClick={() => {
+                setShowNew(true);
+                setError(null);
+                if (!newParent && defaults?.parent) setNewParent(defaults.parent);
+              }}
+              className="rounded-lg bg-blue-500 px-3.5 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
             >
-              Open ADE on itself
+              New project…
             </button>
-          )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onOpenEnvironment}
-            className="rounded-lg border border-white/10 px-3.5 py-2 text-xs font-semibold text-slate-400 hover:bg-white/6 hover:text-slate-200"
-          >
-            Environment audit →
-          </button>
-        </div>
-
-        {showNew && (
-          <div className="mt-4 space-y-3 rounded-lg border border-blue-400/25 bg-blue-500/8 p-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h3 className="text-xs font-semibold text-blue-100">New workspace</h3>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  Creates the folder, adopts it as ADE, attaches, then opens Home.
-                </p>
-              </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void pickOpen()}
+              className="rounded-lg border border-white/10 bg-white/4 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-white/8 disabled:opacity-50"
+            >
+              Open folder…
+            </button>
+            {list && !list.entries.some((e) => e.is_default && e.is_current) && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  void invoke("open_in_zed")
+                    .then(() => setError(null))
+                    .catch((reason) => setError(String(reason)))
+                    .finally(() => setBusy(false));
+                }}
+                className="rounded-lg border border-white/10 bg-white/4 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-white/8 disabled:opacity-50"
+                title="Open current folder in Zed (ACP: ade acp)"
+              >
+                Open in Zed
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-slate-200">New project</h3>
               <button
                 type="button"
                 disabled={busy}
@@ -300,7 +312,7 @@ export function WorkspacesView({
                     void createNamed();
                   }
                 }}
-                placeholder="BoxingLove"
+                placeholder="MyProject"
                 disabled={busy}
                 className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-2 text-sm text-slate-100 outline-hidden placeholder:text-slate-600 focus:border-blue-400/40"
                 autoFocus
@@ -308,7 +320,7 @@ export function WorkspacesView({
             </label>
             <label className="block space-y-1">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                Parent folder
+                Save to
               </span>
               <div className="flex flex-wrap gap-2">
                 <input
@@ -323,7 +335,7 @@ export function WorkspacesView({
                   onClick={() => void pickParent()}
                   className="rounded-md border border-white/10 px-2.5 py-2 text-[11px] font-semibold text-slate-300 hover:bg-white/6 disabled:opacity-50"
                 >
-                  Choose…
+                  Browse…
                 </button>
                 {defaults?.desktop && (
                   <button
@@ -339,16 +351,16 @@ export function WorkspacesView({
             </label>
             {previewPath && (
               <p className="truncate font-mono text-[10px] text-slate-500" title={previewPath}>
-                → {previewPath}
+                {previewPath}
               </p>
             )}
             <button
               type="button"
               disabled={busy || !newName.trim()}
               onClick={() => void createNamed()}
-              className="rounded-md bg-blue-500 px-3 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
+              className="w-full rounded-md bg-blue-500 px-3 py-2.5 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
             >
-              {busy ? "Creating…" : "Create & open Home"}
+              {busy ? "Creating…" : "Create & start"}
             </button>
           </div>
         )}
@@ -356,27 +368,59 @@ export function WorkspacesView({
         {error && <p className="mt-3 text-xs text-red-300/90">{error}</p>}
         {pendingAdopt && (
           <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/8 px-3 py-2 text-xs text-amber-100/90">
-            <p>
-              That folder has no <span className="font-mono">AGENTS.md</span>. Adopt it as an ADE
-              workspace?
-            </p>
+            <p>This folder isn’t set up for ADE yet. Set it up now?</p>
             <button
               type="button"
               disabled={busy}
-              onClick={() => void adoptPath(pendingAdopt, "audit")}
+              onClick={() => void adoptPath(pendingAdopt, "work")}
               className="mt-2 rounded-md bg-amber-500/90 px-3 py-1.5 text-[11px] font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50"
             >
-              Adopt folder
+              Set up folder
             </button>
           </div>
         )}
+
+        <Disclosure
+          title="More options"
+          summary="adopt · ADE source"
+          defaultOpen={false}
+          storageKey="ade_workspaces_more"
+          className="mt-4"
+        >
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void pickAdopt()}
+              className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/6 disabled:opacity-50"
+            >
+              Set up existing folder…
+            </button>
+            {list?.ade_source_root && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void openAdeSource()}
+                className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/6 disabled:opacity-50"
+              >
+                Open ADE source
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onOpenEnvironment}
+              className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/6"
+            >
+              Check setup
+            </button>
+          </div>
+        </Disclosure>
       </section>
 
       <section className="rounded-xl border border-white/8 bg-[#0d121a] p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Current & recent
-          </h3>
+          <h3 className="text-xs font-semibold text-slate-400">Recent</h3>
           <button
             type="button"
             onClick={() => void refresh()}
@@ -395,7 +439,7 @@ export function WorkspacesView({
                   : "border-white/7 bg-black/20"
               }`}
             >
-              <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-slate-100">{entry.name}</span>
@@ -404,22 +448,22 @@ export function WorkspacesView({
                         current
                       </span>
                     )}
-                    {entry.is_ade_source && (
-                      <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] text-violet-200">
-                        ADE source
+                    {entry.is_default && (
+                      <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200">
+                        scratch
                       </span>
                     )}
-                    {entry.has_recipe ? (
-                      <span className="text-[10px] text-emerald-300/80">recipe</span>
-                    ) : (
-                      <span className="text-[10px] text-slate-600">no recipe</span>
+                    {entry.is_ade_source && (
+                      <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-violet-200">
+                        ADE source
+                      </span>
                     )}
                   </div>
                   <p className="mt-1 truncate font-mono text-[10px] text-slate-500" title={entry.path}>
                     {entry.path}
                   </p>
                 </div>
-                {!entry.is_current && (
+                {!entry.is_current ? (
                   <button
                     type="button"
                     disabled={busy}
@@ -428,23 +472,20 @@ export function WorkspacesView({
                   >
                     Switch
                   </button>
-                )}
-                {entry.is_current && (
+                ) : (
                   <button
                     type="button"
                     onClick={onOpenEnvironment}
                     className="shrink-0 rounded-md border border-white/10 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/6"
                   >
-                    Audit
+                    Setup
                   </button>
                 )}
               </div>
             </li>
           ))}
           {list && list.entries.length === 0 && (
-            <li className="text-xs text-slate-500">
-              No workspaces yet — use <span className="text-slate-400">New workspace</span>.
-            </li>
+            <li className="text-xs text-slate-500">No projects yet — create one above.</li>
           )}
         </ul>
       </section>

@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { AssistantMarkdown } from "./AssistantMarkdown";
+import { AttachmentChips } from "./AttachmentChips";
+import { parseAttachedBlock } from "./fileKind";
+import { openChatPath } from "./attachIngest";
 import type { TurnFailureAction, TurnFailureAdvice } from "./turnFailure";
 
 export type { TurnFailureAction, TurnFailureAdvice };
@@ -52,6 +55,12 @@ export type AgentFeedEvent =
       detail: string;
     }
   | { type: "verify_complete"; gate: string; passed: boolean; summary: string }
+  | {
+      type: "host_intent";
+      action: string;
+      path?: string;
+      url?: string;
+    }
   | {
       type: "completed";
       result: {
@@ -189,6 +198,21 @@ function buildSteps(events: AgentFeedEvent[]): Step[] {
         pathHint: pathFromArgs(event.arguments) ?? env?.paths?.[0],
         envelopeLabel: envelopeLabelFrom(env),
         detail: undefined,
+      });
+      return;
+    }
+    if (event.type === "host_intent") {
+      const detail =
+        event.action === "attach_workspace"
+          ? event.path?.trim() || "workspace"
+          : event.action === "open_browser"
+            ? event.url?.trim() || "url"
+            : event.action;
+      steps.push({
+        kind: "note",
+        key: `host-${index}`,
+        tone: "info",
+        text: `Host · ${event.action} · ${detail}`,
       });
       return;
     }
@@ -674,7 +698,21 @@ export function AgentActivityFeed({
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-blue-200/80">
                   You
                 </div>
-                {turn.user}
+                {(() => {
+                  const parsed = parseAttachedBlock(turn.user);
+                  return (
+                    <>
+                      {parsed.text ? (
+                        <div className="whitespace-pre-wrap">{parsed.text}</div>
+                      ) : null}
+                      <AttachmentChips
+                        items={parsed.attachments}
+                        compact
+                        onOpen={(item) => void openChatPath(item.absolute ?? item.path)}
+                      />
+                    </>
+                  );
+                })()}
               </div>
             )}
 

@@ -11,4 +11,4 @@ ADRs for ADE. Format: `DEC-A-NNN-slug.md`.
 | [DEC-A-014](DEC-A-014-harness-first-zed-optional.md) | Harness-first; Zed host optional | Accepted |
 
 Canonical layout: [`../architecture/REPO_LAYOUT.md`](../architecture/REPO_LAYOUT.md).  
-Master canvas: `ADE-harness-multiagent-gameplan.canvas.tsx`.
+Master canvas: `ADE-master-gameplan.canvas.tsx` · H-detail: `ADE-harness-multiagent-gameplan.canvas.tsx`.

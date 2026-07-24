@@ -182,6 +182,7 @@ impl AgentTurnWorker {
             workspace_root: execution_root.to_path_buf(),
             owned_paths: owned_paths.to_vec(),
             handoff_chars: 1_500,
+            image_paths: vec![],
         })
         .ledger(ledger)
         .spend_caps(SpendCaps::from_env())

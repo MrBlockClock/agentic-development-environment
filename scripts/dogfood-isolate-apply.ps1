@@ -166,8 +166,8 @@ if ($Live) {
     --cleanup-worktree `
     --once `
     --approve `
-    --input-cost-per-mtok 0 `
-    --output-cost-per-mtok 0
+    --input-cost-per-mtok 0.01 `
+    --output-cost-per-mtok 0.01
   $liveCode = $LASTEXITCODE
   if ($liveCode -ne 0) {
     Write-Host "WARN live worker exited $liveCode (harness path still counts)"

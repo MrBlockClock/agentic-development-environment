@@ -1,5 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ClipboardEvent, type ReactNode } from "react";
 import { invoke, isTauri } from "./ipc";
 import {
   RecipeWizard,
@@ -21,8 +21,25 @@ import { BrowserView } from "./components/BrowserView";
 import { EditorView, ADE_EDITOR_INTENT_KEY } from "./components/EditorView";
 import { TerminalView } from "./components/TerminalView";
 import { SettingsView } from "./components/SettingsView";
+import { KeysView } from "./components/KeysView";
 import { WorkspacesView, type WorkspaceOpenIntent } from "./components/WorkspacesView";
+import {
+  SidebarRailLists,
+  fetchWorkspaceList,
+  type WorkspaceListSnapshot,
+} from "./components/SidebarRailLists";
 import { DarkSelect, GearIcon } from "./components/DarkSelect";
+import { HeaderOverflowMenu } from "./components/HeaderPlusMenu";
+import { ShellTabBar } from "./components/ShellTabBar";
+import {
+  defaultBrowserUrl,
+  leafName,
+  newTabId,
+  viewForTabKind,
+  agentTabTitleFromPrompt,
+  type ShellTab,
+} from "./shellTabs";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AuditViewer } from "./components/AuditViewer";
 import {
   AgentSessionStrip,
@@ -37,29 +54,48 @@ import {
   CapabilityMatrix,
   DesktopRequired,
 } from "./components/DesktopRequired";
-import { ModelPicker, ProviderSelect } from "./components/ModelPicker";
+import { ProviderSelect } from "./components/ModelPicker";
 import { ComposerModelSelect } from "./components/ComposerModelSelect";
 import { Chip, Disclosure } from "./components/ui";
+import { AttachmentChips } from "./components/AttachmentChips";
+import {
+  type ChatAttachment,
+  looksLikeFilesystemPath,
+  packagePromptWithAttachments,
+} from "./components/fileKind";
+import {
+  ingestFiles,
+  ingestPathText,
+  openChatPath,
+  pickAttachmentFiles,
+  pickAttachmentFolder,
+  pickAttachmentFilesViaInput,
+} from "./components/attachIngest";
 import { DESKTOP_REQUIRED_VIEWS } from "./capabilities";
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   PROVIDER_PRESETS,
+  autoModelForSlot,
   canonicalBaseUrl,
-  presetById,
+  modelSupportsVision,
+  slotFromAutonomy,
 } from "./providers";
 
 const DEV_MODE_KEY = "ade_dev_mode";
 const AUTONOMY_KEY = "ade_autonomy_level";
+const FORCE_OWNED_KEY = "ade_force_owned_paths";
 const SHELL_SCOPE_KEY = "ade_agent_shell_scope";
 const APPLY_ISOLATE_KEY = "ade_apply_isolate_worktree";
 const SURFACE_MODE_KEY = "ade_surface_mode";
 const AGENT_PROVIDER_KEY = "ade_agent_provider";
 const AGENT_BASE_URL_KEY = "ade_agent_base_url";
 const AGENT_MODEL_KEY = "ade_agent_model";
+const AGENT_MODEL_MODE_KEY = "ade_agent_model_mode";
 const AGENT_EFFORT_KEY = "ade_agent_effort";
 const NAV_OPEN_KEY = "ade_nav_open";
+type ModelMode = "auto" | "pin";
 
 type AutonomyLevel = "observe" | "propose" | "act" | "automate";
 /** G1: shell default cwd — workspace root vs user Desktop/home. */
@@ -137,20 +173,7 @@ function providerSupportsEffort(providerId: string): boolean {
   return ["opencode", "openai", "anthropic", "openrouter"].includes(providerId);
 }
 
-/** Simple (`guided`) is parked — Standard is the product; Debug adds harness. */
-const SURFACE_MODES: { id: SurfaceMode; label: string; hint: string }[] = [
-  {
-    id: "power",
-    label: "Standard",
-    hint: "Default work rail: Home (composer) + maps. Checks live under Configure.",
-  },
-  {
-    id: "dev",
-    label: "Debug",
-    hint: "Same as Standard, with traces, leases, and harness open.",
-  },
-];
-
+/** Simple (`guided`) is parked — Standard is the product; Debug adds maps/harness. */
 const PROMPT_PRESETS: {
   label: string;
   prompt: string;
@@ -189,9 +212,35 @@ function verifyGateLabel(gate: string): string {
 }
 
 function workspaceLeaf(path: string | undefined | null): string {
-  if (!path) return "No environment attached";
+  if (!path) return "No folder attached";
   const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+function readForceOwnedPaths(): string[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(FORCE_OWNED_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const paths = parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return paths.length > 0 ? paths : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeForceOwnedPaths(paths: string[] | null) {
+  if (typeof window === "undefined") return;
+  if (!paths || paths.length === 0) {
+    window.localStorage.removeItem(FORCE_OWNED_KEY);
+    return;
+  }
+  window.localStorage.setItem(FORCE_OWNED_KEY, JSON.stringify(paths));
 }
 
 function readAutonomy(): AutonomyLevel {
@@ -233,18 +282,27 @@ function readSurfaceMode(): SurfaceMode {
   return "power";
 }
 
-type NavItem = { id: string; label: string; icon: string; desktopOnly?: boolean };
+type NavItem = {
+  id: string;
+  label: string;
+  icon: string;
+  desktopOnly?: boolean;
+  /** Optional status light for first-run / setup guidance. */
+  setupKey?: "environment" | "keys" | "recipes" | "verify";
+};
 
-/** 0 = daily work, 1 = context peers, 2 = rare configure / debug density */
+/** 0 = daily work, 1 = setup / context, 2 = rare configure / debug density */
 type NavTier = 0 | 1 | 2;
 
 type NavGroup = { title?: string; tier: NavTier; items: NavItem[] };
 
+type SetupLight = "ready" | "todo" | "warn";
+
 /**
  * Usage-ranked rail:
- * Tier 0 — one work surface (Home = composer/agent).
- * Tier 1 — environment + workspaces + context maps.
- * Tier 2 — Configure (incl. Checks = gate evidence; run from Checks view).
+ * Tier 0 — Home (+ Workplaces / Sessions lists under Home).
+ * Tier 1 — Setup (first-run) + Trust.
+ * Tier 2 — Guidance (and Debug-only tools).
  */
 const navGroups: NavGroup[] = [
   {
@@ -253,37 +311,50 @@ const navGroups: NavGroup[] = [
   },
   {
     tier: 1,
+    title: "Setup",
     items: [
-      { id: "Environment", label: "Environment", icon: "◎" },
-      { id: "Workspaces", label: "Workspaces", icon: "▤", desktopOnly: true },
-      { id: "Atlas", label: "Atlas", icon: "◈" },
-      { id: "Plan", label: "Plan Map", icon: "◇" },
-      { id: "Audit", label: "Trust", icon: "◉" },
-      { id: "Browser", label: "Browser", icon: "⬚", desktopOnly: true },
-      { id: "Terminal", label: "Terminal", icon: "▸", desktopOnly: true },
-      { id: "Editor", label: "Editor", icon: "✎", desktopOnly: true },
+      {
+        id: "Environment",
+        label: "Environment",
+        icon: "◎",
+        setupKey: "environment",
+      },
+      { id: "Keys", label: "Keys", icon: "◈", desktopOnly: true, setupKey: "keys" },
+      { id: "Recipes", label: "Stack", icon: "▦", setupKey: "recipes" },
+      { id: "Verify", label: "Test project", icon: "✓", setupKey: "verify" },
     ],
   },
   {
+    tier: 1,
+    items: [{ id: "Audit", label: "Trust", icon: "◉" }],
+  },
+  {
     tier: 2,
-    title: "Configure",
+    title: "More",
     items: [
-      { id: "Recipes", label: "Recipes", icon: "▦" },
       { id: "Rules", label: "Guidance", icon: "☰" },
-      { id: "Keys", label: "Keys", icon: "◈", desktopOnly: true },
+      { id: "Atlas", label: "Atlas", icon: "◈" },
+      { id: "Plan", label: "Plan Map", icon: "◇" },
       { id: "MCP", label: "MCP", icon: "⬡", desktopOnly: true },
-      { id: "Verify", label: "Checks", icon: "✓" },
     ],
   },
 ];
 
+function setupLightClass(tone: SetupLight): string {
+  if (tone === "ready") return "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.55)]";
+  if (tone === "warn") return "bg-amber-300 shadow-[0_0_6px_rgba(252,211,77,0.55)]";
+  return "bg-amber-400/90 shadow-[0_0_6px_rgba(251,191,36,0.45)]";
+}
+
+function setupLightTitle(tone: SetupLight): string {
+  if (tone === "ready") return "Ready";
+  if (tone === "warn") return "Needs attention";
+  return "Recommended before first run";
+}
+
 function navItemClass(active: boolean, tier: NavTier): string {
-  const weight =
-    tier === 0
-      ? "text-[13px] font-medium"
-      : tier === 1
-        ? "text-[13px]"
-        : "text-[12px]";
+  // One size for all rail destinations — hierarchy comes from weight/color, not micro-type.
+  const weight = tier === 0 ? "text-[13px] font-medium" : "text-[13px] font-normal";
   if (active) {
     return `flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition bg-blue-500/12 text-blue-200 ${weight}`;
   }
@@ -291,6 +362,73 @@ function navItemClass(active: boolean, tier: NavTier): string {
     return `flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition text-slate-500 hover:bg-white/4 hover:text-slate-300 ${weight}`;
   }
   return `flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition text-slate-400 hover:bg-white/4 hover:text-slate-200 ${weight}`;
+}
+
+/** Lightweight sidebar fold — sentence-case labels, same size as nav items. */
+function NavFold({
+  title,
+  summary,
+  storageKey,
+  defaultOpen = false,
+  forceOpen = false,
+  light,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  storageKey: string;
+  defaultOpen?: boolean;
+  forceOpen?: boolean;
+  light?: SetupLight | null;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => {
+    if (forceOpen) return true;
+    if (typeof window === "undefined") return defaultOpen;
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+    return defaultOpen;
+  });
+
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, open ? "1" : "0");
+  }, [open, storageKey]);
+
+  const expanded = forceOpen || open;
+
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] font-medium text-slate-500 transition hover:bg-white/4 hover:text-slate-300"
+        data-testid={`ade-nav-fold-${title.toLowerCase()}`}
+      >
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {light && light !== "ready" && (
+          <span
+            className={`size-1.5 shrink-0 rounded-full ${setupLightClass(light)}`}
+            title={setupLightTitle(light)}
+          />
+        )}
+        {!expanded && summary && (
+          <span className="max-w-[5.5rem] truncate text-[12px] font-normal text-slate-600">
+            {summary}
+          </span>
+        )}
+        <span className="shrink-0 text-[10px] text-slate-600" aria-hidden>
+          {expanded ? "▴" : "▾"}
+        </span>
+      </button>
+      {expanded ? <div className="space-y-px pl-0.5">{children}</div> : null}
+    </div>
+  );
 }
 
 type Finding = {
@@ -408,6 +546,7 @@ type UnderstandResult = {
 type DashboardSnapshot = {
   workspace_root: string;
   is_dogfood?: boolean;
+  is_default?: boolean;
   ade_source_root?: string | null;
   has_recipe?: boolean;
   has_provider_key?: boolean;
@@ -504,6 +643,12 @@ type AgentEvent =
       detail: string;
     }
   | { type: "verify_complete"; gate: string; passed: boolean; summary: string }
+  | {
+      type: "host_intent";
+      action: string;
+      path?: string;
+      url?: string;
+    }
   | { type: "completed"; result: AgentTurnResult }
   | { type: "failed"; error: string }
   | { type: "cancelled"; reason: string };
@@ -514,26 +659,28 @@ type ProviderKeyStatus = {
   configured: boolean;
 };
 
-type ProviderKeyDeleteResult = {
-  profile: string;
-  provider: string;
-  deleted: boolean;
-};
-
-type ProviderKeySmokeResult = {
-  profile: string;
-  provider: string;
-  status: "ready" | "passed" | "failed" | "skipped";
-  detail: string;
-};
+const HOME_AGENT_TAB = "agent-home";
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeView, setActiveView] = useState("Home");
+  const [shellTabs, setShellTabs] = useState<ShellTab[]>([
+    {
+      id: HOME_AGENT_TAB,
+      kind: "agent",
+      title: "Agent",
+      closable: false,
+      ephemeral: false,
+    },
+  ]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(HOME_AGENT_TAB);
+  const [runningAgentTabId, setRunningAgentTabId] = useState<string | null>(null);
   /** When true, Workspaces opens with the New workspace form expanded. */
   const [workspacesStartNew, setWorkspacesStartNew] = useState(false);
-  /** Bumped to request AgentView clear chat (header + Chat). */
-  const [newChatNonce, setNewChatNonce] = useState(0);
+  const [workspaceList, setWorkspaceList] = useState<WorkspaceListSnapshot | null>(
+    null,
+  );
+  const [workspaceSwitchBusy, setWorkspaceSwitchBusy] = useState(false);
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>(readSurfaceMode);
   const [navOpen, setNavOpen] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -579,6 +726,184 @@ function App() {
     window.localStorage.setItem(NAV_OPEN_KEY, open ? "1" : "0");
   };
 
+  const focusShellTab = useCallback(
+    (id: string) => {
+      const tab = shellTabs.find((row) => row.id === id);
+      if (!tab) return;
+      setActiveTabId(id);
+      setActiveView(viewForTabKind(tab.kind));
+    },
+    [shellTabs],
+  );
+
+  const updateTabTitle = useCallback((id: string, title: string) => {
+    setShellTabs((tabs) =>
+      tabs.map((tab) => (tab.id === id ? { ...tab, title } : tab)),
+    );
+  }, []);
+
+  const closeShellTab = useCallback(
+    (id: string) => {
+      setShellTabs((tabs) => {
+        const target = tabs.find((tab) => tab.id === id);
+        if (!target?.closable) return tabs;
+        const next = tabs.filter((tab) => tab.id !== id);
+        setActiveTabId((current) => {
+          if (current !== id) return current;
+          const fallback = next[next.length - 1] ?? null;
+          if (fallback) {
+            setActiveView(viewForTabKind(fallback.kind));
+            return fallback.id;
+          }
+          setActiveView("Home");
+          return null;
+        });
+        return next;
+      });
+    },
+    [],
+  );
+
+  const openAgentTab = useCallback(() => {
+    const id = newTabId("agent");
+    const tab: ShellTab = {
+      id,
+      kind: "agent",
+      title: "New Agent",
+      closable: true,
+      ephemeral: true,
+    };
+    setShellTabs((tabs) => [...tabs, tab]);
+    setActiveTabId(id);
+    setActiveView("Home");
+  }, []);
+
+  const openBrowserTab = useCallback((initialUrl?: string) => {
+    const id = newTabId("browser");
+    const url = (initialUrl?.trim() || defaultBrowserUrl()).trim();
+    const tab: ShellTab = {
+      id,
+      kind: "browser",
+      title: "Browser",
+      closable: true,
+      url,
+    };
+    setShellTabs((tabs) => [...tabs, tab]);
+    setActiveTabId(id);
+    setActiveView("Browser");
+  }, []);
+
+  const openEditorTab = useCallback(async (path?: string) => {
+    let filePath = path?.trim() || "";
+    if (!filePath && isTauri()) {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: "Open file",
+      });
+      if (!selected || Array.isArray(selected)) return;
+      filePath = selected;
+    }
+    const id = newTabId("editor");
+    const tab: ShellTab = {
+      id,
+      kind: "editor",
+      title: filePath ? leafName(filePath) : "Editor",
+      closable: true,
+      path: filePath || undefined,
+    };
+    setShellTabs((tabs) => [...tabs, tab]);
+    setActiveTabId(id);
+    setActiveView("Editor");
+  }, []);
+
+  const openTerminalTab = useCallback(() => {
+    setShellTabs((tabs) => {
+      const existing = tabs.find((tab) => tab.kind === "terminal");
+      if (existing) {
+        setActiveTabId(existing.id);
+        setActiveView("Terminal");
+        return tabs;
+      }
+      const id = newTabId("terminal");
+      setActiveTabId(id);
+      setActiveView("Terminal");
+      return [
+        ...tabs,
+        {
+          id,
+          kind: "terminal" as const,
+          title: "Terminal",
+          closable: true,
+        },
+      ];
+    });
+  }, []);
+
+  const openNavView = useCallback((viewId: string) => {
+    if (viewId === "Home" || viewId === "Agent") {
+      setActiveTabId(HOME_AGENT_TAB);
+      setActiveView("Home");
+      setShellTabs((tabs) =>
+        tabs.some((tab) => tab.id === HOME_AGENT_TAB)
+          ? tabs
+          : [
+              {
+                id: HOME_AGENT_TAB,
+                kind: "agent",
+                title: "Agent",
+                closable: false,
+                ephemeral: false,
+              },
+              ...tabs,
+            ],
+      );
+      return;
+    }
+    if (viewId === "Browser") {
+      setShellTabs((tabs) => {
+        const existing = [...tabs].reverse().find((tab) => tab.kind === "browser");
+        if (existing) {
+          setActiveTabId(existing.id);
+          setActiveView("Browser");
+          return tabs;
+        }
+        const id = newTabId("browser");
+        setActiveTabId(id);
+        setActiveView("Browser");
+        return [
+          ...tabs,
+          {
+            id,
+            kind: "browser" as const,
+            title: "Browser",
+            closable: true,
+            url: defaultBrowserUrl(),
+          },
+        ];
+      });
+      return;
+    }
+    if (viewId === "Editor") {
+      const existing = [...shellTabs]
+        .reverse()
+        .find((tab) => tab.kind === "editor");
+      if (existing) {
+        setActiveTabId(existing.id);
+        setActiveView("Editor");
+      } else {
+        void openEditorTab();
+      }
+      return;
+    }
+    if (viewId === "Terminal") {
+      openTerminalTab();
+      return;
+    }
+    setActiveTabId(null);
+    setActiveView(viewId);
+  }, [openEditorTab, openTerminalTab, shellTabs]);
+
   const setSurfaceModePersisted = (mode: SurfaceMode) => {
     // Simple is parked — any guided request becomes Standard.
     const next: SurfaceMode = mode === "guided" ? "power" : mode;
@@ -593,9 +918,9 @@ function App() {
     }
   }, [surfaceMode]);
 
-  /** Debug-only nav: harness maps / tools stay off the Standard rail. */
+  /** Debug-only nav: maps / editor / MCP — Terminal + Browser stay on Standard for Default dogfood. */
   const DEBUG_NAV_IDS = useMemo(
-    () => new Set(["Browser", "Terminal", "MCP"]),
+    () => new Set(["Atlas", "Plan", "MCP", "Editor"]),
     [],
   );
 
@@ -619,12 +944,35 @@ function App() {
     }
   }, [DEBUG_NAV_IDS, activeView, surfaceMode]);
 
+  /** Home must always show an agent session — never an empty main pane. */
+  useEffect(() => {
+    if (activeView !== "Home" && activeView !== "Agent") return;
+    const agentTabs = shellTabs.filter((tab) => tab.kind === "agent");
+    if (agentTabs.length === 0) {
+      setShellTabs((tabs) => [
+        {
+          id: HOME_AGENT_TAB,
+          kind: "agent",
+          title: "Agent",
+          closable: false,
+          ephemeral: false,
+        },
+        ...tabs,
+      ]);
+      setActiveTabId(HOME_AGENT_TAB);
+      return;
+    }
+    if (!agentTabs.some((tab) => tab.id === activeTabId)) {
+      setActiveTabId(HOME_AGENT_TAB);
+    }
+  }, [activeView, activeTabId, shellTabs]);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     setBrowserApiProbeKey((key) => key + 1);
     try {
-      const [snapshot, wins] = await Promise.all([
+      const [snapshot, wins, workspaces] = await Promise.all([
         invoke<DashboardSnapshot>("get_dashboard"),
         invoke<GuidedWinsState>("guided_wins_status").catch(
           (): GuidedWinsState => ({
@@ -634,6 +982,7 @@ function App() {
             understand_artifact: null,
           }),
         ),
+        fetchWorkspaceList().catch(() => null),
       ]);
       setDashboard({ ...snapshot, tasks: snapshot.tasks ?? [] });
       if (snapshot.last_verify && snapshot.last_verify.length > 0) {
@@ -643,12 +992,33 @@ function App() {
       if (wins.understand_artifact) {
         setLastUnderstandPath(wins.understand_artifact);
       }
+      setWorkspaceList(workspaces);
     } catch (reason) {
       setError(String(reason));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const switchWorkspaceFromRail = useCallback(
+    async (path: string) => {
+      if (!isTauri() || workspaceSwitchBusy) return;
+      setWorkspaceSwitchBusy(true);
+      setError(null);
+      try {
+        await invoke("open_workspace", { path });
+        await refresh();
+        setActiveView("Home");
+        setActiveTabId(HOME_AGENT_TAB);
+        setNavOpenPersisted(false);
+      } catch (reason) {
+        setError(String(reason));
+      } finally {
+        setWorkspaceSwitchBusy(false);
+      }
+    },
+    [refresh, workspaceSwitchBusy],
+  );
 
   const refreshMcp = useCallback(async () => {
     try {
@@ -697,6 +1067,45 @@ function App() {
     if (!dashboard || dashboard.audit.score_max === 0) return 0;
     return Math.round((dashboard.audit.score / dashboard.audit.score_max) * 100);
   }, [dashboard]);
+
+  const verifyFailed = useMemo(
+    () =>
+      verifyResults.some(
+        (result) =>
+          !result.passed &&
+          result.status !== "unavailable" &&
+          result.status !== "skipped",
+      ),
+    [verifyResults],
+  );
+
+  const setupLights = useMemo(() => {
+    const keys: SetupLight = dashboard?.has_provider_key ? "ready" : "todo";
+    const recipes: SetupLight = dashboard?.has_recipe ? "ready" : "todo";
+    const verify: SetupLight = verifyFailed
+      ? "warn"
+      : verifyResults.length > 0
+        ? "ready"
+        : "todo";
+    const blockers = (dashboard?.audit.blockers.length ?? 0) > 0;
+    const environment: SetupLight = blockers
+      ? "warn"
+      : keys === "ready" && recipes === "ready" && verify !== "todo"
+        ? "ready"
+        : "todo";
+    const overall: SetupLight =
+      environment === "warn" || verify === "warn"
+        ? "warn"
+        : environment === "todo" || keys === "todo" || recipes === "todo" || verify === "todo"
+          ? "todo"
+          : "ready";
+    return { overall, environment, keys, recipes, verify } as const;
+  }, [dashboard, verifyFailed, verifyResults.length]);
+
+  const lightForSetupKey = (key: NavItem["setupKey"]): SetupLight | null => {
+    if (!key) return null;
+    return setupLights[key];
+  };
 
   const runVerify = async (options?: { stayOnHome?: boolean; openChecks?: boolean }) => {
     setVerifying(true);
@@ -892,6 +1301,15 @@ function App() {
     }
   };
 
+  const cancelAgentTurn = async () => {
+    if (!isTauri()) return;
+    try {
+      await invoke<boolean>("cancel_agent_turn");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
   const runAgentTurn = async (input: {
     prompt: string;
     provider: string;
@@ -917,6 +1335,7 @@ function App() {
     claimedTaskId?: string | null;
     waiveQueue?: boolean;
     slotOverride?: string | null;
+    imagePaths?: string[];
   }) => {
     if (!isTauri()) {
       const message =
@@ -959,18 +1378,12 @@ function App() {
       (Number(input.outputCostPerMtok) || 0) <= 0;
     const capsOn =
       (Number(input.sessionCapUsd) || 0) > 0 || (Number(input.dailyCapUsd) || 0) > 0;
+    // $0 rates + caps: always continue unmetered. Caps cannot reserve dollars
+    // without rates; blocking free models behind invoice jargon is a false wall.
     let allowUnpriced = Boolean(input.allowUnpriced);
-    if (ratesZero && capsOn && !allowUnpriced) {
-      allowUnpriced = window.confirm(
-        "Spend honesty: $/MTok rates are $0 but session/daily caps are set.\n\nOK = continue this turn unmetered\nCancel = stop and set Input/Output $/MTok",
-      );
-      if (!allowUnpriced) {
-        failTurn(
-          "spend_honesty: set Input/Output $/MTok to match your provider, or confirm unmetered.",
-        );
-        setAgentBusy(false);
-        return;
-      }
+    if (ratesZero && capsOn) {
+      allowUnpriced = true;
+      window.localStorage.setItem("ade_allow_unpriced", "1");
     }
 
     let waiveQueue = Boolean(input.waiveQueue);
@@ -1064,33 +1477,83 @@ function App() {
             .then(setVerifyResults)
             .catch(() => {});
         }
+        if (event.type === "host_intent" && isTauri()) {
+          void (async () => {
+            try {
+              if (event.action === "attach_workspace" && event.path?.trim()) {
+                await invoke("open_workspace", { path: event.path.trim() });
+                window.localStorage.setItem(AUTONOMY_KEY, "act");
+                writeForceOwnedPaths(["."]);
+                try {
+                  const goal = await invoke<EngGoal>("goal_create", {
+                    input: {
+                      statement: `Greenfield work in newly attached workspace`,
+                      successCriteria: [
+                        "Scaffold and iterate project files under this workspace",
+                      ],
+                      outOfScope: [
+                        "Deleting other ADE workspaces",
+                        "Editing ADE source outside this folder",
+                      ],
+                      shellScope: "workspace",
+                      autonomy: "act",
+                      verifyGate: "G0",
+                      ownedPaths: ["."],
+                      activate: true,
+                    },
+                  });
+                  if (goal?.id) {
+                    await invoke("goal_waive_contract", {
+                      id: goal.id,
+                      reason: "bootstrap after workspace__create_named",
+                    });
+                  }
+                } catch {
+                  // Goal bootstrap is best-effort; Apply + force owned still help.
+                }
+                await refresh();
+                setActiveView("Home");
+                setActiveTabId(HOME_AGENT_TAB);
+              } else if (event.action === "open_browser" && event.url?.trim()) {
+                openBrowserTab(event.url.trim());
+              }
+            } catch (reason) {
+              setError(String(reason));
+            }
+          })();
+        }
       };
+      // Bundle scalars under `args` so the Channel stays a sibling IPC value —
+      // flat 28-arg invokes can mis-bind Channel maps onto bool fields like allowUnpriced.
       await invoke("run_agent_turn", {
-        prompt: input.prompt,
-        provider: input.provider,
-        baseUrl: input.baseUrl,
-        model: input.model,
-        inputCostPerMtok: input.inputCostPerMtok,
-        outputCostPerMtok: input.outputCostPerMtok,
-        sessionCapUsd: input.sessionCapUsd,
-        dailyCapUsd: input.dailyCapUsd,
-        profile: "local",
-        leaseAgentId: agentId,
-        autonomy: isVerifier ? "propose" : input.autonomy,
-        maxSteps: input.maxSteps,
-        maxTokens: input.maxTokens,
-        verifyOnComplete: input.verifyOnComplete,
-        verifyGate: input.verifyGate,
-        approveOwnedPaths: isVerifier ? false : input.approveOwnedPaths,
-        ownedPaths: isVerifier ? [] : input.ownedPaths,
-        preferredShellCwd: input.preferredShellCwd,
-        executionRoot: input.executionRoot,
-        allowUnpriced,
-        approvedRiskCategories: input.approvedRiskCategories ?? [],
-        approvedRiskTiers: input.approvedRiskTiers ?? [],
-        claimedTaskId,
-        waiveQueue,
-        slotOverride: input.slotOverride ?? null,
+        args: {
+          prompt: input.prompt,
+          provider: input.provider,
+          baseUrl: input.baseUrl,
+          model: input.model,
+          inputCostPerMtok: input.inputCostPerMtok,
+          outputCostPerMtok: input.outputCostPerMtok,
+          sessionCapUsd: input.sessionCapUsd,
+          dailyCapUsd: input.dailyCapUsd,
+          profile: "local",
+          leaseAgentId: agentId,
+          autonomy: isVerifier ? "propose" : input.autonomy,
+          maxSteps: input.maxSteps,
+          maxTokens: input.maxTokens,
+          verifyOnComplete: input.verifyOnComplete,
+          verifyGate: input.verifyGate,
+          approveOwnedPaths: isVerifier ? false : input.approveOwnedPaths,
+          ownedPaths: isVerifier ? [] : input.ownedPaths,
+          preferredShellCwd: input.preferredShellCwd,
+          executionRoot: input.executionRoot,
+          allowUnpriced: allowUnpriced === true,
+          approvedRiskCategories: input.approvedRiskCategories ?? [],
+          approvedRiskTiers: input.approvedRiskTiers ?? [],
+          claimedTaskId,
+          waiveQueue: waiveQueue === true,
+          slotOverride: input.slotOverride ?? null,
+          imagePaths: input.imagePaths ?? [],
+        },
         onEvent,
       });
       if (pendingImproveWin) {
@@ -1113,6 +1576,7 @@ function App() {
         await invoke("lease_release", { leaseId }).catch(() => {});
       }
       setAgentBusy(false);
+      setRunningAgentTabId(null);
       // Rebuild PLAN + dashboard so Environment reflects post-turn audit state.
       await invoke("run_plan").catch(() => {});
       void refresh();
@@ -1173,6 +1637,7 @@ function App() {
         />
       )}
       <aside
+        data-testid="ade-sidebar"
         className={`fixed inset-y-0 left-0 z-30 flex w-62 shrink-0 flex-col border-r border-white/7 bg-[#0b0f16] px-3 py-4 transition-transform md:static md:translate-x-0 ${
           navOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
@@ -1196,83 +1661,174 @@ function App() {
           </button>
         </div>
 
-        <div
-          className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-white/8 bg-black/20 p-1"
-          title="Standard = work rail. Debug = Standard + traces."
-        >
-          {SURFACE_MODES.map((mode) => (
-            <button
-              key={mode.id}
-              type="button"
-              title={mode.hint}
-              onClick={() => {
-                setSurfaceModePersisted(mode.id);
-                setNavOpenPersisted(false);
-              }}
-              className={`rounded-md px-1 py-1.5 text-[11px] font-medium tracking-tight transition ${
-                surfaceMode === mode.id
-                  ? "bg-blue-500/25 text-blue-100"
-                  : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              {mode.label}
-            </button>
-          ))}
-        </div>
-
         <nav className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto">
-          {visibleNav.map((group, groupIndex) => (
-            <div key={group.title ?? `tier-${group.tier}-${groupIndex}`}>
-              {group.title && (
-                <div className="mb-0.5 px-3 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600">
-                  {group.title}
-                </div>
-              )}
-              <div className="space-y-px">
-                {group.items.map((item) => {
-                  const needsDesktop = Boolean(item.desktopOnly) && !isTauri();
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveView(item.id);
+          {visibleNav.map((group, groupIndex) => {
+            const renderItems = (opts?: { showLights?: boolean }) =>
+              group.items.map((item) => {
+                const needsDesktop = Boolean(item.desktopOnly) && !isTauri();
+                const light = lightForSetupKey(item.setupKey);
+                const showLights = opts?.showLights === true;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      openNavView(item.id);
+                      setNavOpenPersisted(false);
+                    }}
+                    className={navItemClass(
+                      activeView === item.id ||
+                        (item.id === "Home" && activeView === "Agent") ||
+                        (item.id === "Home" &&
+                          Boolean(
+                            shellTabs.find(
+                              (tab) =>
+                                tab.id === activeTabId && tab.kind === "agent",
+                            ),
+                          )),
+                      group.tier,
+                    )}
+                  >
+                    <span className="grid w-4 place-items-center text-sm text-current/80">
+                      {item.icon === "gear" ? (
+                        <GearIcon className="size-3.5" />
+                      ) : (
+                        item.icon
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                    {showLights && light && light !== "ready" && (
+                      <span
+                        className={`size-1.5 shrink-0 rounded-full ${setupLightClass(light)}`}
+                        title={setupLightTitle(light)}
+                        aria-label={setupLightTitle(light)}
+                      />
+                    )}
+                    {needsDesktop && (
+                      <span className="text-[11px] text-slate-600">Desktop</span>
+                    )}
+                  </button>
+                );
+              });
+
+            return (
+              <div key={group.title ?? `tier-${group.tier}-${groupIndex}`}>
+                {group.tier === 0 ? (
+                  <div className="space-y-px" data-testid="ade-nav-home">
+                    {renderItems()}
+                  </div>
+                ) : group.title === "Setup" ? (
+                  <NavFold
+                    title="Setup"
+                    summary={
+                      setupLights.overall === "ready"
+                        ? "Ready"
+                        : setupLights.overall === "warn"
+                          ? "Attention"
+                          : "Recommended"
+                    }
+                    storageKey="ade_nav_setup_fold"
+                    defaultOpen={setupLights.overall !== "ready"}
+                    forceOpen={
+                      setupLights.overall === "warn" &&
+                      (activeView === "Environment" ||
+                        activeView === "Keys" ||
+                        activeView === "Recipes" ||
+                        activeView === "Verify")
+                    }
+                    light={setupLights.overall}
+                  >
+                    {renderItems()}
+                  </NavFold>
+                ) : group.title === "More" ? (
+                  <NavFold
+                    title="More"
+                    storageKey="ade_nav_more_fold"
+                    defaultOpen={false}
+                    forceOpen={
+                      debugChrome &&
+                      (activeView === "Rules" ||
+                        activeView === "Atlas" ||
+                        activeView === "Plan" ||
+                        activeView === "MCP")
+                    }
+                  >
+                    {renderItems()}
+                  </NavFold>
+                ) : (
+                  <div className="space-y-px">{renderItems()}</div>
+                )}
+                {groupIndex === 0 && (
+                  <div className="mt-2">
+                    <SidebarRailLists
+                      workspaces={workspaceList}
+                      workspaceBusy={workspaceSwitchBusy}
+                      sessions={shellTabs}
+                      activeSessionId={activeTabId}
+                      sessionsActive={
+                        activeView === "Home" || activeView === "Agent"
+                      }
+                      onOpenWorkspace={(path) => {
+                        void switchWorkspaceFromRail(path);
+                      }}
+                      onManageWorkspaces={() => {
+                        setWorkspacesStartNew(false);
+                        openNavView("Workspaces");
                         setNavOpenPersisted(false);
                       }}
-                      className={navItemClass(activeView === item.id, group.tier)}
-                    >
-                      <span
-                        className={`grid w-4 place-items-center text-current/80 ${
-                          group.tier === 2 ? "text-xs" : "text-sm"
-                        }`}
-                      >
-                        {item.icon === "gear" ? (
-                          <GearIcon className="size-3.5" />
-                        ) : (
-                          item.icon
-                        )}
-                      </span>
-                      <span className="flex-1">{item.label}</span>
-                      {needsDesktop && (
-                        <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200/90">
-                          Desktop
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                      onNewWorkspace={() => {
+                        setWorkspacesStartNew(true);
+                        openNavView("Workspaces");
+                        setNavOpenPersisted(false);
+                      }}
+                      onFocusSession={(id) => {
+                        focusShellTab(id);
+                        setNavOpenPersisted(false);
+                      }}
+                      onNewSession={() => {
+                        openAgentTab();
+                        setNavOpenPersisted(false);
+                      }}
+                      onCloseSession={(id) => {
+                        closeShellTab(id);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className="mt-3 border-t border-white/6 pt-3">
-          {surfaceMode === "dev" && (
-            <div className="mb-1 flex items-center gap-2 px-3 py-1.5 text-xs text-amber-200/80">
-              <span className="size-1.5 rounded-full bg-amber-400" />
-              Debug · harness on
-            </div>
-          )}
+          <button
+            type="button"
+            title={
+              surfaceMode === "dev"
+                ? "Debug on — click for Standard (hide Atlas / Plan / Editor / MCP)"
+                : "Turn on Debug for Atlas, Plan Map, Editor, MCP, and harness panels"
+            }
+            onClick={() => {
+              setSurfaceModePersisted(surfaceMode === "dev" ? "power" : "dev");
+            }}
+            className={`mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${
+              surfaceMode === "dev"
+                ? "bg-amber-500/12 text-amber-100"
+                : "text-slate-500 hover:bg-white/4 hover:text-slate-300"
+            }`}
+          >
+            <span
+              className={`size-1.5 shrink-0 rounded-full ${
+                surfaceMode === "dev" ? "bg-amber-400" : "bg-slate-600"
+              }`}
+            />
+            <span className="min-w-0 flex-1 truncate">
+              {surfaceMode === "dev" ? "Debug on" : "Debug"}
+            </span>
+            <span className="text-[10px] text-slate-600">
+              {surfaceMode === "dev" ? "harness" : "off"}
+            </span>
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -1290,29 +1846,46 @@ function App() {
           </button>
           <div className="px-3 py-1.5 text-[10px] leading-4 text-slate-600">
             {isTauri() ? "Desktop" : "Browser preview"}
-            {mcpServers.length > 0 ? ` · ${mcpServers.length} MCP` : ""}
+            {debugChrome && mcpServers.length > 0 ? ` · ${mcpServers.length} MCP` : ""}
           </div>
         </div>
       </aside>
 
       <main
         className={`min-w-0 flex-1 ${
-          activeView === "Home" || activeView === "Agent"
+          activeView === "Home" ||
+          activeView === "Agent" ||
+          activeView === "Browser" ||
+          activeView === "Editor" ||
+          activeView === "Terminal"
             ? "flex flex-col overflow-hidden"
             : "thin-scrollbar overflow-y-auto"
         }`}
       >
-        <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/7 bg-[#080b11] px-3 sm:h-14 sm:px-5">
-          <div className="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              className="grid size-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/2.5 text-slate-300 md:hidden"
-              aria-label="Open menu"
-              onClick={() => setNavOpenPersisted(true)}
-            >
-              ☰
-            </button>
-            <div className="min-w-0">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/7 bg-[#080b11] px-3 sm:h-14 sm:px-5">
+          <button
+            type="button"
+            className="grid size-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/2.5 text-slate-300 md:hidden"
+            aria-label="Open menu"
+            onClick={() => setNavOpenPersisted(true)}
+          >
+            ☰
+          </button>
+          <ShellTabBar
+            tabs={shellTabs}
+            activeTabId={
+              activeTabId &&
+              ["Home", "Agent", "Browser", "Editor", "Terminal"].includes(
+                activeView,
+              )
+                ? activeTabId
+                : null
+            }
+            onSelect={focusShellTab}
+            onClose={closeShellTab}
+          />
+          {activeTabId === null && (
+            <div className="min-w-0 flex-1">
               <h1 className="text-sm font-semibold leading-tight">
                 {activeView === "Environment"
                   ? "Environment"
@@ -1321,12 +1894,12 @@ function App() {
                     : activeView === "Plan"
                       ? "Plan Map"
                       : activeView === "Verify"
-                        ? "Checks"
-                        : activeView === "Audit"
-                          ? "Trust"
-                          : activeView === "Agent"
-                          ? "Home"
-                          : activeView}
+                        ? "Test project"
+                        : activeView === "Recipes"
+                          ? "Stack"
+                          : activeView === "Audit"
+                            ? "Trust"
+                            : activeView}
                 {debugChrome && (
                   <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
                     Debug
@@ -1339,64 +1912,79 @@ function App() {
               >
                 {dashboard?.workspace_root
                   ? `Working in ${workspaceLeaf(dashboard.workspace_root)}`
-                  : "No environment attached"}
-                {dashboard?.is_dogfood ? " · dogfood" : ""}
+                  : "No folder attached"}
                 {!isTauri() && " · browser"}
               </p>
             </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {(activeView === "Home" || activeView === "Agent") && (
+          )}
+          <div className="ml-auto flex shrink-0 items-center">
+            <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
               <button
                 type="button"
-                onClick={() => setNewChatNonce((n) => n + 1)}
-                title="New chat in this workspace"
-                className="rounded-md border border-white/10 bg-white/2.5 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/6"
+                onClick={() => openAgentTab()}
+                aria-label="New Agent"
+                title="New Agent"
+                className="grid size-7 place-items-center rounded-md text-base font-medium leading-none text-slate-200 transition hover:bg-blue-500/20 hover:text-white"
               >
-                + Chat
+                <span aria-hidden className="relative -top-px">
+                  +
+                </span>
               </button>
-            )}
-            {isTauri() && dashboard?.workspace_root && (
+              <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden />
               <button
                 type="button"
-                onClick={() => {
-                  void invoke("open_in_zed")
-                    .then(() => setError(null))
-                    .catch((reason) => setError(String(reason)));
-                }}
-                title="Open this workspace in Zed (ACP soft shell: ade acp)"
-                className="rounded-md border border-white/10 bg-white/2.5 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/6"
+                onClick={() => openBrowserTab()}
+                aria-label="New Browser"
+                title="New Browser"
+                className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
               >
-                Zed
+                ⬚
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setWorkspacesStartNew(true);
-                setActiveView("Workspaces");
-              }}
-              title="Create a new workspace folder"
-              className="rounded-md border border-blue-400/30 bg-blue-500/15 px-2 py-1 text-[10px] font-semibold text-blue-100 hover:bg-blue-500/25"
-            >
-              + Workspace
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setWorkspacesStartNew(false);
-                setActiveView("Workspaces");
-              }}
-              title={dashboard?.workspace_root ?? "Change workspace"}
-              className="hidden max-w-40 truncate rounded-md border border-white/10 bg-white/2.5 px-2 py-1 text-[10px] font-medium text-slate-300 hover:bg-white/6 sm:inline-block"
-            >
-              Change…
-            </button>
+              <button
+                type="button"
+                onClick={() => void openEditorTab()}
+                aria-label="Open File"
+                title="Open File"
+                disabled={!isTauri()}
+                className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100 disabled:opacity-40"
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                onClick={() => openTerminalTab()}
+                aria-label="Terminal"
+                title="Terminal"
+                disabled={!isTauri()}
+                className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100 disabled:opacity-40"
+              >
+                ▸
+              </button>
+              <HeaderOverflowMenu
+                isDesktop={isTauri()}
+                actions={[
+                  {
+                    id: "folder",
+                    label: "Change folder…",
+                    description: dashboard?.workspace_root
+                      ? workspaceLeaf(dashboard.workspace_root)
+                      : "Attach a workspace",
+                    icon: "▤",
+                    desktopOnly: true,
+                    onSelect: () => {
+                      setWorkspacesStartNew(false);
+                      openNavView("Workspaces");
+                    },
+                  },
+                ]}
+              />
+            </div>
             <button
               onClick={() => void refresh()}
               disabled={loading}
               aria-label="Refresh dashboard"
-              className="grid size-7 place-items-center rounded-md border border-white/10 bg-white/2.5 text-slate-400 hover:text-white disabled:opacity-50"
+              title="Refresh"
+              className="ml-1.5 grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-white/6 hover:text-slate-200 disabled:opacity-50"
             >
               ↻
             </button>
@@ -1406,8 +1994,14 @@ function App() {
         <div
           className={
             activeView === "Home" || activeView === "Agent"
-              ? "mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col px-4 py-3 sm:px-5"
-              : "mx-auto max-w-350 p-4 sm:p-5"
+              ? "mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-4 py-3 sm:px-5"
+              : activeView === "Browser" ||
+                  activeView === "Editor" ||
+                  activeView === "Terminal"
+                ? `flex min-h-0 flex-1 flex-col overflow-hidden ${
+                    activeView === "Browser" ? "p-2 sm:p-3" : "p-4 sm:p-5"
+                  }`
+                : "mx-auto max-w-350 p-4 sm:p-5"
           }
         >
           {!isTauri() && (
@@ -1442,54 +2036,105 @@ function App() {
                 <>
               {(activeView === "Home" || activeView === "Agent") &&
                 (isTauri() ? (
-                  <AgentView
-                    key={dashboard.workspace_root}
-                    events={agentEvents}
-                    busy={agentBusy}
-                    connectedTools={mcpTools.length}
-                    initialPrompt={homePrompt}
-                    autoSubmit={agentAutoSubmit}
-                    autoSubmitContext={agentAutoSubmitContext}
-                    onAutoSubmitHandled={() => {
-                      setAgentAutoSubmit(false);
-                      setAgentAutoSubmitContext("normal");
-                    }}
-                    newChatNonce={newChatNonce}
-                    sharedVerifyGate={gate}
-                    devMode={debugChrome}
-                    simpleMode={false}
-                    workspaceRoot={dashboard.workspace_root}
-                    onOpenWorkspaces={() => {
-                      setWorkspacesStartNew(false);
-                      setActiveView("Workspaces");
-                    }}
-                    onOpenEnvironment={() => setActiveView("Environment")}
-                    leases={dashboard.leases}
-                    planOwnedPaths={[
-                      ...new Set([
-                        ...dashboard.plan.phases.flatMap((phase) => phase.owned_paths),
-                        ...(!dashboard.has_recipe ? [".ade/recipe.json"] : []),
-                      ]),
-                    ]}
-                    rebuildLockWarnings={dashboard.rebuild_lock_warnings ?? []}
-                    handoffAvailable={
-                      dashboard.handoff.capsule_count > 0 ||
-                      Boolean(dashboard.handoff.latest_status)
-                    }
-                    handoffLatestStatus={dashboard.handoff.latest_status}
-                    continuityBusy={continuityBusy}
-                    onContinueHandoff={() => void continueLastHandoff()}
-                    onClearTranscript={() => setAgentEvents([])}
-                    onOpenKeys={() => setActiveView("Keys")}
-                    tasks={dashboard.tasks ?? []}
-                    planPhaseCount={dashboard.plan.phases.length}
-                    onRefresh={() => void refresh()}
-                    onSurfaceFailure={(error) => {
-                      setError(error);
-                      setAgentEvents([{ type: "failed", error }]);
-                    }}
-                    onRun={(input) => void runAgentTurn(input)}
-                  />
+                  (() => {
+                    const agentTabs = shellTabs.filter(
+                      (tab) => tab.kind === "agent",
+                    );
+                    const focusedAgentId = agentTabs.some(
+                      (tab) => tab.id === activeTabId,
+                    )
+                      ? activeTabId
+                      : HOME_AGENT_TAB;
+                    return agentTabs.map((tab) => {
+                      const active = tab.id === focusedAgentId;
+                      return (
+                        <div
+                          key={tab.id}
+                          className={
+                            active
+                              ? "flex min-h-0 flex-1 flex-col"
+                              : "hidden"
+                          }
+                          aria-hidden={!active}
+                        >
+                          <AgentView
+                            key={`${dashboard.workspace_root}:${tab.id}`}
+                            events={
+                              runningAgentTabId === tab.id ||
+                              (runningAgentTabId === null && active)
+                                ? agentEvents
+                                : []
+                            }
+                            busy={
+                              agentBusy &&
+                              (runningAgentTabId === tab.id ||
+                                (runningAgentTabId === null && active))
+                            }
+                            connectedTools={mcpTools.length}
+                            initialPrompt={
+                              tab.id === HOME_AGENT_TAB ? homePrompt : ""
+                            }
+                            autoSubmit={
+                              tab.id === HOME_AGENT_TAB && agentAutoSubmit
+                            }
+                            autoSubmitContext={agentAutoSubmitContext}
+                            onAutoSubmitHandled={() => {
+                              setAgentAutoSubmit(false);
+                              setAgentAutoSubmitContext("normal");
+                            }}
+                            newChatNonce={0}
+                            ephemeralChat={Boolean(tab.ephemeral)}
+                            sharedVerifyGate={gate}
+                            devMode={debugChrome}
+                            simpleMode={false}
+                            workspaceRoot={dashboard.workspace_root}
+                            onOpenWorkspaces={() => {
+                              setWorkspacesStartNew(false);
+                              openNavView("Workspaces");
+                            }}
+                            onOpenEnvironment={() => openNavView("Environment")}
+                            leases={dashboard.leases}
+                            planOwnedPaths={[
+                              ...new Set([
+                                ...dashboard.plan.phases.flatMap(
+                                  (phase) => phase.owned_paths,
+                                ),
+                                ...(!dashboard.has_recipe
+                                  ? [".ade/recipe.json"]
+                                  : []),
+                              ]),
+                            ]}
+                            rebuildLockWarnings={
+                              dashboard.rebuild_lock_warnings ?? []
+                            }
+                            handoffAvailable={
+                              dashboard.handoff.capsule_count > 0 ||
+                              Boolean(dashboard.handoff.latest_status)
+                            }
+                            handoffLatestStatus={dashboard.handoff.latest_status}
+                            continuityBusy={continuityBusy}
+                            onContinueHandoff={() => void continueLastHandoff()}
+                            onClearTranscript={() => setAgentEvents([])}
+                            onOpenKeys={() => openNavView("Keys")}
+                            tasks={dashboard.tasks ?? []}
+                            planPhaseCount={dashboard.plan.phases.length}
+                            onRefresh={() => void refresh()}
+                            onSurfaceFailure={(error) => {
+                              setError(error);
+                              setRunningAgentTabId(tab.id);
+                              setAgentEvents([{ type: "failed", error }]);
+                            }}
+                            onRun={(input) => {
+                              setRunningAgentTabId(tab.id);
+                              void runAgentTurn(input);
+                            }}
+                            onCancel={() => void cancelAgentTurn()}
+                            onRenameTab={(title) => updateTabTitle(tab.id, title)}
+                          />
+                        </div>
+                      );
+                    });
+                  })()
                 ) : (
                   <HomeView
                     dashboard={dashboard}
@@ -1503,12 +2148,12 @@ function App() {
                     lastUnderstandPath={lastUnderstandPath}
                     devMode={debugChrome}
                     simpleMode={false}
-                    onOpenAgent={() => setActiveView("Home")}
-                    onOpenHealth={() => setActiveView("Environment")}
-                    onOpenWorkspaces={() => setActiveView("Workspaces")}
-                    onOpenRecipes={() => setActiveView("Recipes")}
-                    onOpenKeys={() => setActiveView("Keys")}
-                    onOpenVerify={() => setActiveView("Verify")}
+                    onOpenAgent={() => openNavView("Home")}
+                    onOpenHealth={() => openNavView("Environment")}
+                    onOpenWorkspaces={() => openNavView("Workspaces")}
+                    onOpenRecipes={() => openNavView("Recipes")}
+                    onOpenKeys={() => openNavView("Keys")}
+                    onOpenVerify={() => openNavView("Verify")}
                     onUnderstand={() => void runUnderstandProject()}
                     onVerifyHome={() => void runVerify({ stayOnHome: true })}
                     onImproveAde={startImproveAde}
@@ -1516,13 +2161,13 @@ function App() {
                     onRunAgent={() => {
                       if (!homePrompt.trim()) return;
                       setAgentAutoSubmit(true);
-                      setActiveView("Home");
+                      openNavView("Home");
                     }}
                     onApplyPreset={(preset) => {
                       window.localStorage.setItem(AUTONOMY_KEY, preset.autonomy);
                       setHomePrompt(preset.prompt);
                       setAgentAutoSubmit(true);
-                      setActiveView("Home");
+                      openNavView("Home");
                     }}
                   />
                 ))}
@@ -1544,8 +2189,8 @@ function App() {
                   onOpenKeys={() => setActiveView("Keys")}
                   onOpenRecipes={() => setActiveView("Recipes")}
                   onOpenVerify={() => setActiveView("Verify")}
-                  onOpenHome={() => setActiveView("Home")}
-                  onOpenWorkspaces={() => setActiveView("Workspaces")}
+                  onOpenHome={() => openNavView("Home")}
+                  onOpenWorkspaces={() => openNavView("Workspaces")}
                   onContinueHandoff={() => void continueLastHandoff()}
                   continuityBusy={continuityBusy}
                   onReviewHandoffInEditor={() => {
@@ -1553,6 +2198,17 @@ function App() {
                       ADE_EDITOR_INTENT_KEY,
                       JSON.stringify({ mode: "handoff" }),
                     );
+                    const id = newTabId("editor");
+                    setShellTabs((tabs) => [
+                      ...tabs,
+                      {
+                        id,
+                        kind: "editor",
+                        title: "Handoff",
+                        closable: true,
+                      },
+                    ]);
+                    setActiveTabId(id);
                     setActiveView("Editor");
                   }}
                   onRefresh={() => void refresh()}
@@ -1569,33 +2225,88 @@ function App() {
                     onOpened={(intent?: WorkspaceOpenIntent) => {
                       void refresh();
                       setWorkspacesStartNew(false);
-                      setActiveView(intent === "work" ? "Home" : "Environment");
+                      openNavView(intent === "work" ? "Home" : "Environment");
                     }}
-                    onOpenEnvironment={() => setActiveView("Environment")}
+                    onOpenEnvironment={() => openNavView("Environment")}
                   />
                 ))}
               {activeView === "Browser" &&
                 (DESKTOP_REQUIRED_VIEWS.has("Browser") && !isTauri() ? (
                   <DesktopRequired view="Browser" />
                 ) : (
-                  <BrowserView />
+                  shellTabs
+                    .filter((tab) => tab.kind === "browser")
+                    .map((tab) => (
+                      <div
+                        key={tab.id}
+                        className={
+                          tab.id === activeTabId
+                            ? "flex min-h-0 flex-1 flex-col"
+                            : "hidden"
+                        }
+                        aria-hidden={tab.id !== activeTabId}
+                      >
+                        <BrowserView
+                          instanceId={tab.id}
+                          initialUrl={tab.url ?? defaultBrowserUrl()}
+                          active={tab.id === activeTabId && activeView === "Browser"}
+                          onTitleChange={(title) =>
+                            updateTabTitle(tab.id, title)
+                          }
+                        />
+                      </div>
+                    ))
                 ))}
               {activeView === "Terminal" &&
                 (DESKTOP_REQUIRED_VIEWS.has("Terminal") && !isTauri() ? (
                   <DesktopRequired view="Terminal" />
                 ) : (
-                  <TerminalView />
+                  shellTabs
+                    .filter((tab) => tab.kind === "terminal")
+                    .map((tab) => (
+                      <div
+                        key={tab.id}
+                        className={
+                          tab.id === activeTabId
+                            ? "flex min-h-0 flex-1 flex-col"
+                            : "hidden"
+                        }
+                        aria-hidden={tab.id !== activeTabId}
+                      >
+                        <TerminalView />
+                      </div>
+                    ))
                 ))}
               {activeView === "Editor" &&
                 (DESKTOP_REQUIRED_VIEWS.has("Editor") && !isTauri() ? (
                   <DesktopRequired view="Editor" />
                 ) : (
-                  <EditorView />
+                  shellTabs
+                    .filter((tab) => tab.kind === "editor")
+                    .map((tab) => (
+                      <div
+                        key={tab.id}
+                        className={
+                          tab.id === activeTabId
+                            ? "flex min-h-0 flex-1 flex-col"
+                            : "hidden"
+                        }
+                        aria-hidden={tab.id !== activeTabId}
+                      >
+                        <EditorView
+                          initialPath={tab.path}
+                          autoPick={!tab.path}
+                          onTitleChange={(title) =>
+                            updateTabTitle(tab.id, title)
+                          }
+                        />
+                      </div>
+                    ))
                 ))}
               {activeView === "Keys" && (
                 <KeysView
                   simpleMode={false}
-                  onContinueToAgent={() => setActiveView("Home")}
+                  onContinueToAgent={() => openNavView("Home")}
                 />
               )}
               {activeView === "Audit" && (
@@ -1840,8 +2551,8 @@ function HomeView({
       id: "keys",
       title: inBrowser ? "Add an API key (Desktop)" : "Add an API key",
       detail: inBrowser
-        ? "BYOK vault is Desktop-only — open ADE Desktop for Keys"
-        : "BYOK so Agent can call your model",
+        ? "Open ADE Desktop to save a key securely"
+        : "So ADE can call your model",
       done: inBrowser ? false : keyReady,
       desktopOnly: inBrowser,
       cta: inBrowser ? "Open Desktop path" : "Add API key",
@@ -1850,7 +2561,7 @@ function HomeView({
     {
       id: "recipe",
       title: "Choose a stack",
-      detail: "Trust contract via Stack Fit / Recipes",
+      detail: "Pick a stack so ADE knows how this project is built",
       done: recipeReady,
       desktopOnly: false,
       cta: "Choose stack",
@@ -1858,11 +2569,11 @@ function HomeView({
     },
     {
       id: "verify",
-      title: "Check the workspace",
-      detail: "Run verify once before trusting agent work",
+      title: "Test the project",
+      detail: "Run build/lint/test gates once before trusting agent changes",
       done: verifyReady,
       desktopOnly: false,
-      cta: "Check workspace",
+      cta: "Test project",
       onClick: onVerifyHome,
     },
   ];
@@ -1874,9 +2585,11 @@ function HomeView({
 
   const heroTitle = "ADE";
   const envName = workspaceLeaf(dashboard.workspace_root);
-  const heroSubtitle = dashboard.workspace_root
-    ? `Working in ${envName}. Ask ADE about this environment.`
-    : "Attach a workspace folder first — then ask ADE.";
+  const heroSubtitle = !dashboard.workspace_root
+    ? "Attach a workspace folder first — then ask ADE."
+    : dashboard.is_default
+      ? "Scratch workspace (Default). Ask anything — or create a real project when you're ready."
+      : `Working in ${envName}. Ask ADE about this environment.`;
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -1899,6 +2612,7 @@ function HomeView({
         </div>
         <p className="mt-3 text-[11px] text-slate-500">
           {scorePercent}% ready
+          {dashboard.is_default ? " · Default scratch" : ""}
           {dashboard.is_dogfood ? " · dogfood" : ""}
           {" · "}
           <button
@@ -1906,7 +2620,7 @@ function HomeView({
             onClick={onOpenHealth}
             className="text-slate-400 hover:text-blue-200"
           >
-            Environment audit
+            Setup check
           </button>
         </p>
         {isTauri() && <SpendUsageStrip className="mt-3" compact />}
@@ -1954,7 +2668,7 @@ function HomeView({
               onClick={onOpenVerify}
               className="text-[10px] text-slate-500 hover:text-slate-300"
             >
-              Open Checks →
+              Open Test project →
             </button>
           </div>
         )}
@@ -2320,22 +3034,23 @@ function Overview({
   if (verifyResults.length === 0) {
     gaps.push({
       id: "verify-missing",
-      title: "Checks not run yet",
-      detail: "Run Checks to fill the gate evidence box — this does not use the agent chat.",
+      title: "Project tests not run yet",
+      detail:
+        "Run Test project once after setup — it checks build/lint/test gates (not the chat).",
       severity: "warn",
-      fixLabel: verifying ? "Checking…" : "Run checks",
+      fixLabel: verifying ? "Testing…" : "Run tests",
       onFix: verifying ? undefined : onRunChecks,
     });
   } else if (failedVerify.length > 0) {
     gaps.push({
       id: "verify-fail",
-      title: `${failedVerify.length} check${failedVerify.length === 1 ? "" : "s"} failing`,
+      title: `${failedVerify.length} project test${failedVerify.length === 1 ? "" : "s"} failing`,
       detail: failedVerify
         .slice(0, 3)
         .map((item) => item.gate)
         .join(", "),
       severity: "block",
-      fixLabel: verifying ? "Checking…" : "Re-run checks",
+      fixLabel: verifying ? "Testing…" : "Re-run tests",
       onFix: verifying ? undefined : onRunChecks,
     });
   }
@@ -2377,11 +3092,6 @@ function Overview({
     (sum, finding) => sum + Math.max(0, finding.points_max - finding.points),
     0,
   );
-  const actionableReady =
-    gaps.length === 0 &&
-    auditFindings
-      .filter((finding) => finding.severity !== "info")
-      .every((finding) => finding.points >= finding.points_max);
   const ignoreAlignments = dashboard.audit.ignore_alignment ?? [];
   const ignoreIssues = ignoreAlignments.filter(
     (item) => item.status === "Drifted" || item.status === "Missing",
@@ -2400,11 +3110,9 @@ function Overview({
       ? `${setupGaps.length} gap${setupGaps.length === 1 ? "" : "s"} to clear`
       : checkGaps.length > 0
         ? checkGaps[0]?.id === "verify-fail"
-          ? "Checks need attention"
-          : "Environment ready — run Checks for gate evidence"
-        : deferredPoints > 0
-          ? `Ready for focused work · ${deferredPoints} pt${deferredPoints === 1 ? "" : "s"} deferred`
-          : "Nothing blocking — ready for focused work";
+          ? "Project tests need attention"
+          : "Almost ready — run Test project once"
+        : "Ready to work";
 
   return (
     <div className="space-y-4">
@@ -2418,40 +3126,29 @@ function Overview({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              Environment audit
+              Setup check
             </div>
             <h2 className="mt-1 text-sm font-semibold text-slate-100">{heroTitle}</h2>
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              Attached folder:{" "}
-              <span className="font-mono text-slate-400">{dashboard.workspace_root}</span>
+              {dashboard.workspace_root ? (
+                <>
+                  Folder:{" "}
+                  <span className="font-mono text-slate-400">
+                    {workspaceLeaf(dashboard.workspace_root)}
+                  </span>
+                </>
+              ) : (
+                "No folder attached"
+              )}
               {" · "}
               <button
                 type="button"
                 onClick={onOpenWorkspaces}
                 className="text-blue-300/90 hover:text-blue-200"
               >
-                Change workspace
+                Change folder
               </button>
-              {actionableReady && deferredPoints === 0
-                ? " · L0–L11 actionable layers complete"
-                : null}
             </p>
-            {deferredFindings.length > 0 && (
-              <ul className="mt-2 space-y-1 border-t border-white/6 pt-2">
-                {deferredFindings.map((finding) => (
-                  <li
-                    key={finding.layer}
-                    className="text-[11px] leading-5 text-slate-400"
-                  >
-                    <span className="font-medium text-slate-300">{finding.layer}</span>
-                    {" · "}
-                    {finding.points}/{finding.points_max}
-                    {" · "}
-                    <span className="text-slate-500">{finding.detail}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
           {onlyChecksGap ? (
             <button
@@ -2460,7 +3157,7 @@ function Overview({
               onClick={onRunChecks}
               className="shrink-0 rounded-lg bg-blue-500 px-3.5 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
             >
-              {verifying ? "Checking…" : "Run checks"}
+              {verifying ? "Testing…" : "Run tests"}
             </button>
           ) : setupGaps.length > 0 ? (
             <button
@@ -2537,45 +3234,76 @@ function Overview({
         )}
       </section>
 
-      {globalAudit && (
-        <div
-          className={`rounded-lg border px-3 py-2 text-[11px] ${
-            globalAudit.ok
-              ? "border-emerald-400/20 bg-emerald-400/5 text-emerald-100/85"
-              : "border-amber-400/25 bg-amber-400/8 text-amber-100/90"
-          }`}
+      {deferredFindings.length > 0 && (
+        <Disclosure
+          title="Deferred notes"
+          summary={`${deferredFindings.length}`}
+          defaultOpen={false}
+          storageKey="ade_env_deferred"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-semibold">
-              Machine · {globalAudit.ok ? "ADE ready" : "ADE attention"}
-            </span>
-            <button
-              type="button"
-              className="text-[10px] text-slate-400 hover:text-slate-200"
-              onClick={() =>
-                void invoke<typeof globalAudit>("run_global_audit").then(setGlobalAudit)
-              }
-            >
-              Re-check
-            </button>
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-slate-400">
-            {globalAudit.checks.map((check) => (
-              <span key={check.id} title={check.detail}>
-                {check.id === "turso"
-                  ? check.passed
-                    ? "✓"
-                    : "○"
-                  : check.passed
-                    ? "✓"
-                    : "!"}{" "}
-                {check.id === "turso" && !check.passed
-                  ? "Turso optional"
-                  : check.label}
-              </span>
+          <ul className="space-y-1 px-4 pb-4 sm:px-5">
+            {deferredFindings.map((finding) => (
+              <li
+                key={finding.layer}
+                className="text-[11px] leading-5 text-slate-400"
+              >
+                <span className="font-medium text-slate-300">{finding.layer}</span>
+                {" · "}
+                {finding.points}/{finding.points_max}
+                {" · "}
+                <span className="text-slate-500">{finding.detail}</span>
+              </li>
             ))}
+          </ul>
+        </Disclosure>
+      )}
+
+      {globalAudit && (
+        <Disclosure
+          title="This computer"
+          summary={globalAudit.ok ? "ready" : "needs attention"}
+          defaultOpen={!globalAudit.ok}
+          storageKey="ade_env_machine"
+        >
+          <div
+            className={`mx-4 mb-4 rounded-lg border px-3 py-2 text-[11px] sm:mx-5 ${
+              globalAudit.ok
+                ? "border-emerald-400/20 bg-emerald-400/5 text-emerald-100/85"
+                : "border-amber-400/25 bg-amber-400/8 text-amber-100/90"
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold">
+                {globalAudit.ok ? "ADE ready on this machine" : "This machine needs attention"}
+              </span>
+              <button
+                type="button"
+                className="text-[10px] text-slate-400 hover:text-slate-200"
+                onClick={() =>
+                  void invoke<typeof globalAudit>("run_global_audit").then(setGlobalAudit)
+                }
+              >
+                Re-check
+              </button>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-slate-400">
+              {globalAudit.checks.map((check) => (
+                <span key={check.id} title={check.detail}>
+                  {check.id === "turso"
+                    ? check.passed
+                      ? "✓"
+                      : "○"
+                    : check.passed
+                      ? "✓"
+                      : "!"}{" "}
+                  {check.id === "turso" && !check.passed
+                    ? "Turso optional"
+                    : check.label}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
+        </Disclosure>
       )}
       {devMode && (
         <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-1.5 text-[11px] text-amber-100/80">
@@ -2583,58 +3311,70 @@ function Overview({
           {dashboard.leases.length}
         </div>
       )}
-      <section
-        className={`grid gap-2 ${
-          devMode
-            ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7"
-            : "grid-cols-2 sm:grid-cols-4"
-        }`}
+      <Disclosure
+        title="Scores"
+        summary={`${scorePercent}% ready`}
+        defaultOpen={false}
+        storageKey="ade_env_scores"
       >
-        <MetricCard dense label="Ready" value={`${scorePercent}%`} accent="blue" />
-        <MetricCard
-          dense
-          label="Blockers"
-          value={String(dashboard.audit.blockers.length)}
-          accent={dashboard.audit.blockers.length ? "red" : "green"}
-        />
-        <MetricCard
-          dense
-          label="Verify"
-          value={verifyResults.length ? `${passed}/${verifyResults.length}` : "—"}
-          accent={verifyResults.length && passed === verifyResults.length ? "green" : "slate"}
-        />
-        <MetricCard
-          dense
-          label="Handoffs"
-          value={String(dashboard.handoff.capsule_count)}
-          accent={dashboard.handoff.invalid_capsule_count ? "red" : "green"}
-        />
-        {devMode && (
-          <>
-            <MetricCard
-              dense
-              label="Phases"
-              value={String(dashboard.plan.phases.length)}
-              accent="violet"
-            />
-            <MetricCard
-              dense
-              label="Leases"
-              value={String(dashboard.leases.length)}
-              accent={dashboard.leases.length ? "violet" : "slate"}
-            />
-            <MetricCard
-              dense
-              label="Tasks"
-              value={String(openTasks)}
-              accent={dashboard.tasks.some((task) => task.status === "running") ? "blue" : "slate"}
-            />
-          </>
-        )}
-      </section>
+        <section
+          className={`grid gap-2 px-4 pb-4 sm:px-5 ${
+            devMode
+              ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7"
+              : "grid-cols-2 sm:grid-cols-4"
+          }`}
+        >
+          <MetricCard dense label="Ready" value={`${scorePercent}%`} accent="blue" />
+          <MetricCard
+            dense
+            label="Blockers"
+            value={String(dashboard.audit.blockers.length)}
+            accent={dashboard.audit.blockers.length ? "red" : "green"}
+          />
+          <MetricCard
+            dense
+            label="Verify"
+            value={verifyResults.length ? `${passed}/${verifyResults.length}` : "—"}
+            accent={verifyResults.length && passed === verifyResults.length ? "green" : "slate"}
+          />
+          <MetricCard
+            dense
+            label="Handoffs"
+            value={String(dashboard.handoff.capsule_count)}
+            accent={dashboard.handoff.invalid_capsule_count ? "red" : "green"}
+          />
+          {devMode && (
+            <>
+              <MetricCard
+                dense
+                label="Phases"
+                value={String(dashboard.plan.phases.length)}
+                accent="violet"
+              />
+              <MetricCard
+                dense
+                label="Leases"
+                value={String(dashboard.leases.length)}
+                accent={dashboard.leases.length ? "violet" : "slate"}
+              />
+              <MetricCard
+                dense
+                label="Tasks"
+                value={String(openTasks)}
+                accent={dashboard.tasks.some((task) => task.status === "running") ? "blue" : "slate"}
+              />
+            </>
+          )}
+        </section>
+      </Disclosure>
 
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <Panel title="Environment" subtitle="L0–L11 audit" dense>
+      <Disclosure
+        title="Health details"
+        summary={`${scorePercent}%`}
+        defaultOpen={false}
+        storageKey="ade_env_health"
+      >
+        <div className="px-4 pb-4 sm:px-5">
           <div className="flex gap-5">
             <div
               className="score-ring grid size-24 shrink-0 place-items-center rounded-full p-1.5 sm:size-28"
@@ -2678,9 +3418,20 @@ function Overview({
               </ul>
             </div>
           )}
-        </Panel>
+        </div>
+      </Disclosure>
 
-        <Panel title="Plan" subtitle="Execution scope" dense>
+      <Disclosure
+        title="Remediation plan"
+        summary={
+          dashboard.plan.phases.length > 0
+            ? `${dashboard.plan.phases.length} phase${dashboard.plan.phases.length === 1 ? "" : "s"}`
+            : "none"
+        }
+        forceOpen={dashboard.plan.phases.length > 0}
+        storageKey="ade_env_plan"
+      >
+        <div className="px-4 pb-4 sm:px-5">
           {dashboard.plan.phases.length === 0 ? (
             <div className="flex h-44 flex-col items-center justify-center text-center">
               <div className="grid size-10 place-items-center rounded-full bg-emerald-400/10 text-emerald-300">
@@ -2714,8 +3465,8 @@ function Overview({
               </button>
             </div>
           )}
-        </Panel>
-      </section>
+        </div>
+      </Disclosure>
 
       {devMode && (
         <Panel title="Leases" subtitle="Durable path ownership" dense>
@@ -3088,6 +3839,7 @@ function AgentView({
   onAutoSubmitHandled,
   sharedVerifyGate = "G3",
   newChatNonce = 0,
+  ephemeralChat = false,
   devMode = false,
   simpleMode = false,
   workspaceRoot = "",
@@ -3106,6 +3858,8 @@ function AgentView({
   planPhaseCount = 0,
   onRefresh,
   onSurfaceFailure,
+  onCancel,
+  onRenameTab,
 }: {
   events: AgentEvent[];
   busy: boolean;
@@ -3117,6 +3871,8 @@ function AgentView({
   sharedVerifyGate?: string;
   /** Parent header + Chat bumps this to clear the transcript. */
   newChatNonce?: number;
+  /** Extra Agent tabs: in-memory only (do not touch workspace thread.json). */
+  ephemeralChat?: boolean;
   devMode?: boolean;
   simpleMode?: boolean;
   workspaceRoot?: string;
@@ -3135,6 +3891,9 @@ function AgentView({
   planPhaseCount?: number;
   onRefresh?: () => void;
   onSurfaceFailure?: (error: string) => void;
+  onCancel?: () => void;
+  /** Rename the shell tab from the first user prompt. */
+  onRenameTab?: (title: string) => void;
   onRun: (input: {
     prompt: string;
     provider: string;
@@ -3160,9 +3919,31 @@ function AgentView({
     claimedTaskId?: string | null;
     waiveQueue?: boolean;
     slotOverride?: string | null;
+    imagePaths?: string[];
   }) => void;
 }) {
   const [prompt, setPrompt] = useState(initialPrompt);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachNote, setAttachNote] = useState<string | null>(null);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const [composerDragOver, setComposerDragOver] = useState(false);
+  type QueuedPrompt = { id: string; prompt: string; imagePaths: string[] };
+  const [promptQueue, setPromptQueue] = useState<QueuedPrompt[]>([]);
+  const promptQueueRef = useRef(promptQueue);
+  promptQueueRef.current = promptQueue;
+  const queueDrainLockRef = useRef(false);
+  const tabTitledRef = useRef(false);
+
+  const renameTabFromPrompt = useCallback(
+    (text: string) => {
+      if (tabTitledRef.current || !onRenameTab) return;
+      const title = agentTabTitleFromPrompt(text);
+      if (!title) return;
+      onRenameTab(title);
+      tabTitledRef.current = true;
+    },
+    [onRenameTab],
+  );
   const [provider, setProvider] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_PROVIDER;
     return window.localStorage.getItem(AGENT_PROVIDER_KEY) || DEFAULT_PROVIDER;
@@ -3179,6 +3960,11 @@ function AgentView({
     if (typeof window === "undefined") return DEFAULT_MODEL;
     return window.localStorage.getItem(AGENT_MODEL_KEY) || DEFAULT_MODEL;
   });
+  const [modelMode, setModelMode] = useState<ModelMode>(() => {
+    if (typeof window === "undefined") return "auto";
+    const raw = window.localStorage.getItem(AGENT_MODEL_MODE_KEY);
+    return raw === "pin" ? "pin" : "auto";
+  });
   const [effort, setEffort] = useState<EffortLevel>(() => {
     if (typeof window === "undefined") return "low";
     const raw = window.localStorage.getItem(AGENT_EFFORT_KEY);
@@ -3188,14 +3974,29 @@ function AgentView({
   const [inputCost, setInputCost] = useState("0");
   const [outputCost, setOutputCost] = useState("0");
   const [sessionCap, setSessionCap] = useState(() => {
-    if (typeof window === "undefined") return "1";
-    return window.localStorage.getItem("ade_session_cap_usd") || "1";
+    if (typeof window === "undefined") return "0";
+    return window.localStorage.getItem("ade_session_cap_usd") || "0";
   });
   const [dailyCap, setDailyCap] = useState(() => {
-    if (typeof window === "undefined") return "5";
-    return window.localStorage.getItem("ade_daily_cap_usd") || "5";
+    if (typeof window === "undefined") return "0";
+    return window.localStorage.getItem("ade_daily_cap_usd") || "0";
   });
   const [autonomy, setAutonomy] = useState<AutonomyLevel>(readAutonomy);
+  // One-time: older builds defaulted session/daily caps with $0 rates, which
+  // blocked free models. Clear stale caps unless the user set real $/MTok.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem("ade_spend_caps_migrated_v1") === "1") return;
+    const ratesZero =
+      (Number(inputCost) || 0) <= 0 && (Number(outputCost) || 0) <= 0;
+    if (ratesZero && (Number(sessionCap) > 0 || Number(dailyCap) > 0)) {
+      setSessionCap("0");
+      setDailyCap("0");
+      window.localStorage.setItem("ade_session_cap_usd", "0");
+      window.localStorage.setItem("ade_daily_cap_usd", "0");
+    }
+    window.localStorage.setItem("ade_spend_caps_migrated_v1", "1");
+  }, []);
   const [shellScope, setShellScope] = useState<ShellScope>(readShellScope);
   const [activeGoal, setActiveGoal] = useState<EngGoal | null>(null);
   const [goalBusy, setGoalBusy] = useState(false);
@@ -3209,7 +4010,9 @@ function AgentView({
   const [verifyOnComplete, setVerifyOnComplete] = useState(false);
   const [verifyGate, setVerifyGate] = useState(sharedVerifyGate);
   /** When set (Debug dogfood), overrides PLAN owned_paths for this turn. */
-  const [forceOwnedPaths, setForceOwnedPaths] = useState<string[] | null>(null);
+  const [forceOwnedPaths, setForceOwnedPaths] = useState<string[] | null>(
+    () => readForceOwnedPaths(),
+  );
   const effectiveOwnedPaths =
     forceOwnedPaths && forceOwnedPaths.length > 0
       ? forceOwnedPaths
@@ -3230,6 +4033,10 @@ function AgentView({
   };
   const [pastTurns, setPastTurns] = useState<TurnRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
+  /** Survives archival so Retry CTAs still have the failed prompt. */
+  const lastPromptRef = useRef<string | null>(null);
+  /** Image paths for multimodal retry after vision_required gate / switch model. */
+  const lastImagePathsRef = useRef<string[]>([]);
   const [chatReady, setChatReady] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [agentId, setAgentId] = useState(() => readOrCreateAgentId(workspaceRoot));
@@ -3248,13 +4055,22 @@ function AgentView({
   };
 
   const latestFailed = useMemo(() => {
-    return [...events]
+    const fromLive = [...events]
       .reverse()
       .find(
         (event): event is Extract<AgentEvent, { type: "failed" }> =>
           event.type === "failed",
       );
-  }, [events]);
+    if (fromLive) return fromLive;
+    const last = pastTurns[pastTurns.length - 1];
+    if (!last) return undefined;
+    return [...last.events]
+      .reverse()
+      .find(
+        (event): event is Extract<AgentEvent, { type: "failed" }> =>
+          event.type === "failed",
+      );
+  }, [events, pastTurns]);
 
   const failureAdvice = useMemo(() => {
     if (!latestFailed || busy) return null;
@@ -3267,6 +4083,18 @@ function AgentView({
       handoffAvailable,
     });
   }, [latestFailed, busy, provider, model, baseUrl, effort, handoffAvailable]);
+
+  const promptForRetry = () => {
+    const live = (currentUser ?? lastPromptRef.current ?? "").trim();
+    if (live) return live;
+    // After archive / reload: recover from the latest failed saved turn.
+    const last = pastTurns[pastTurns.length - 1];
+    if (!last?.user?.trim()) return "";
+    const failed = [...last.events]
+      .reverse()
+      .some((event) => event.type === "failed");
+    return failed ? last.user.trim() : "";
+  };
 
   const [approvedRiskCategories, setApprovedRiskCategories] = useState<string[]>(
     [],
@@ -3302,8 +4130,10 @@ function AgentView({
       );
       if (!nextProvider.trim() || !nextModel.trim()) return;
       setPrompt("");
+      lastPromptRef.current = trimmed;
       setCurrentUser(trimmed);
       stickToBottomRef.current = true;
+      renameTabFromPrompt(trimmed);
       const effortOpts = EFFORT_OPTIONS.find((item) => item.id === nextEffort);
       const isMutating = autonomy === "act" || autonomy === "automate";
       onRun({
@@ -3347,6 +4177,7 @@ function AgentView({
               ? claimedTask.id
               : null,
         slotOverride: overrides?.slotOverride,
+        imagePaths: lastImagePathsRef.current,
       });
     },
     [
@@ -3371,6 +4202,7 @@ function AgentView({
       approvedRiskCategories,
       approvedRiskTiers,
       claimedTask,
+      renameTabFromPrompt,
     ],
   );
 
@@ -3401,21 +4233,35 @@ function AgentView({
         return;
       }
       if (action.id === "confirm_unmetered") {
-        const promptText = currentUser?.trim();
+        const promptText = promptForRetry();
         if (!promptText) {
           setFailureNote("No prompt to retry — type a message and Go again.");
           return;
         }
-        setFailureNote("Retrying unmetered…");
+        window.localStorage.setItem("ade_allow_unpriced", "1");
+        setFailureNote("Retrying without metering…");
         runPromptAgain(promptText, { allowUnpriced: true });
         return;
       }
       if (action.id === "open_spend_rates") {
+        // Advanced $/MTok fields live under Debug — on Home, clear $0-rate caps
+        // so the next turn is not blocked, then retry.
+        setSessionCap("0");
+        setDailyCap("0");
+        window.localStorage.setItem("ade_session_cap_usd", "0");
+        window.localStorage.setItem("ade_daily_cap_usd", "0");
+        window.localStorage.setItem("ade_allow_unpriced", "1");
         window.localStorage.setItem("ade_agent_advanced_run", "1");
         setForceAdvancedOpen(true);
-        setFailureNote(
-          "Set Input/Output $/MTok in Advanced run options, then retry — or Confirm unmetered.",
-        );
+        const promptText = promptForRetry();
+        if (promptText) {
+          setFailureNote("Cleared spend caps for $0 rates — retrying…");
+          runPromptAgain(promptText, { allowUnpriced: true });
+        } else {
+          setFailureNote(
+            "Spend caps cleared. For paid models, set Input/Output $/MTok in Debug → Advanced.",
+          );
+        }
         return;
       }
       if (action.id === "apply_next") {
@@ -3430,7 +4276,7 @@ function AgentView({
         return;
       }
       if (action.id === "waive_queue") {
-        const promptText = currentUser?.trim();
+        const promptText = promptForRetry();
         if (!promptText) {
           setFailureNote("No prompt to retry — type a message and Go again.");
           return;
@@ -3444,7 +4290,7 @@ function AgentView({
         const tiers = action.tiers ?? ["high"];
         setApprovedRiskCategories(cats);
         setApprovedRiskTiers(tiers);
-        const promptText = currentUser?.trim();
+        const promptText = promptForRetry();
         if (!promptText) {
           setFailureNote(
             `Approved risk ${[...cats, ...tiers].join(", ")} — retry the prompt.`,
@@ -3489,7 +4335,7 @@ function AgentView({
         onContinueHandoff?.();
         return;
       }
-      const promptText = currentUser?.trim();
+      const promptText = promptForRetry();
       if (!promptText) {
         setFailureNote("No prompt to retry — type a message and Go again.");
         return;
@@ -3500,6 +4346,7 @@ function AgentView({
         return;
       }
       if (action.id === "retry_alt_model") {
+        setModelMode("pin");
         setModel(action.model);
         window.localStorage.setItem(AGENT_MODEL_KEY, action.model);
         setFailureNote(
@@ -3511,6 +4358,7 @@ function AgentView({
         return;
       }
       if (action.id === "switch_provider") {
+        setModelMode("pin");
         setProvider(action.providerId);
         setBaseUrl(action.baseUrl);
         setModel(action.model);
@@ -3551,13 +4399,22 @@ function AgentView({
         runPromptAgain(promptText, { baseUrl: action.baseUrl });
       }
     },
-    [currentUser, onOpenKeys, onContinueHandoff, runPromptAgain, activeGoal, effort],
+    [currentUser, pastTurns, onOpenKeys, onContinueHandoff, runPromptAgain, activeGoal, effort, tasks, onRefresh, workspaceRoot],
   );
 
   useEffect(() => {
     if (!latestFailed || busy || !failureAdvice?.autoFix) return;
+    // Spend / contract CTAs need an explicit click — don't surprise with prompts.
+    if (
+      failureAdvice.autoFix.id === "confirm_unmetered" ||
+      failureAdvice.autoFix.id === "define_goal"
+    ) {
+      return;
+    }
     // continue_handoff does not need the prior user prompt; other autofixes do.
-    if (failureAdvice.autoFix.id !== "continue_handoff" && !currentUser) return;
+    if (failureAdvice.autoFix.id !== "continue_handoff" && !promptForRetry()) {
+      return;
+    }
     const key = failureFingerprint({
       error: latestFailed.error,
       providerId: provider,
@@ -3618,6 +4475,11 @@ function AgentView({
       setChatReady(true);
       return;
     }
+    if (ephemeralChat) {
+      setPastTurns([]);
+      setChatReady(true);
+      return;
+    }
     let cancelled = false;
     setChatReady(false);
     setChatError(null);
@@ -3633,14 +4495,24 @@ function AgentView({
     }>("chat_load")
       .then((thread) => {
         if (cancelled) return;
-        setPastTurns(
-          (thread.turns ?? []).map((turn) => ({
-            id: turn.id,
-            createdAt: turn.createdAt,
-            user: turn.user,
-            events: turn.events ?? [],
-          })),
-        );
+        const loaded = (thread.turns ?? []).map((turn) => ({
+          id: turn.id,
+          createdAt: turn.createdAt,
+          user: turn.user,
+          events: turn.events ?? [],
+        }));
+        setPastTurns(loaded);
+        const firstUser = loaded.find((turn) => turn.user?.trim())?.user;
+        if (firstUser) {
+          renameTabFromPrompt(firstUser);
+        }
+        const last = loaded[loaded.length - 1];
+        if (
+          last?.user &&
+          [...last.events].reverse().some((event) => event.type === "failed")
+        ) {
+          lastPromptRef.current = last.user;
+        }
         setChatReady(true);
       })
       .catch((reason) => {
@@ -3652,10 +4524,10 @@ function AgentView({
     return () => {
       cancelled = true;
     };
-  }, [workspaceRoot]);
+  }, [workspaceRoot, ephemeralChat]);
 
   useEffect(() => {
-    if (!chatReady || !isTauri() || !workspaceRoot) return;
+    if (ephemeralChat || !chatReady || !isTauri() || !workspaceRoot) return;
     const turns = pastTurns.map((turn) => ({
       id: turn.id,
       createdAt: turn.createdAt,
@@ -3665,7 +4537,7 @@ function AgentView({
     void invoke("chat_save", { turns }).catch((reason) => {
       setChatError(String(reason));
     });
-  }, [pastTurns, chatReady, workspaceRoot]);
+  }, [pastTurns, chatReady, workspaceRoot, ephemeralChat]);
 
   const clearChat = () => {
     if (busy) return;
@@ -3677,9 +4549,17 @@ function AgentView({
     }
     setPastTurns([]);
     setCurrentUser(null);
+    setAttachments([]);
+    setAttachNote(null);
+    setPrompt("");
+    setPromptQueue([]);
+    tabTitledRef.current = false;
+    onRenameTab?.(ephemeralChat ? "New Agent" : "Agent");
+    lastPromptRef.current = null;
+    lastImagePathsRef.current = [];
     rotateSessionId(workspaceRoot);
     onClearTranscript?.();
-    if (isTauri()) {
+    if (isTauri() && !ephemeralChat) {
       void invoke("chat_clear")
         .then(() => setChatError(null))
         .catch((reason) => setChatError(String(reason)));
@@ -3707,6 +4587,11 @@ function AgentView({
   const setAutonomyPersisted = (level: AutonomyLevel) => {
     setAutonomy(level);
     window.localStorage.setItem(AUTONOMY_KEY, level);
+  };
+
+  const setForceOwnedPathsPersisted = (paths: string[] | null) => {
+    setForceOwnedPaths(paths);
+    writeForceOwnedPaths(paths);
   };
 
   const setShellScopePersisted = (scope: ShellScope) => {
@@ -3877,57 +4762,19 @@ function AgentView({
   };
 
   const requestApplyAutonomy = (next: "act" | "automate") => {
-    if (isGoalContractReady(activeGoal)) {
-      setAutonomyPersisted(next);
-      if (next === "automate") setVerifyOnComplete(true);
-      if (effort === "low") {
-        setEffort("medium");
-        window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
-      }
-      return;
+    // Mode switch stays prompt-free. Contract gaps surface on the turn as
+    // contract_gate CTAs (Define goal / Waive) instead of blocking the dial.
+    setAutonomyPersisted(next);
+    if (next === "automate") setVerifyOnComplete(true);
+    if (effort === "low") {
+      setEffort("medium");
+      window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
     }
-    const choice = window.confirm(
-      "Apply requires an eng-goal contract (acceptance criteria + out-of-scope + verify), or a logged waive.\n\nOK = define / complete contract now\nCancel = stay on Suggest",
-    );
-    if (!choice) return;
-    void (async () => {
-      await completeActiveGoalContract();
-      // Re-read via state may lag; invoke active after update
-      try {
-        const fresh = await invoke<EngGoal | null>("goal_active");
-        if (isGoalContractReady(fresh)) {
-          setActiveGoal(fresh);
-          setAutonomyPersisted(next);
-          if (next === "automate") setVerifyOnComplete(true);
-          if (effort === "low") {
-            setEffort("medium");
-            window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
-          }
-        } else if (fresh) {
-          setActiveGoal(fresh);
-          const waive = window.confirm(
-            "Contract still incomplete. Waive for this goal and switch to Apply?",
-          );
-          if (waive) {
-            const reason = window.prompt(
-              "Waive reason",
-              "proceed without full contract",
-            );
-            if (reason?.trim()) {
-              const waived = await invoke<EngGoal>("goal_waive_contract", {
-                id: fresh.id,
-                reason: reason.trim(),
-              });
-              setActiveGoal(waived);
-              setAutonomyPersisted(next);
-              if (next === "automate") setVerifyOnComplete(true);
-            }
-          }
-        }
-      } catch (reason) {
-        window.alert(String(reason));
-      }
-    })();
+    if (!isGoalContractReady(activeGoal)) {
+      setFailureNote(
+        "Apply on — writes still need an eng-goal contract (or waive) when Act tools run.",
+      );
+    }
   };
 
   const runActiveGoal = () => {
@@ -4147,6 +4994,16 @@ function AgentView({
     window.localStorage.setItem(AGENT_PROVIDER_KEY, provider);
   }, [provider]);
   useEffect(() => {
+    window.localStorage.setItem(AGENT_MODEL_MODE_KEY, modelMode);
+  }, [modelMode]);
+  useEffect(() => {
+    if (modelMode !== "auto") return;
+    const picked = autoModelForSlot(provider, slotFromAutonomy(autonomy));
+    if (picked.model !== model) {
+      setModel(picked.model);
+    }
+  }, [modelMode, provider, autonomy, model]);
+  useEffect(() => {
     const next = canonicalBaseUrl(provider, baseUrl);
     if (next !== baseUrl) {
       setBaseUrl(next);
@@ -4188,6 +5045,7 @@ function AgentView({
     autonomy?: AutonomyLevel;
     effort?: EffortLevel;
     context?: "normal" | "continuity";
+    slotOverride?: string | null;
   }) => {
     const nextAutonomy = overrides?.autonomy ?? autonomy;
     const resolvedEffort = effectiveEffort(
@@ -4196,11 +5054,15 @@ function AgentView({
       overrides?.context ?? "normal",
     );
     const effortOpts = EFFORT_OPTIONS.find((item) => item.id === resolvedEffort);
+    const slot = slotFromAutonomy(nextAutonomy, overrides?.slotOverride);
+    const routed =
+      modelMode === "auto" ? autoModelForSlot(provider, slot) : null;
+    const resolvedModel = routed?.model ?? model.trim();
     return {
     prompt: prompt.trim(),
     provider: provider.trim(),
     baseUrl: baseUrl.trim(),
-    model: model.trim(),
+    model: resolvedModel,
     inputCostPerMtok: Number(inputCost) || 0,
     outputCostPerMtok: Number(outputCost) || 0,
     sessionCapUsd: Number(sessionCap),
@@ -4234,12 +5096,14 @@ function AgentView({
       (claimedTask.status === "claimed" || claimedTask.status === "running")
         ? claimedTask.id
         : null,
+    imagePaths: lastImagePathsRef.current,
   };
   };
 
   const submit = () => {
     const text = prompt.trim();
-    if (!text) return;
+    if (!text && attachments.length === 0) return;
+    if (!provider.trim() || !model.trim() || !isTauri()) return;
     if (mutating) {
       const conflict = writableConflict(
         leases as StripLease[],
@@ -4251,10 +5115,162 @@ function AgentView({
         return;
       }
     }
+    const imagePaths = attachments
+      .filter((item) => item.kind === "image")
+      .map((item) => item.absolute ?? item.path)
+      .filter((path) => Boolean(path.trim()));
+    lastImagePathsRef.current = imagePaths;
+    const vision = modelSupportsVision(model);
+    const packed = packagePromptWithAttachments(text, attachments, {
+      visionCapable: vision,
+    });
     setPrompt("");
-    setCurrentUser(text);
+    setAttachments([]);
+    setAttachNote(null);
+    if (imagePaths.length > 0 && !vision) {
+      onSurfaceFailure?.(
+        `vision_required: model \`${model}\` does not support images. Switch to a vision-capable model.`,
+      );
+      return;
+    }
+    if (busy) {
+      setPromptQueue((queue) => [
+        ...queue,
+        {
+          id:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `q-${Date.now()}-${queue.length}`,
+          prompt: packed,
+          imagePaths,
+        },
+      ]);
+      renameTabFromPrompt(packed);
+      return;
+    }
+    lastPromptRef.current = packed;
+    setCurrentUser(packed);
     stickToBottomRef.current = true;
-    onRun({ ...buildTurnInput(), prompt: text });
+    renameTabFromPrompt(packed);
+    onRun({ ...buildTurnInput(), prompt: packed, imagePaths });
+  };
+
+  useEffect(() => {
+    if (busy) {
+      queueDrainLockRef.current = false;
+      return;
+    }
+    if (queueDrainLockRef.current) return;
+    const queue = promptQueueRef.current;
+    if (queue.length === 0) return;
+    queueDrainLockRef.current = true;
+    const next = queue[0];
+    setPromptQueue((current) => current.slice(1));
+    lastPromptRef.current = next.prompt;
+    lastImagePathsRef.current = next.imagePaths;
+    setCurrentUser(next.prompt);
+    stickToBottomRef.current = true;
+    renameTabFromPrompt(next.prompt);
+    onRun({
+      ...buildTurnInput(),
+      prompt: next.prompt,
+      imagePaths: next.imagePaths,
+    });
+    // Drain once when a turn ends; buildTurnInput/onRun identity must not re-fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  const addAttachments = useCallback(async (files: FileList | File[]) => {
+    setAttachBusy(true);
+    try {
+      const { attachments: next, errors } = await ingestFiles(files, attachments.length);
+      if (next.length > 0) {
+        setAttachments((current) => [...current, ...next].slice(0, 8));
+      }
+      setAttachNote(errors.length > 0 ? errors.join(" · ") : null);
+    } finally {
+      setAttachBusy(false);
+    }
+  }, [attachments.length]);
+
+  const onComposerDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setComposerDragOver(false);
+    if (!event.dataTransfer?.files?.length) return;
+    void addAttachments(event.dataTransfer.files);
+  };
+
+  const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = event.clipboardData?.files;
+    if (files?.length) {
+      event.preventDefault();
+      void addAttachments(files);
+      return;
+    }
+    const text = event.clipboardData?.getData("text/plain") ?? "";
+    // Path paste → attach chip instead of dumping a long path into the prompt.
+    if (!looksLikeFilesystemPath(text)) return;
+    event.preventDefault();
+    void (async () => {
+      const { attachments: next, errors } = await ingestPathText(
+        text,
+        attachments.length,
+      );
+      if (next.length > 0) {
+        setAttachments((current) => [...current, ...next].slice(0, 8));
+      }
+      setAttachNote(
+        errors.length > 0
+          ? errors.join(" · ")
+          : next.length === 0
+            ? "Could not attach that path"
+            : null,
+      );
+    })();
+  };
+
+  const pickAttachments = async (opts?: { folder?: boolean }) => {
+    setAttachBusy(true);
+    try {
+      let { attachments: next, errors } = opts?.folder
+        ? await pickAttachmentFolder()
+        : await pickAttachmentFiles();
+      // Native dialog ACL missing → fall back to HTML file input (files only).
+      if (
+        !opts?.folder &&
+        next.length === 0 &&
+        errors.some((e) => /not allowed|permission|failed/i.test(e))
+      ) {
+        const fallback = await pickAttachmentFilesViaInput();
+        next = fallback.attachments;
+        errors = [...errors, ...fallback.errors];
+      }
+      if (next.length > 0) {
+        setAttachments((current) => [...current, ...next].slice(0, 8));
+      }
+      setAttachNote(errors.length > 0 ? errors.join(" · ") : null);
+    } catch (reason) {
+      if (opts?.folder) {
+        setAttachNote(String(reason));
+        return;
+      }
+      try {
+        const fallback = await pickAttachmentFilesViaInput();
+        if (fallback.attachments.length > 0) {
+          setAttachments((current) =>
+            [...current, ...fallback.attachments].slice(0, 8),
+          );
+        }
+        setAttachNote(
+          [String(reason), ...fallback.errors].filter(Boolean).join(" · ") ||
+            null,
+        );
+      } catch (inner) {
+        setAttachNote(String(inner || reason));
+      }
+    } finally {
+      setAttachBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -4288,7 +5304,7 @@ function AgentView({
         })
           .then(() => {
             setClaimedTask(null);
-            setForceOwnedPaths(null);
+            setForceOwnedPathsPersisted(null);
             setActiveWorktree(null);
             onRefresh?.();
           })
@@ -4330,7 +5346,7 @@ function AgentView({
         })
           .then(() => {
             setClaimedTask(null);
-            setForceOwnedPaths(null);
+            setForceOwnedPathsPersisted(null);
             setActiveWorktree(null);
             setTaskNote(`Task failed · ${taskId.slice(0, 8)}`);
             onRefresh?.();
@@ -4348,7 +5364,7 @@ function AgentView({
               }
             }
             setClaimedTask(null);
-            setForceOwnedPaths(null);
+            setForceOwnedPathsPersisted(null);
             setActiveWorktree(null);
             setTaskNote(
               tree
@@ -4392,6 +5408,67 @@ function AgentView({
 
   const contextUsed = turnTokens.input > 0 ? turnTokens.input : Math.round(prompt.length / 4);
   const contextPct = Math.min(100, Math.round((contextUsed / contextLimit) * 100));
+  const contextSegments = useMemo(() => {
+    const estimate = (text: string) =>
+      Math.max(0, Math.round(text.replace(/\s+/g, " ").trim().length / 4));
+    let conversation = 0;
+    let tools = 0;
+    for (const turn of pastTurns) {
+      conversation += estimate(turn.user);
+      for (const event of turn.events) {
+        if (event.type === "text_delta") conversation += estimate(event.text);
+        if (event.type === "tool_call" || event.type === "tool_result") {
+          tools += 120;
+        }
+      }
+    }
+    if (currentUser) conversation += estimate(currentUser);
+    for (const event of events) {
+      if (event.type === "text_delta") conversation += estimate(event.text);
+      if (event.type === "tool_call" || event.type === "tool_result") {
+        tools += 120;
+      }
+    }
+    const draft = estimate(prompt);
+    const lastIn = turnTokens.input;
+    const lastOut = turnTokens.output;
+    // When provider usage exists, prefer it for the live window; else char estimates.
+    const rows: { label: string; tokens: number; color: string }[] = [];
+    if (lastIn > 0) {
+      const systemish = Math.min(lastIn, Math.max(400, Math.round(lastIn * 0.15)));
+      const rest = Math.max(0, lastIn - systemish - tools);
+      rows.push({ label: "System & rules", tokens: systemish, color: "#94a3b8" });
+      if (tools > 0) {
+        rows.push({
+          label: "Tools",
+          tokens: Math.min(tools, lastIn),
+          color: "#a78bfa",
+        });
+      }
+      rows.push({
+        label: "Conversation",
+        tokens: Math.max(rest, conversation || draft),
+        color: "#38bdf8",
+      });
+      if (lastOut > 0) {
+        rows.push({ label: "Last reply", tokens: lastOut, color: "#f472b6" });
+      }
+    } else {
+      if (draft > 0) {
+        rows.push({ label: "Draft", tokens: draft, color: "#64748b" });
+      }
+      if (conversation > 0) {
+        rows.push({ label: "Conversation", tokens: conversation, color: "#38bdf8" });
+      }
+      if (tools > 0) {
+        rows.push({ label: "Tools", tokens: tools, color: "#a78bfa" });
+      }
+      if (rows.length === 0) {
+        rows.push({ label: "Empty", tokens: 0, color: "#334155" });
+      }
+    }
+    return rows;
+  }, [pastTurns, currentUser, events, prompt, turnTokens]);
 
   const feedEvents = useMemo(() => {
     const archived = pastTurns.flatMap((turn) => [
@@ -4449,6 +5526,7 @@ function AgentView({
       );
     }
     setPrompt("");
+    lastPromptRef.current = nextPrompt;
     setCurrentUser(nextPrompt);
     stickToBottomRef.current = true;
     onRun({
@@ -4479,234 +5557,248 @@ function AgentView({
       )}
 
       {activeGoal && (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-400/20 bg-emerald-500/8 px-3 py-2">
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold text-emerald-100">
-              Active goal
-              <span className="ml-1.5 font-normal text-emerald-100/55">
-                · {activeGoal.shellScope === "home" ? "Home" : "Workspace"} ·{" "}
-                {activeGoal.autonomy === "act"
-                  ? "Apply"
-                  : activeGoal.autonomy === "automate"
-                    ? "Automate"
-                    : "Suggest"}
-                {activeGoal.verifyGate ? ` · ${activeGoal.verifyGate}` : ""}
-                {" · "}
-                {isGoalContractReady(activeGoal)
-                  ? "contract ready"
-                  : "contract incomplete"}
-              </span>
+        <Disclosure
+          title="Active goal"
+          subtitle={`${activeGoal.shellScope === "home" ? "Home" : "Workspace"} · ${
+            activeGoal.autonomy === "act"
+              ? "Apply"
+              : activeGoal.autonomy === "automate"
+                ? "Automate"
+                : "Suggest"
+          }${activeGoal.verifyGate ? ` · ${activeGoal.verifyGate}` : ""} · ${
+            isGoalContractReady(activeGoal) ? "contract ready" : "contract incomplete"
+          }`}
+          summary={
+            activeGoal.statement.length > 48
+              ? `${activeGoal.statement.slice(0, 48)}…`
+              : activeGoal.statement
+          }
+          defaultOpen={false}
+          forceOpen={!isGoalContractReady(activeGoal)}
+          storageKey="ade_agent_active_goal"
+          className="shrink-0 border-emerald-400/20 bg-emerald-500/8"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3 sm:px-5">
+            <div className="min-w-0">
+              <div className="truncate text-[11px] text-slate-300" title={activeGoal.statement}>
+                {activeGoal.statement}
+              </div>
             </div>
-            <div className="truncate text-[11px] text-slate-300" title={activeGoal.statement}>
-              {activeGoal.statement}
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              {!isGoalContractReady(activeGoal) && (
+                <>
+                  <button
+                    type="button"
+                    disabled={goalBusy}
+                    onClick={() => void completeActiveGoalContract()}
+                    className="rounded-md border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-40"
+                  >
+                    Complete contract
+                  </button>
+                  <button
+                    type="button"
+                    disabled={goalBusy}
+                    onClick={() => void waiveActiveGoalContract()}
+                    className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/8 disabled:opacity-40"
+                    title="Log a waive so Apply can proceed without full AC/OOS/verify"
+                  >
+                    Waive
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                disabled={busy || goalBusy || !provider.trim() || !model.trim()}
+                onClick={runActiveGoal}
+                className="rounded-md border border-emerald-400/30 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-40"
+              >
+                Run goal
+              </button>
+              <button
+                type="button"
+                disabled={goalBusy}
+                onClick={() => void markActiveGoalDone()}
+                className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/8 disabled:opacity-40"
+              >
+                Done
+              </button>
+              <button
+                type="button"
+                disabled={goalBusy}
+                onClick={() => void clearActiveGoal()}
+                className="rounded-md px-1.5 py-1.5 text-[10px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300 disabled:opacity-40"
+                title="Clear active pointer (keeps goal file)"
+              >
+                Clear
+              </button>
             </div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-            {!isGoalContractReady(activeGoal) && (
-              <>
-                <button
-                  type="button"
-                  disabled={goalBusy}
-                  onClick={() => void completeActiveGoalContract()}
-                  className="rounded-md border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-40"
-                >
-                  Complete contract
-                </button>
-                <button
-                  type="button"
-                  disabled={goalBusy}
-                  onClick={() => void waiveActiveGoalContract()}
-                  className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/8 disabled:opacity-40"
-                  title="Log a waive so Apply can proceed without full AC/OOS/verify"
-                >
-                  Waive
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              disabled={busy || goalBusy || !provider.trim() || !model.trim()}
-              onClick={runActiveGoal}
-              className="rounded-md border border-emerald-400/30 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-40"
-            >
-              Run goal
-            </button>
-            <button
-              type="button"
-              disabled={goalBusy}
-              onClick={() => void markActiveGoalDone()}
-              className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/8 disabled:opacity-40"
-            >
-              Done
-            </button>
-            <button
-              type="button"
-              disabled={goalBusy}
-              onClick={() => void clearActiveGoal()}
-              className="rounded-md px-1.5 py-1.5 text-[10px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300 disabled:opacity-40"
-              title="Clear active pointer (keeps goal file)"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
+        </Disclosure>
       )}
 
       {(planPhaseCount > 0 || openTasks.length > 0 || claimedTask || taskNote) && (
-        <div className="shrink-0 space-y-2 rounded-xl border border-violet-400/20 bg-violet-500/8 px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold text-violet-100">
-                Role split
-                <span className="ml-1.5 font-normal text-violet-100/55">
-                  · Suggest queues · Apply claims one
-                  {openTasks.length > 0
-                    ? ` · ${openTasks.length} open`
-                    : planPhaseCount > 0
-                      ? ` · ${planPhaseCount} PLAN phase${planPhaseCount === 1 ? "" : "s"}`
-                      : ""}
-                </span>
+        <Disclosure
+          title="Tasks"
+          subtitle="Suggest queues · Apply claims one"
+          summary={
+            openTasks.length > 0
+              ? `${openTasks.length} open`
+              : claimedTask
+                ? "claimed"
+                : planPhaseCount > 0
+                  ? `${planPhaseCount} phase${planPhaseCount === 1 ? "" : "s"}`
+                  : undefined
+          }
+          defaultOpen={false}
+          forceOpen={openTasks.length > 0 || Boolean(claimedTask)}
+          storageKey="ade_agent_tasks"
+          className="shrink-0 border-violet-400/20 bg-violet-500/8"
+        >
+          <div className="space-y-2 px-4 pb-3 sm:px-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                {claimedTask ? (
+                  <div
+                    className="truncate text-[11px] text-slate-300"
+                    title={
+                      activeWorktree
+                        ? `${claimedTask.goal}\n${activeWorktree}`
+                        : claimedTask.goal
+                    }
+                  >
+                    Claimed · {claimedTask.goal}
+                    {activeWorktree ? " · isolated" : ""}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-slate-500">
+                    Queue PLAN as tasks, then Apply one under leases
+                    {applyIsolate ? " (isolated worktree)" : ""}.
+                  </div>
+                )}
               </div>
-              {claimedTask ? (
-                <div
-                  className="truncate text-[11px] text-slate-300"
-                  title={
-                    activeWorktree
-                      ? `${claimedTask.goal}\n${activeWorktree}`
-                      : claimedTask.goal
-                  }
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                <label
+                  className="flex cursor-pointer items-center gap-1 rounded-md border border-white/8 bg-black/20 px-1.5 py-1 text-[10px] font-semibold text-slate-400"
+                  title="G4: run Apply in a linked git worktree; leases stay on primary checkout"
                 >
-                  Claimed · {claimedTask.goal}
-                  {activeWorktree ? " · isolated" : ""}
-                </div>
-              ) : (
-                <div className="text-[10px] text-slate-500">
-                  Queue PLAN as tasks, then Apply one under leases
-                  {applyIsolate ? " (isolated worktree)" : ""}.
-                </div>
-              )}
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-              <label
-                className="flex cursor-pointer items-center gap-1 rounded-md border border-white/8 bg-black/20 px-1.5 py-1 text-[10px] font-semibold text-slate-400"
-                title="G4: run Apply in a linked git worktree; leases stay on primary checkout"
-              >
-                <input
-                  type="checkbox"
-                  className="accent-violet-400"
-                  checked={applyIsolate}
-                  disabled={busy || taskBusy}
-                  onChange={(event) => {
-                    const next = event.target.checked;
-                    setApplyIsolate(next);
-                    window.localStorage.setItem(
-                      APPLY_ISOLATE_KEY,
-                      next ? "1" : "0",
-                    );
-                  }}
-                />
-                Isolate
-              </label>
-              <button
-                type="button"
-                disabled={taskBusy || busy || planPhaseCount === 0 || !isTauri()}
-                onClick={() => void syncPlanTasks()}
-                className="rounded-md border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/25 disabled:opacity-40"
-                title="Enqueue each PLAN phase as a lease-backed task"
-              >
-                Queue PLAN
-              </button>
-              {queuedTasks[0] && (
+                  <input
+                    type="checkbox"
+                    className="accent-violet-400"
+                    checked={applyIsolate}
+                    disabled={busy || taskBusy}
+                    onChange={(event) => {
+                      const next = event.target.checked;
+                      setApplyIsolate(next);
+                      window.localStorage.setItem(
+                        APPLY_ISOLATE_KEY,
+                        next ? "1" : "0",
+                      );
+                    }}
+                  />
+                  Isolate
+                </label>
                 <button
                   type="button"
-                  disabled={taskBusy || busy || !provider.trim() || !model.trim()}
-                  onClick={() => void applyClaimedTask(queuedTasks[0]!, true)}
-                  className="rounded-md border border-blue-400/30 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/25 disabled:opacity-40"
+                  disabled={taskBusy || busy || planPhaseCount === 0 || !isTauri()}
+                  onClick={() => void syncPlanTasks()}
+                  className="rounded-md border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/25 disabled:opacity-40"
+                  title="Enqueue each PLAN phase as a lease-backed task"
                 >
-                  Apply next
+                  Queue PLAN
                 </button>
-              )}
-            </div>
-          </div>
-          {queuedTasks.length > 0 && (
-            <div className="space-y-1">
-              {queuedTasks.slice(0, 4).map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-center justify-between gap-2 rounded-md border border-white/6 bg-black/20 px-2 py-1.5"
-                >
-                  <div className="min-w-0 truncate text-[11px] text-slate-300" title={task.goal}>
-                    {task.goal}
-                    <span className="ml-1.5 text-[10px] text-slate-600">
-                      {task.owned_paths.length} path
-                      {task.owned_paths.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
+                {queuedTasks[0] && (
                   <button
                     type="button"
                     disabled={taskBusy || busy || !provider.trim() || !model.trim()}
-                    onClick={() => void applyClaimedTask(task, true)}
-                    className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-blue-200 hover:bg-blue-500/15 disabled:opacity-40"
+                    onClick={() => void applyClaimedTask(queuedTasks[0]!, true)}
+                    className="rounded-md border border-blue-400/30 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/25 disabled:opacity-40"
                   >
-                    Apply
+                    Apply next
                   </button>
-                </div>
-              ))}
+                )}
+              </div>
             </div>
-          )}
-          {taskNote && (
-            <div className="text-[10px] text-slate-400">{taskNote}</div>
-          )}
-        </div>
+            {queuedTasks.length > 0 && (
+              <div className="space-y-1">
+                {queuedTasks.slice(0, 4).map((task) => (
+                  <div
+                    key={task.id}
+                    className="flex items-center justify-between gap-2 rounded-md border border-white/6 bg-black/20 px-2 py-1.5"
+                  >
+                    <div className="min-w-0 truncate text-[11px] text-slate-300" title={task.goal}>
+                      {task.goal}
+                      <span className="ml-1.5 text-[10px] text-slate-600">
+                        {task.owned_paths.length} path
+                        {task.owned_paths.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={taskBusy || busy || !provider.trim() || !model.trim()}
+                      onClick={() => void applyClaimedTask(task, true)}
+                      className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-blue-200 hover:bg-blue-500/15 disabled:opacity-40"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {taskNote && (
+              <div className="text-[10px] text-slate-400">{taskNote}</div>
+            )}
+          </div>
+        </Disclosure>
       )}
 
       {handoffAvailable && onContinueHandoff && (
-        <div
-          className={`flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
-            handoffLatestStatus === "budget_exhausted"
-              ? "border-amber-400/25 bg-amber-500/8"
-              : "border-blue-400/20 bg-blue-500/8"
-          }`}
+        handoffLatestStatus === "budget_exhausted" ? (
+        <Disclosure
+          title="Continuity"
+          subtitle="Host runs next_safe_command, then resumes at Med+ Effort (Apply)."
+          summary={continuityBusy ? "preparing" : "budget exhausted"}
+          defaultOpen={false}
+          forceOpen
+          storageKey="ade_agent_continuity"
+          className="shrink-0 border-amber-400/25 bg-amber-500/8"
         >
-          <div className="min-w-0">
-            <div
-              className={`text-[11px] font-semibold ${
-                handoffLatestStatus === "budget_exhausted"
-                  ? "text-amber-100"
-                  : "text-blue-100"
-              }`}
-            >
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3 sm:px-5">
+            <div className="min-w-0 text-[10px] text-slate-500">
               {continuityBusy
                 ? "Preparing Continuity…"
                 : busy
                   ? "Handoff ready — wait for turn"
-                  : handoffLatestStatus === "budget_exhausted"
-                    ? "Budget exhausted — continue with more Effort"
-                    : "Continue last handoff"}
+                  : "Budget exhausted — continue with more Effort"}
             </div>
-            <div className="text-[10px] text-slate-500">
-              {handoffLatestStatus === "budget_exhausted"
-                ? "Host runs next_safe_command, then resumes at Med+ Effort (Apply)."
-                : "Host runs next_safe_command, then resumes with thrift Continuity prompt."}
-            </div>
+            <button
+              type="button"
+              disabled={continuityBusy || busy}
+              onClick={onContinueHandoff}
+              className="shrink-0 rounded-md border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-40"
+            >
+              {continuityBusy ? "Working…" : "Continue · raise Effort"}
+            </button>
+          </div>
+        </Disclosure>
+        ) : (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-blue-400/20 bg-blue-500/8 px-3 py-2">
+          <div className="min-w-0 text-[10px] text-slate-400">
+            {continuityBusy
+              ? "Preparing Continuity…"
+              : busy
+                ? "Handoff ready — wait for turn"
+                : "Continue last handoff"}
           </div>
           <button
             type="button"
             disabled={continuityBusy || busy}
             onClick={onContinueHandoff}
-            className={`shrink-0 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-40 ${
-              handoffLatestStatus === "budget_exhausted"
-                ? "border-amber-400/35 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25"
-                : "border-blue-400/30 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25"
-            }`}
+            className="shrink-0 rounded-md border border-blue-400/30 bg-blue-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/25 disabled:opacity-40"
           >
-            {continuityBusy
-              ? "Working…"
-              : handoffLatestStatus === "budget_exhausted"
-                ? "Continue · raise Effort"
-                : "Continue"}
+            {continuityBusy ? "Working…" : "Continue"}
           </button>
         </div>
+        )
       )}
 
       <AgentSessionStrip
@@ -4716,6 +5808,7 @@ function AgentView({
         ownedPaths={mutating ? (effectiveOwnedPaths) : []}
         busy={busy}
         shellScope={shellScope}
+        compact
         onNewLease={() => setAgentId(rotateAgentId(workspaceRoot))}
         onNewChat={clearChat}
         onWaitRefresh={() => onRefresh?.()}
@@ -4726,44 +5819,6 @@ function AgentView({
         onSwitchSuggest={() => setAutonomyPersisted("propose")}
         isolateEnabled={applyIsolate}
       />
-
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-0.5">
-        <button
-          type="button"
-          disabled={busy || !provider.trim() || !model.trim() || !isTauri()}
-          onClick={() => {
-            void invoke<VerifyResult[]>("run_verify", {
-              gate: verifyGate.trim() || "G3",
-              through: true,
-            })
-              .then((results) => {
-                setTaskNote(
-                  `Verify G${verifyGate.trim() || "G3"} · ${results.filter((r) => r.passed).length}/${results.length} passed`,
-                );
-              })
-              .catch((reason) => setTaskNote(honestLeaseError(String(reason))));
-            const text =
-              "Verifier (judge): grade evidence only. Summarize what sensors prove; do not propose patches or write files. List pass/fail and next safe command.";
-            setPrompt("");
-            setCurrentUser(text);
-            stickToBottomRef.current = true;
-            onRun({
-              ...buildTurnInput({ autonomy: "propose" }),
-              prompt: text,
-              autonomy: "propose",
-              approveOwnedPaths: false,
-              ownedPaths: [],
-              leaseAgentId: null,
-              slotOverride: "verifier",
-              claimedTaskId: null,
-            });
-          }}
-          className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
-          title="Sensors-first Verifier slot — no write leases"
-        >
-          Verify (judge)
-        </button>
-      </div>
 
       <div
         ref={feedScrollRef}
@@ -4824,6 +5879,7 @@ function AgentView({
               }
             }
             setPrompt("");
+            lastPromptRef.current = trimmed;
             setCurrentUser(trimmed);
             stickToBottomRef.current = true;
             onRun({ ...buildTurnInput(), prompt: trimmed });
@@ -4836,190 +5892,377 @@ function AgentView({
           <p className="mt-2 text-[11px] text-amber-100/90">{failureNote}</p>
         )}
         <div ref={feedBottomRef} className="h-px w-full shrink-0" aria-hidden />
-        {showDebugHarness && (
-          <div className="mt-3 space-y-3">
-            <Disclosure
-              title="Advanced run options"
-              summary={
-                autonomy === "observe" || autonomy === "automate"
-                  ? autonomy
-                  : verifyOnComplete
-                    ? `verify ${verifyGate}`
-                    : "defaults"
-              }
-              defaultOpen={false}
-              forceOpen={forceAdvancedOpen}
-              storageKey="ade_agent_advanced_run"
-            >
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setAutonomyPersisted("observe")}
-                    className={`rounded-md border px-1.5 py-1.5 text-center text-[11px] font-semibold transition ${
-                      autonomy === "observe"
-                        ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
-                        : "border-white/8 bg-white/2 text-slate-400"
-                    }`}
-                  >
-                    Observe
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAutonomyPersisted("automate")}
-                    className={`rounded-md border px-1.5 py-1.5 text-center text-[11px] font-semibold transition ${
-                      autonomy === "automate"
-                        ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
-                        : "border-white/8 bg-white/2 text-slate-400"
-                    }`}
-                  >
-                    Automate
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {PROMPT_PRESETS.map((item) => (
-                    <Chip
-                      key={item.label}
-                      onClick={() => {
-                        setForceOwnedPaths(null);
-                        setAutonomyPersisted(item.autonomy);
-                        setPrompt(item.prompt);
-                      }}
-                    >
-                      {item.label}
-                    </Chip>
-                  ))}
-                  <Chip
-                    onClick={() => {
-                      setAutonomyPersisted("automate");
-                      setVerifyGate("G3");
-                      setForceOwnedPaths([".ade/dogfood"]);
-                      setPrompt(
-                        "N3 dogfood Automate: write ONLY under .ade/dogfood/. Create or update automate-acceptance.md with ISO time, autonomy=automate, owned path=.ade/dogfood, and that verify G3 was requested. Do not edit crates/ or apps/.",
-                      );
-                    }}
-                  >
-                    Dogfood Automate
-                  </Chip>
-                  <Chip
-                    onClick={() => {
-                      setAutonomyPersisted("act");
-                      if (effort === "low") {
-                        setEffort("medium");
-                        window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
-                      }
-                      setForceOwnedPaths([".ade/dogfood"]);
-                      setPrompt(
-                        "N4 dogfood Continuity: after a turn under .ade/dogfood/, use Continue last handoff (or raise Effort) and append continuity-acceptance.md with ISO time and that Continuity resumed. Do not edit crates/ or apps/.",
-                      );
-                    }}
-                  >
-                    Dogfood Continuity
-                  </Chip>
-                  <Chip
-                    onClick={() => {
-                      setApplyIsolate(true);
-                      window.localStorage.setItem(APPLY_ISOLATE_KEY, "1");
-                      setAutonomyPersisted("act");
-                      setForceOwnedPaths([".ade/dogfood/isolate"]);
-                      setPrompt(
-                        "G4 dogfood Isolate: Apply under .ade/dogfood/isolate with Isolate enabled. Write isolate-acceptance.md noting worktree path if used. Do not edit crates/ or apps/.",
-                      );
-                    }}
-                  >
-                    Dogfood Isolate
-                  </Chip>
-                </div>
-                <ProviderSelect
-                  value={provider}
-                  showRecommended={false}
-                  onChange={(preset) => {
-                    setProvider(preset.id);
-                    setBaseUrl(preset.baseUrl);
-                    setModel(preset.models[0] ?? DEFAULT_MODEL);
-                  }}
-                />
-                <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
-                  <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
-                  <Field
-                    label="Max steps"
-                    value={maxSteps}
-                    onChange={setMaxSteps}
-                    placeholder="from effort"
-                  />
-                  <Field
-                    label="Max tokens"
-                    value={maxTokens}
-                    onChange={setMaxTokens}
-                    placeholder="effort / unlimited"
-                  />
-                  <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
-                  <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
-                </div>
-                {Number(inputCost) <= 0 &&
-                  Number(outputCost) <= 0 &&
-                  (Number(sessionCap) > 0 || Number(dailyCap) > 0) && (
-                    <p className="text-[10px] leading-snug text-amber-200/90">
-                      Spend honesty: rates are $0 — caps cannot reserve real dollars. Set
-                      Input/Output $/MTok to match your provider invoice class.
-                    </p>
-                  )}
-              </div>
-            </Disclosure>
-          </div>
-        )}
       </div>
 
-      <div className="shrink-0 rounded-2xl border border-white/10 bg-[#141a22]">
+      {showDebugHarness && (
+        <Disclosure
+          title="Harness"
+          subtitle="Dogfood · Verify · Observe/Automate · rates"
+          summary={
+            autonomy === "observe" || autonomy === "automate"
+              ? autonomy
+              : verifyOnComplete
+                ? `verify ${verifyGate}`
+                : "collapsed"
+          }
+          defaultOpen={false}
+          forceOpen={forceAdvancedOpen}
+          storageKey="ade_agent_harness"
+          className="shrink-0"
+        >
+          <div className="space-y-2 px-1 pb-1">
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                disabled={busy || !provider.trim() || !model.trim() || !isTauri()}
+                onClick={() => {
+                  void invoke<VerifyResult[]>("run_verify", {
+                    gate: verifyGate.trim() || "G3",
+                    through: true,
+                  })
+                    .then((results) => {
+                      setTaskNote(
+                        `Verify G${verifyGate.trim() || "G3"} · ${results.filter((r) => r.passed).length}/${results.length} passed`,
+                      );
+                    })
+                    .catch((reason) => setTaskNote(honestLeaseError(String(reason))));
+                  const text =
+                    "Verifier (judge): grade evidence only. Summarize what sensors prove; do not propose patches or write files. List pass/fail and next safe command.";
+                  setPrompt("");
+                  setCurrentUser(text);
+                  stickToBottomRef.current = true;
+                  onRun({
+                    ...buildTurnInput({
+                      autonomy: "propose",
+                      slotOverride: "verifier",
+                    }),
+                    prompt: text,
+                    autonomy: "propose",
+                    approveOwnedPaths: false,
+                    ownedPaths: [],
+                    leaseAgentId: null,
+                    slotOverride: "verifier",
+                    claimedTaskId: null,
+                  });
+                }}
+                className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
+                title="Sensors-first Verifier slot — no write leases"
+              >
+                Verify (judge)
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                onClick={() => setAutonomyPersisted("observe")}
+                className={`rounded-md border px-1.5 py-1.5 text-center text-[11px] font-semibold transition ${
+                  autonomy === "observe"
+                    ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
+                    : "border-white/8 bg-white/2 text-slate-400"
+                }`}
+              >
+                Observe
+              </button>
+              <button
+                type="button"
+                onClick={() => setAutonomyPersisted("automate")}
+                className={`rounded-md border px-1.5 py-1.5 text-center text-[11px] font-semibold transition ${
+                  autonomy === "automate"
+                    ? "border-blue-400/40 bg-blue-500/20 text-blue-100"
+                    : "border-white/8 bg-white/2 text-slate-400"
+                }`}
+              >
+                Automate
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {PROMPT_PRESETS.map((item) => (
+                <Chip
+                  key={item.label}
+                  onClick={() => {
+                    setForceOwnedPathsPersisted(null);
+                    setAutonomyPersisted(item.autonomy);
+                    setPrompt(item.prompt);
+                  }}
+                >
+                  {item.label}
+                </Chip>
+              ))}
+              <Chip
+                onClick={() => {
+                  setAutonomyPersisted("automate");
+                  setVerifyGate("G3");
+                  setForceOwnedPaths([".ade/dogfood"]);
+                  setPrompt(
+                    "N3 dogfood Automate: write ONLY under .ade/dogfood/. Create or update automate-acceptance.md with ISO time, autonomy=automate, owned path=.ade/dogfood, and that verify G3 was requested. Do not edit crates/ or apps/.",
+                  );
+                }}
+              >
+                Dogfood Automate
+              </Chip>
+              <Chip
+                onClick={() => {
+                  setAutonomyPersisted("act");
+                  if (effort === "low") {
+                    setEffort("medium");
+                    window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+                  }
+                  setForceOwnedPaths([".ade/dogfood"]);
+                  setPrompt(
+                    "N4 dogfood Continuity: after a turn under .ade/dogfood/, use Continue last handoff (or raise Effort) and append continuity-acceptance.md with ISO time and that Continuity resumed. Do not edit crates/ or apps/.",
+                  );
+                }}
+              >
+                Dogfood Continuity
+              </Chip>
+              <Chip
+                onClick={() => {
+                  setApplyIsolate(true);
+                  window.localStorage.setItem(APPLY_ISOLATE_KEY, "1");
+                  setAutonomyPersisted("act");
+                  setForceOwnedPaths([".ade/dogfood/isolate"]);
+                  setPrompt(
+                    "G4 dogfood Isolate: Apply under .ade/dogfood/isolate with Isolate enabled. Write isolate-acceptance.md noting worktree path if used. Do not edit crates/ or apps/.",
+                  );
+                }}
+              >
+                Dogfood Isolate
+              </Chip>
+            </div>
+            <ProviderSelect
+              value={provider}
+              showRecommended={false}
+              onChange={(preset) => {
+                setProvider(preset.id);
+                setBaseUrl(preset.baseUrl);
+                if (modelMode === "pin") {
+                  setModel(preset.models[0] ?? DEFAULT_MODEL);
+                }
+              }}
+            />
+            <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} mono />
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Input $/MTok" value={inputCost} onChange={setInputCost} />
+              <Field label="Output $/MTok" value={outputCost} onChange={setOutputCost} />
+              <Field
+                label="Max steps"
+                value={maxSteps}
+                onChange={setMaxSteps}
+                placeholder="from effort"
+              />
+              <Field
+                label="Max tokens"
+                value={maxTokens}
+                onChange={setMaxTokens}
+                placeholder="effort / unlimited"
+              />
+              <Field label="Session cap $" value={sessionCap} onChange={setSessionCap} />
+              <Field label="Daily cap $" value={dailyCap} onChange={setDailyCap} />
+            </div>
+            {Number(inputCost) <= 0 &&
+              Number(outputCost) <= 0 &&
+              (Number(sessionCap) > 0 || Number(dailyCap) > 0) && (
+                <p className="text-[10px] leading-snug text-amber-200/90">
+                  Spend honesty: rates are $0 — caps cannot reserve real dollars. Set
+                  Input/Output $/MTok to match your provider invoice class.
+                </p>
+              )}
+          </div>
+        </Disclosure>
+      )}
+
+      <div
+        className={`shrink-0 rounded-2xl border bg-[#141a22] ${
+          composerDragOver
+            ? "border-cyan-400/40 bg-cyan-500/5"
+            : "border-white/10"
+        }`}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          setComposerDragOver(true);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setComposerDragOver(true);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+          setComposerDragOver(false);
+        }}
+        onDrop={onComposerDrop}
+      >
+        {(attachments.length > 0 || attachNote) && (
+          <div className="px-3 pt-3">
+            <AttachmentChips
+              items={attachments}
+              onRemove={(id) =>
+                setAttachments((current) => current.filter((item) => item.id !== id))
+              }
+              onClearAll={() => {
+                setAttachments([]);
+                setAttachNote(null);
+              }}
+              onOpen={(item) => void openChatPath(item.absolute ?? item.path)}
+            />
+            {attachNote && (
+              <p className="mb-2 text-[10px] leading-4 text-amber-200/90">{attachNote}</p>
+            )}
+          </div>
+        )}
+        {promptQueue.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Queued
+            </span>
+            {promptQueue.map((item, index) => (
+              <span
+                key={item.id}
+                className="inline-flex max-w-[14rem] items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-300"
+                title={item.prompt}
+              >
+                <span className="shrink-0 text-slate-500">{index + 1}.</span>
+                <span className="truncate">
+                  {item.prompt.replace(/\s+/g, " ").slice(0, 48) || "(attachment)"}
+                </span>
+                <button
+                  type="button"
+                  title="Remove from queue"
+                  onClick={() =>
+                    setPromptQueue((queue) =>
+                      queue.filter((entry) => entry.id !== item.id),
+                    )
+                  }
+                  className="shrink-0 text-slate-500 hover:text-slate-200"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {promptQueue.length > 1 && (
+              <button
+                type="button"
+                title="Clear queue"
+                onClick={() => setPromptQueue([])}
+                className="text-[10px] text-slate-500 hover:text-slate-300"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
         <textarea
           ref={composerRef}
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
+          onPaste={onComposerPaste}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              if (!busy && prompt.trim() && isTauri()) submit();
+              if ((prompt.trim() || attachments.length > 0) && isTauri()) {
+                submit();
+              }
+            }
+            if (event.key === "Escape" && busy) {
+              event.preventDefault();
+              onCancel?.();
             }
           }}
           rows={3}
           className="min-h-16 w-full resize-none border-0 bg-transparent px-4 pt-3 text-[14px] leading-5 text-slate-200 outline-hidden placeholder:text-slate-500"
-          placeholder="Ask ADE to plan or build…"
+          placeholder={
+            busy
+              ? "Add to queue… (Enter) · Esc to stop"
+              : "Ask ADE to plan or build… (drop or paste files)"
+          }
         />
         <div className="flex items-center gap-1.5 px-3 pb-3 pt-1">
+          <button
+            type="button"
+            title="Attach files (Alt+click = folder)"
+            disabled={attachBusy || !isTauri()}
+            onClick={(event) =>
+              void pickAttachments({ folder: event.altKey })
+            }
+            className="grid size-8 shrink-0 place-items-center rounded-md border border-white/10 text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-40"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path
+                d="M5.5 8.5 9 5a2.1 2.1 0 0 1 3 3l-4.8 4.8a3.2 3.2 0 0 1-4.5-4.5L8 3"
+                stroke="currentColor"
+                strokeWidth="1.35"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <DarkSelect
             ariaLabel="Mode"
             title={
-              autonomy === "automate"
-                ? "Auto: apply + verify when done"
-                : autonomy === "act"
-                  ? "Apply: shell + writes"
-                  : "Suggest: plan / inspect only"
+              autonomy === "act" || autonomy === "automate"
+                ? "Apply: shell + writes"
+                : "Suggest: plan / inspect only"
             }
             value={
-              autonomy === "automate"
-                ? "automate"
-                : autonomy === "act"
-                  ? "act"
-                  : "propose"
+              autonomy === "act" || autonomy === "automate" ? "act" : "propose"
             }
             options={[
               { value: "propose", label: "Suggest" },
               { value: "act", label: "Apply" },
-              { value: "automate", label: "Auto" },
             ]}
             maxLabelChars={10}
             onChange={(next) => {
-              if (next === "automate") {
-                requestApplyAutonomy("automate");
-              } else if (next === "act") {
-                requestApplyAutonomy("act");
+              if (next === "act") {
+                requestApplyAutonomy(
+                  autonomy === "automate" ? "automate" : "act",
+                );
               } else {
                 setAutonomyPersisted("propose");
               }
             }}
           />
+          {(autonomy === "act" || autonomy === "automate") && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autonomy === "automate"}
+              title={
+                autonomy === "automate"
+                  ? "Auto on: verify when the turn finishes"
+                  : "Auto off: Apply without auto-verify"
+              }
+              onClick={() => {
+                if (autonomy === "automate") {
+                  setAutonomyPersisted("act");
+                  setVerifyOnComplete(false);
+                } else {
+                  // Already on Apply — flip Auto without re-prompting for a goal.
+                  setAutonomyPersisted("automate");
+                  setVerifyOnComplete(true);
+                  if (effort === "low") {
+                    setEffort("medium");
+                    window.localStorage.setItem(AGENT_EFFORT_KEY, "medium");
+                  }
+                }
+              }}
+              className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
+                autonomy === "automate"
+                  ? "border-emerald-400/35 bg-emerald-500/15 text-emerald-100"
+                  : "border-white/10 bg-white/3 text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              }`}
+            >
+              <span
+                className={`relative inline-flex h-3.5 w-6 shrink-0 rounded-full transition ${
+                  autonomy === "automate" ? "bg-emerald-400/80" : "bg-slate-600"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 size-2.5 rounded-full bg-white shadow transition ${
+                    autonomy === "automate" ? "left-3" : "left-0.5"
+                  }`}
+                />
+              </span>
+              Auto
+            </button>
+          )}
           <DarkSelect
             ariaLabel="Shell scope"
             title={
@@ -5041,11 +6284,17 @@ function AgentView({
             providerId={provider}
             baseUrl={baseUrl}
             model={model}
+            modelMode={modelMode}
+            autoSummary={`Auto · ${autoModelForSlot(provider, slotFromAutonomy(autonomy)).profileId}`}
             onProviderChange={(preset) => {
               setProvider(preset.id);
               setBaseUrl(preset.baseUrl);
             }}
-            onModelChange={setModel}
+            onModelChange={(next) => {
+              setModelMode("pin");
+              setModel(next);
+            }}
+            onSelectAuto={() => setModelMode("auto")}
           />
 
           <div className="min-w-0 flex-1" />
@@ -5054,9 +6303,9 @@ function AgentView({
             contextPct={contextPct}
             contextUsed={contextUsed}
             contextLimit={contextLimit}
-            turnTokens={turnTokens}
-            sessionTokens={sessionTokens}
+            segments={contextSegments}
             showSpend={Number(inputCost) > 0 || Number(outputCost) > 0}
+            sessionSpendMicros={sessionTokens.costMicros}
             effort={effort}
             showEffort={providerSupportsEffort(provider)}
             onEffort={setEffort}
@@ -5068,16 +6317,54 @@ function AgentView({
             goalBusy={goalBusy || busy}
           />
 
+          {busy && (prompt.trim() || attachments.length > 0) && (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!isTauri() || !provider.trim() || !model.trim()}
+              className="grid size-8 shrink-0 place-items-center rounded-lg bg-blue-500 text-sm font-bold text-white hover:bg-blue-400 disabled:opacity-40"
+              title="Add to queue"
+            >
+              ↑
+            </button>
+          )}
           <button
             type="button"
-            onClick={submit}
+            onClick={() => {
+              if (busy) {
+                onCancel?.();
+                return;
+              }
+              submit();
+            }}
             disabled={
-              busy || !prompt.trim() || !provider.trim() || !model.trim() || !isTauri()
+              !isTauri() ||
+              (!busy &&
+                ((!prompt.trim() && attachments.length === 0) ||
+                  !provider.trim() ||
+                  !model.trim()))
             }
-            className="grid size-8 shrink-0 place-items-center rounded-lg bg-blue-500 text-sm font-bold text-white hover:bg-blue-400 disabled:opacity-40"
-            title={isTauri() ? "Send" : "Desktop only"}
+            className={`grid size-8 shrink-0 place-items-center rounded-lg text-sm font-bold text-white disabled:opacity-40 ${
+              busy
+                ? "bg-rose-500 hover:bg-rose-400"
+                : "bg-blue-500 hover:bg-blue-400"
+            }`}
+            title={
+              !isTauri()
+                ? "Desktop only"
+                : busy
+                  ? "Stop (Esc)"
+                  : "Send"
+            }
           >
-            {busy ? "…" : "↑"}
+            {busy ? (
+              <span
+                className="block size-2.5 rounded-[2px] bg-white"
+                aria-hidden
+              />
+            ) : (
+              "↑"
+            )}
           </button>
         </div>
       </div>
@@ -5085,509 +6372,6 @@ function AgentView({
   );
 }
 
-function KeysView({
-  simpleMode = false,
-  onContinueToAgent,
-}: {
-  simpleMode?: boolean;
-  onContinueToAgent?: () => void;
-}) {
-  const [provider, setProvider] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_PROVIDER;
-    return window.localStorage.getItem(AGENT_PROVIDER_KEY) || DEFAULT_PROVIDER;
-  });
-  const [profile, setProfile] = useState("local");
-  const [secret, setSecret] = useState("");
-  const [baseUrl, setBaseUrl] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_BASE_URL;
-    const storedProvider =
-      window.localStorage.getItem(AGENT_PROVIDER_KEY) || DEFAULT_PROVIDER;
-    const stored =
-      window.localStorage.getItem(AGENT_BASE_URL_KEY) || DEFAULT_BASE_URL;
-    return canonicalBaseUrl(storedProvider, stored);
-  });
-  const [model, setModel] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_MODEL;
-    return window.localStorage.getItem(AGENT_MODEL_KEY) || DEFAULT_MODEL;
-  });
-  const [inputCostPerMtok, setInputCostPerMtok] = useState("");
-  const [outputCostPerMtok, setOutputCostPerMtok] = useState("");
-  const [maxCostUsd, setMaxCostUsd] = useState("0.05");
-  const [approveLiveCost, setApproveLiveCost] = useState(false);
-  const [status, setStatus] = useState<ProviderKeyStatus | null>(null);
-  const [vaultRows, setVaultRows] = useState<
-    { provider: string; configured: boolean }[]
-  >([]);
-  const [smoke, setSmoke] = useState<ProviderKeySmokeResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  const refreshStatus = useCallback(async () => {
-    if (!provider.trim() || !profile.trim()) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const [result, rows] = await Promise.all([
-        invoke<ProviderKeyStatus>("key_status", {
-          provider: provider.trim(),
-          profile: profile.trim(),
-        }),
-        invoke<{ provider: string; configured: boolean }[]>("key_status_all", {
-          profile: profile.trim(),
-        }).catch(() => [] as { provider: string; configured: boolean }[]),
-      ]);
-      setStatus(result);
-      setVaultRows(rows);
-    } catch (reason) {
-      setMessage(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }, [profile, provider]);
-
-  const importOpenCodeAuth = async () => {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await invoke<{
-        imported: string[];
-        skipped: string[];
-        detail: string;
-      }>("key_import_opencode_auth", { profile: profile.trim() || "local" });
-      setMessage(
-        `Imported ${result.imported.join(", ") || "(none)"}. ${result.detail}`,
-      );
-      if (result.imported.includes("opencode")) {
-        applyPreset(presetById("opencode") ?? PROVIDER_PRESETS[0]);
-      }
-      await refreshStatus();
-    } catch (reason) {
-      setMessage(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    void refreshStatus();
-  }, [refreshStatus]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      AGENT_PROVIDER_KEY,
-      provider.trim() || DEFAULT_PROVIDER,
-    );
-  }, [provider]);
-  useEffect(() => {
-    if (baseUrl.trim()) {
-      window.localStorage.setItem(AGENT_BASE_URL_KEY, baseUrl.trim());
-    }
-  }, [baseUrl]);
-  useEffect(() => {
-    if (model.trim()) {
-      window.localStorage.setItem(AGENT_MODEL_KEY, model.trim());
-    }
-  }, [model]);
-
-  const applyPreset = (preset: (typeof PROVIDER_PRESETS)[number]) => {
-    setProvider(preset.id);
-    setBaseUrl(preset.baseUrl);
-    setModel(preset.models[0] ?? DEFAULT_MODEL);
-    setStatus(null);
-    setSmoke(null);
-  };
-
-  const save = async (andContinue: boolean) => {
-    if (!secret.trim()) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await invoke<ProviderKeyStatus>("key_set", {
-        provider: provider.trim(),
-        profile: profile.trim(),
-        secret,
-      });
-      setSecret("");
-      setStatus(result);
-      setSmoke(null);
-      window.localStorage.setItem(AGENT_PROVIDER_KEY, result.provider);
-      window.localStorage.setItem(AGENT_BASE_URL_KEY, baseUrl.trim());
-      window.localStorage.setItem(AGENT_MODEL_KEY, model.trim());
-      setMessage(`${result.provider} credential saved to the OS vault.`);
-      if (andContinue) {
-        onContinueToAgent?.();
-      }
-    } catch (reason) {
-      setMessage(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (
-      !window.confirm(
-        `Delete the ${provider.trim()} credential from profile ${profile.trim()}?`,
-      )
-    ) {
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await invoke<ProviderKeyDeleteResult>("key_delete", {
-        provider: provider.trim(),
-        profile: profile.trim(),
-      });
-      setStatus({
-        profile: result.profile,
-        provider: result.provider,
-        configured: false,
-      });
-      setSmoke(null);
-      setMessage(result.deleted ? "Credential deleted." : "No credential was configured.");
-    } catch (reason) {
-      setMessage(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runSmoke = async () => {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await invoke<ProviderKeySmokeResult>("key_smoke", {
-        provider: provider.trim(),
-        profile: profile.trim(),
-      });
-      setSmoke(result);
-    } catch (reason) {
-      setMessage(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runLiveSmoke = async () => {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await invoke<ProviderKeySmokeResult>("key_live_smoke", {
-        provider: provider.trim(),
-        profile: profile.trim(),
-        baseUrl: baseUrl.trim(),
-        model: model.trim(),
-        inputCostPerMtok: Number(inputCostPerMtok),
-        outputCostPerMtok: Number(outputCostPerMtok),
-        maxCostUsd: Number(maxCostUsd),
-        approveCost: approveLiveCost,
-      });
-      setSmoke(result);
-      setApproveLiveCost(false);
-    } catch (reason) {
-      setMessage(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
-      {isTauri() && (
-        <div className="lg:col-span-2">
-          <SpendUsageStrip />
-        </div>
-      )}
-      <Panel
-        title="Provider & model"
-        subtitle="BYOK — keys persist across rebuilds (Credential Manager + %LOCALAPPDATA%\\ade\\provider-keys). OpenCode Zen ≠ FreeLLMAPI."
-      >
-        <div className="max-w-2xl space-y-4">
-          <ProviderSelect
-            value={provider}
-            onChange={(preset) => {
-              applyPreset(preset);
-              // Always reset model when changing provider from Keys too.
-              setModel(preset.models[0] ?? DEFAULT_MODEL);
-            }}
-          />
-
-          <ModelPicker
-            providerId={provider}
-            baseUrl={baseUrl}
-            value={model}
-            onChange={setModel}
-            apiKey={secret.trim() || null}
-          />
-
-          <label className="block text-[11px] text-slate-500">
-            <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-slate-600">
-              API key
-            </span>
-            <input
-              type="password"
-              value={secret}
-              onChange={(event) => setSecret(event.target.value)}
-              autoComplete="new-password"
-              spellCheck={false}
-              placeholder={
-                status?.configured ? "Enter a replacement key" : "Paste provider key"
-              }
-              className="w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 font-mono text-xs text-slate-200"
-            />
-          </label>
-
-          <Disclosure
-            title="Advanced"
-            subtitle="Profile, base URL, smoke"
-            summary={profile}
-            hint="Most turns only need provider, model, and key."
-            defaultOpen={false}
-            storageKey="ade_keys_advanced"
-          >
-            <div className="space-y-3">
-              <Field
-                label="Profile"
-                value={profile}
-                onChange={(value) => {
-                  setProfile(value);
-                  setStatus(null);
-                  setSmoke(null);
-                }}
-              />
-              <Field label="API base URL" value={baseUrl} onChange={setBaseUrl} mono />
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void runSmoke()}
-                  disabled={busy || !provider.trim() || !profile.trim()}
-                  className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/5 disabled:opacity-50"
-                >
-                  Safe smoke preflight
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void remove()}
-                  disabled={busy || !status?.configured}
-                  className="rounded-lg border border-red-400/20 px-3 py-1.5 text-[11px] text-red-300 hover:bg-red-400/5 disabled:opacity-40"
-                >
-                  Delete key
-                </button>
-              </div>
-
-              {!simpleMode && (
-                <Disclosure
-                  title="Live credential validation"
-                  subtitle="Optional billable smoke"
-                  summary="capped"
-                  defaultOpen={false}
-                  storageKey="ade_keys_live_smoke"
-                >
-                  <p className="text-[10px] leading-5 text-slate-500">
-                    One 16-token-max turn. Pricing required so ADE can refuse before network if
-                    worst-case exceeds your cap.
-                  </p>
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <Field
-                      label="Input USD / MTok"
-                      value={inputCostPerMtok}
-                      onChange={setInputCostPerMtok}
-                    />
-                    <Field
-                      label="Output USD / MTok"
-                      value={outputCostPerMtok}
-                      onChange={setOutputCostPerMtok}
-                    />
-                    <Field
-                      label="Maximum cost (USD)"
-                      value={maxCostUsd}
-                      onChange={setMaxCostUsd}
-                    />
-                  </div>
-                  <label className="mt-3 flex items-start gap-2 text-[10px] leading-5 text-slate-400">
-                    <input
-                      type="checkbox"
-                      checked={approveLiveCost}
-                      onChange={(event) => setApproveLiveCost(event.target.checked)}
-                      className="mt-1"
-                    />
-                    I approve one potentially billable provider request, bounded by the maximum
-                    above.
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => void runLiveSmoke()}
-                    disabled={
-                      busy ||
-                      !status?.configured ||
-                      !model.trim() ||
-                      !baseUrl.trim() ||
-                      !inputCostPerMtok.trim() ||
-                      !outputCostPerMtok.trim() ||
-                      !maxCostUsd.trim() ||
-                      !approveLiveCost
-                    }
-                    className="mt-3 rounded-lg border border-blue-400/30 px-3 py-1.5 text-[11px] font-semibold text-blue-300 hover:bg-blue-400/5 disabled:opacity-40"
-                  >
-                    Run capped live smoke
-                  </button>
-                </Disclosure>
-              )}
-            </div>
-          </Disclosure>
-
-          <div className="flex flex-wrap gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => void save(true)}
-              disabled={busy || !provider.trim() || !profile.trim() || !secret.trim()}
-              className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold hover:bg-blue-400 disabled:opacity-50"
-            >
-              {status?.configured ? "Replace key & open Home" : "Save key & open Home"}
-            </button>
-            {status?.configured && (
-              <button
-                type="button"
-                onClick={() => onContinueToAgent?.()}
-                disabled={busy}
-                className="rounded-lg border border-blue-400/30 px-4 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-400/5 disabled:opacity-50"
-              >
-                Continue to Home
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => void importOpenCodeAuth()}
-              disabled={busy || !isTauri()}
-              title="Copy keys from OpenCode Desktop auth.json into the ADE vault"
-              className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/5 disabled:opacity-50"
-            >
-              Import from OpenCode
-            </button>
-            {!secret.trim() && status?.configured && (
-              <button
-                type="button"
-                onClick={() => {
-                  window.localStorage.setItem(AGENT_PROVIDER_KEY, provider.trim());
-                  window.localStorage.setItem(AGENT_BASE_URL_KEY, baseUrl.trim());
-                  window.localStorage.setItem(AGENT_MODEL_KEY, model.trim());
-                  onContinueToAgent?.();
-                }}
-                className="rounded-lg border border-white/10 px-4 py-2 text-xs text-slate-300 hover:bg-white/5"
-              >
-                Use this model on Home
-              </button>
-            )}
-          </div>
-
-          {message && (
-            <div className="rounded-lg border border-white/7 bg-white/2 p-3 text-xs text-slate-400">
-              {message}
-            </div>
-          )}
-        </div>
-      </Panel>
-
-      <div className="space-y-5">
-        <Panel title="Configured providers" subtitle="Vault presence · FreeLLMAPI-style health strip">
-          <div className="space-y-2">
-            {(vaultRows.length > 0
-              ? vaultRows
-              : PROVIDER_PRESETS.map((preset) => ({
-                  provider: preset.id,
-                  configured: false,
-                }))
-            ).map((row) => {
-              const preset = presetById(row.provider);
-              const active = provider === row.provider;
-              return (
-                <button
-                  key={row.provider}
-                  type="button"
-                  onClick={() => {
-                    const next = presetById(row.provider);
-                    if (next) applyPreset(next);
-                  }}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition ${
-                    active
-                      ? "border-blue-400/35 bg-blue-500/10"
-                      : "border-white/7 bg-white/2 hover:border-white/15"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <div className="text-[12px] font-semibold text-slate-200">
-                      {preset?.label ?? row.provider}
-                    </div>
-                    <div className="truncate font-mono text-[10px] text-slate-600">
-                      {preset?.baseUrl ?? row.provider}
-                    </div>
-                  </div>
-                  <span
-                    className={`shrink-0 text-[10px] font-semibold uppercase tracking-wide ${
-                      row.configured ? "text-emerald-300" : "text-slate-500"
-                    }`}
-                  >
-                    {row.configured ? "● in vault" : "○ missing"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="mt-3 text-[10px] leading-5 text-slate-500">
-            &quot;In vault&quot; only means ADE has a secret stored — it does not prove
-            the API accepts it. A 401 means that stored key is rejected; Import from
-            OpenCode copies the same keys from auth.json, so regenerate a fresh Zen
-            key at opencode.ai if chat fails. OpenCode Zen = provider opencode +
-            https://opencode.ai/zen/v1. FreeLLMAPI = freellmapi-… key + :31415
-            (Desktop) or :3001 (Docker) — different products, different keys.
-          </p>
-        </Panel>
-
-        <Panel title="Selected" subtitle={`${profile || "—"} / ${provider || "—"}`}>
-          <div
-            className={`rounded-xl border p-4 ${
-              status?.configured
-                ? "border-emerald-400/20 bg-emerald-400/5"
-                : "border-amber-400/20 bg-amber-400/5"
-            }`}
-          >
-            <div
-              className={`text-sm font-semibold ${
-                status?.configured ? "text-emerald-300" : "text-amber-300"
-              }`}
-            >
-              {busy
-                ? "Checking…"
-                : status?.configured
-                  ? "Configured"
-                  : status
-                    ? "Not configured"
-                    : "Status pending"}
-            </div>
-            <p className="mt-2 text-[10px] leading-5 text-slate-500">
-              Presence only — the credential value never returns to the UI.
-            </p>
-            <p className="mt-2 font-mono text-[10px] text-slate-500">
-              {presetById(provider)?.label ?? provider} · {model || "—"}
-            </p>
-          </div>
-        </Panel>
-
-        {smoke && (
-          <Panel title="Smoke result" subtitle={smoke.status.toUpperCase()}>
-            <p className="text-xs leading-5 text-slate-400">{smoke.detail}</p>
-            {smoke.status === "ready" || smoke.status === "skipped" ? (
-              <p className="mt-3 text-[10px] leading-5 text-slate-600">
-                Safe preflight makes no network request and incurs no provider cost.
-              </p>
-            ) : null}
-          </Panel>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function Field({
   label,
@@ -5648,9 +6432,9 @@ function AuditView({
   useEffect(() => {
     if (!isTauri()) return;
     const sessionCap = Number(
-      window.localStorage.getItem("ade_session_cap_usd") || "1",
+      window.localStorage.getItem("ade_session_cap_usd") || "0",
     );
-    const dailyCap = Number(window.localStorage.getItem("ade_daily_cap_usd") || "10");
+    const dailyCap = Number(window.localStorage.getItem("ade_daily_cap_usd") || "0");
     void invoke<{
       daily_usd: number;
       used_usd: number;
@@ -5697,10 +6481,10 @@ function AuditView({
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <Panel title="Trust" subtitle={`${audit.score}/${audit.score_max} audit points`}>
+      <Panel title="Trust" subtitle={`${audit.score}/${audit.score_max} readiness score`}>
         <p className="mb-4 text-[12px] leading-5 text-slate-500">
-          Ignore drift, spend, and a recent activity log — Trust is the scoreboard,
-          not Home.
+          A simple scoreboard for setup health, spend, and recent activity — not the Home
+          screen.
         </p>
 
         {audit.blockers.length > 0 && (
@@ -5865,28 +6649,29 @@ function VerifyView({
 
   return (
     <Panel
-      title="Checks"
-      subtitle="Gate evidence after changes. Not day-to-day setup."
+      title="Test project"
+      subtitle="Runs build / lint / test gates for this folder — so you know it still works after changes."
     >
       {results.length === 0 ? (
         <div className="py-20 text-center">
-          <div className="text-sm text-slate-400">No checks run yet</div>
+          <div className="text-sm text-slate-400">No tests run yet</div>
           <p className="mx-auto mt-2 max-w-sm text-[11px] leading-5 text-slate-600">
-            Runs gates in this box. Results stay here — not in agent chat.
+            Recommended once after setup, and again after Apply changes. This is not the chat —
+            it only checks your project sensors.
           </p>
           <button
             onClick={onRun}
             disabled={busy}
             className="mt-4 rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold disabled:opacity-50"
           >
-            {busy ? "Checking…" : "Check work"}
+            {busy ? "Testing…" : "Run project tests"}
           </button>
         </div>
       ) : (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/7 bg-white/2 px-3 py-2 text-[11px] text-slate-400">
             <span>
-              {passed}/{results.length} gates clear
+              {passed}/{results.length} tests clear
             </span>
             <button
               type="button"
@@ -5894,7 +6679,7 @@ function VerifyView({
               disabled={busy}
               className="rounded-md border border-white/10 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-white/6 disabled:opacity-50"
             >
-              {busy ? "Checking…" : "Re-run"}
+              {busy ? "Testing…" : "Re-run"}
             </button>
           </div>
           {results.map((result) => {
@@ -5956,7 +6741,7 @@ function VerifyView({
             disabled={busy}
             className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/5 disabled:opacity-50"
           >
-            {busy ? "Checking…" : "Check work again"}
+            {busy ? "Testing…" : "Test again"}
           </button>
         </div>
       )}
@@ -6402,9 +7187,9 @@ function SpendUsageStrip({
   useEffect(() => {
     if (!isTauri()) return;
     const sessionCap = Number(
-      window.localStorage.getItem("ade_session_cap_usd") || "1",
+      window.localStorage.getItem("ade_session_cap_usd") || "0",
     );
-    const dailyCap = Number(window.localStorage.getItem("ade_daily_cap_usd") || "10");
+    const dailyCap = Number(window.localStorage.getItem("ade_daily_cap_usd") || "0");
     let cancelled = false;
     void invoke<{
       daily_usd: number;
@@ -6464,10 +7249,10 @@ function SpendUsageStrip({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Usage
+            Today&apos;s spend
           </div>
           <div className="mt-0.5 text-[12px] text-slate-400">
-            Invoice-class used / reserved / remaining (same ledger as Trust)
+            Used, reserved, and what you have left today
           </div>
         </div>
         <div
@@ -6493,9 +7278,9 @@ function ContextUsageButton({
   contextPct,
   contextUsed,
   contextLimit,
-  turnTokens,
-  sessionTokens,
+  segments,
   showSpend,
+  sessionSpendMicros,
   effort,
   showEffort,
   onEffort,
@@ -6505,9 +7290,9 @@ function ContextUsageButton({
   contextPct: number;
   contextUsed: number;
   contextLimit: number;
-  turnTokens: { input: number; output: number };
-  sessionTokens: { input: number; output: number; costMicros: number };
+  segments: { label: string; tokens: number; color: string }[];
   showSpend: boolean;
+  sessionSpendMicros: number;
   effort: EffortLevel;
   showEffort: boolean;
   onEffort: (effort: EffortLevel) => void;
@@ -6519,11 +7304,17 @@ function ContextUsageButton({
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const segmentTotal = Math.max(
+    1,
+    segments.reduce((sum, row) => sum + row.tokens, 0),
+  );
+  const usedForBar = Math.min(contextLimit, Math.max(contextUsed, segmentTotal));
+
   useLayoutEffect(() => {
     if (!open || !rootRef.current) return;
     const place = () => {
       const rect = rootRef.current!.getBoundingClientRect();
-      const width = 280;
+      const width = 300;
       const pad = 8;
       const sidebarSafe = 248;
       let left = rect.right - width;
@@ -6570,7 +7361,7 @@ function ContextUsageButton({
     <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
-        title="Context & usage"
+        title="Context usage"
         aria-expanded={open}
         onClick={(event) => {
           event.stopPropagation();
@@ -6588,18 +7379,71 @@ function ContextUsageButton({
         <div
           ref={panelRef}
           style={panelStyle}
-          className="rounded-xl border border-white/12 bg-[#121820] p-3"
+          className="rounded-xl border border-white/12 bg-[#0f141b] p-3 shadow-xl shadow-black/40"
           onClick={(event) => event.stopPropagation()}
         >
-          {showEffort && (
-            <div className="mb-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
-                Effort · turn gas tank
+          <div className="mb-2 flex items-start justify-between gap-2">
+            <div className="text-[12px] font-semibold text-slate-100">Context Usage</div>
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => setOpen(false)}
+              className="rounded px-1 text-[12px] text-slate-500 hover:bg-white/5 hover:text-slate-300"
+            >
+              ×
+            </button>
+          </div>
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <div
+              className={`text-[12px] font-semibold ${
+                contextPct >= 85 ? "text-amber-200" : "text-slate-200"
+              }`}
+            >
+              {contextPct}% Full
+            </div>
+            <div className="text-[11px] tabular-nums text-slate-500">
+              ~{formatTokenCount(usedForBar)} / {formatTokenCount(contextLimit)} Tokens
+            </div>
+          </div>
+          <div className="mb-3 flex h-1.5 overflow-hidden rounded-full bg-slate-800">
+            {segments
+              .filter((row) => row.tokens > 0)
+              .map((row) => (
+                <div
+                  key={row.label}
+                  title={`${row.label}: ${formatTokenCount(row.tokens)}`}
+                  className="h-full"
+                  style={{
+                    width: `${Math.max(1, (row.tokens / contextLimit) * 100)}%`,
+                    backgroundColor: row.color,
+                  }}
+                />
+              ))}
+          </div>
+          <div className="space-y-1.5">
+            {segments.map((row) => (
+              <div
+                key={row.label}
+                className="flex items-center justify-between gap-2 text-[11px]"
+              >
+                <div className="flex min-w-0 items-center gap-2 text-slate-400">
+                  <span
+                    className="size-2 shrink-0 rounded-[2px]"
+                    style={{ backgroundColor: row.color }}
+                  />
+                  <span className="truncate">{row.label}</span>
+                </div>
+                <span className="shrink-0 tabular-nums text-slate-300">
+                  {formatTokenCount(row.tokens)}
+                </span>
               </div>
-              <p className="mb-1.5 text-[10px] leading-4 text-slate-500">
-                Tool rounds + output tokens for this turn (not model smartness).
-                Apply/Automate floor at Med.
-              </p>
+            ))}
+          </div>
+          {showEffort && (
+            <div className="mt-3 border-t border-white/8 pt-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                Effort · turn budget
+              </div>
               <DarkSelect
                 ariaLabel="Effort turn budget"
                 value={effort}
@@ -6612,27 +7456,9 @@ function ContextUsageButton({
               />
             </div>
           )}
-          <div className="text-[11px] font-semibold text-slate-200">Context usage</div>
-          <div className="mt-1 text-[10px] text-slate-500">
-            {formatTokenCount(contextUsed)} / {formatTokenCount(contextLimit)}
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
-            <div
-              className={`h-full rounded-full ${
-                contextPct >= 85 ? "bg-amber-400/80" : "bg-cyan-400/80"
-              }`}
-              style={{ width: `${contextPct}%` }}
-            />
-          </div>
-          <div className="mt-2 space-y-1">
-            <ContextUsageRow label="Last turn input" tokens={turnTokens.input} tone="cyan" />
-            <ContextUsageRow label="Last turn output" tokens={turnTokens.output} tone="violet" />
-            <ContextUsageRow label="Session input" tokens={sessionTokens.input} tone="emerald" />
-            <ContextUsageRow label="Session output" tokens={sessionTokens.output} tone="slate" />
-          </div>
           {showSpend && (
             <div className="mt-2 text-[10px] text-slate-500">
-              Session spend ≈ ${(sessionTokens.costMicros / 1_000_000).toFixed(4)}
+              Session spend ≈ ${(sessionSpendMicros / 1_000_000).toFixed(4)}
             </div>
           )}
           {onSaveGoal && (
@@ -6657,37 +7483,7 @@ function ContextUsageButton({
 function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 0 : 1)}K`;
-  return String(tokens);
-}
-
-function ContextUsageRow({
-  label,
-  tokens,
-  tone,
-}: {
-  label: string;
-  tokens: number;
-  tone: "cyan" | "violet" | "emerald" | "slate";
-}) {
-  const dot =
-    tone === "cyan"
-      ? "bg-cyan-400"
-      : tone === "violet"
-        ? "bg-violet-400"
-        : tone === "emerald"
-          ? "bg-emerald-400"
-          : "bg-slate-400";
-  return (
-    <div className="flex items-center justify-between gap-2 text-[11px]">
-      <div className="flex min-w-0 items-center gap-2 text-slate-400">
-        <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
-        <span className="truncate">{label}</span>
-      </div>
-      <span className="shrink-0 tabular-nums text-slate-300">
-        {formatTokenCount(tokens)}
-      </span>
-    </div>
-  );
+  return String(Math.max(0, Math.round(tokens)));
 }
 
 function FindingBar({ finding }: { finding: Finding }) {

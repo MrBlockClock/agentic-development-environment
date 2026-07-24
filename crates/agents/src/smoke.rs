@@ -249,6 +249,7 @@ pub async fn run_live_agent_smoke_with_vault(
         workspace_root: spec.workspace_root,
         owned_paths: vec![],
         handoff_chars: 1_500,
+        image_paths: vec![],
     })
     .spend_caps(SpendCaps {
         session: spec.max_cost,

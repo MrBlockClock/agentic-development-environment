@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (amended 2026-07-23 by DEC-A-013)
 - **Date:** 2026-07-22
-- **Canvas:** ADE-multihost-gameplan.canvas.tsx · ADE-zed-only-fork-research.canvas.tsx
+- **Canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `canvases/_archive/ADE-multihost-gameplan.canvas.tsx` · `canvases/_archive/ADE-zed-only-fork-research.canvas.tsx`
 
 ## Context
 

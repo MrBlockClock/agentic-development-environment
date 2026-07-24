@@ -43,6 +43,38 @@ if ($locks.Count -gt 0) {
 
 New-Item -ItemType Directory -Force -Path (Join-Path $root $OwnedPath) | Out-Null
 
+# G1 contract gate: Act/Automate needs AC + out-of-scope + verify (or waive).
+Write-Host "-- seed eng-goal contract (G1) --"
+$goalsDir = Join-Path $root ".ade\goals"
+New-Item -ItemType Directory -Force -Path $goalsDir | Out-Null
+$goalId = [guid]::NewGuid().ToString()
+$now = (Get-Date).ToUniversalTime().ToString("o")
+$goal = [ordered]@{
+  schema           = "ade.goal/v1"
+  id               = $goalId
+  createdAt        = $now
+  updatedAt        = $now
+  statement        = "N3 dogfood Automate: write acceptance evidence under $OwnedPath only."
+  successCriteria  = @(
+    "Create or update $OwnedPath/automate-acceptance.md via fs write_file"
+    "Stay inside owned path $OwnedPath"
+  )
+  outOfScope       = @(
+    "crates/"
+    "apps/"
+    "docs/platform/"
+    "Binary rebuilds"
+  )
+  shellScope       = "workspace"
+  autonomy         = "automate"
+  verifyGate       = "G3"
+  ownedPaths       = @($OwnedPath)
+  status           = "active"
+}
+$goal | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $goalsDir "$goalId.json")
+@{ id = $goalId } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $goalsDir "active.json")
+Write-Host "Active eng-goal: $goalId"
+
 $prompt = @"
 N3 dogfood Automate acceptance.
 
@@ -61,6 +93,8 @@ Do not rebuild binaries.
 
 Write-Host "-- agent turn (automate + approve owned paths + G3) --"
 $env:RUST_LOG = "error"
+# Tiny non-zero rates keep SpendGuard honest without ADE_ALLOW_UNPRICED
+# (that env would leak into cargo test and fail gold g55 during verify-on-complete).
 $out = & $ade agent `
   --provider $Provider `
   --base-url $BaseUrl `
@@ -71,8 +105,8 @@ $out = & $ade agent `
   --verify-on-complete `
   --verify-gate G3 `
   --max-steps 6 `
-  --input-cost-per-mtok 0 `
-  --output-cost-per-mtok 0 `
+  --input-cost-per-mtok 0.01 `
+  --output-cost-per-mtok 0.01 `
   $prompt 2>&1 | Out-String
 
 $code = $LASTEXITCODE

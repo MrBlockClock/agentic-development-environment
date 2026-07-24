@@ -8,6 +8,7 @@ import {
 import { DarkSelect } from "./DarkSelect";
 
 const SEP = "::";
+export const AUTO_MODEL_VALUE = "__auto__";
 
 function encodeChoice(providerId: string, modelId: string): string {
   return `${providerId}${SEP}${modelId}`;
@@ -22,19 +23,26 @@ function decodeChoice(value: string): { providerId: string; modelId: string } | 
   };
 }
 
-/** One composer control: pick a model, grouped by provider. */
+/** One composer control: Auto-by-slot or pick a model, grouped by provider. */
 export function ComposerModelSelect({
   providerId,
   baseUrl,
   model,
+  modelMode = "pin",
+  autoSummary = "Auto",
   onProviderChange,
   onModelChange,
+  onSelectAuto,
 }: {
   providerId: string;
   baseUrl: string;
   model: string;
+  modelMode?: "auto" | "pin";
+  /** e.g. "Auto · planner-fast" when mode is auto */
+  autoSummary?: string;
   onProviderChange: (preset: ProviderPreset) => void;
   onModelChange: (model: string) => void;
+  onSelectAuto?: () => void;
 }) {
   const [liveModels, setLiveModels] = useState<string[]>(
     () => presetById(providerId)?.models ?? [],
@@ -56,6 +64,14 @@ export function ComposerModelSelect({
     const out: { value: string; label: string; group: string }[] = [];
     const seen = new Set<string>();
 
+    if (onSelectAuto) {
+      out.push({
+        value: AUTO_MODEL_VALUE,
+        label: autoSummary,
+        group: "Routing",
+      });
+    }
+
     for (const preset of PROVIDER_PRESETS) {
       const models =
         preset.id === providerId
@@ -76,10 +92,10 @@ export function ComposerModelSelect({
 
     // Keep an unknown custom selection visible.
     const current = encodeChoice(providerId, model);
-    if (model && !seen.has(current)) {
+    if (model && !seen.has(current) && modelMode === "pin") {
       const label =
         PROVIDER_PRESETS.find((p) => p.id === providerId)?.label ?? providerId;
-      out.unshift({
+      out.splice(onSelectAuto ? 1 : 0, 0, {
         value: current,
         label: model,
         group: label || "Current",
@@ -87,20 +103,31 @@ export function ComposerModelSelect({
     }
 
     return out;
-  }, [liveModels, model, providerId]);
+  }, [autoSummary, liveModels, model, modelMode, onSelectAuto, providerId]);
 
-  const value = encodeChoice(providerId, model);
+  const value =
+    modelMode === "auto" && onSelectAuto
+      ? AUTO_MODEL_VALUE
+      : encodeChoice(providerId, model);
   const providerLabel =
     PROVIDER_PRESETS.find((p) => p.id === providerId)?.label ?? providerId;
+  const title =
+    modelMode === "auto"
+      ? `${autoSummary} · swaps by Suggest/Apply/Verify`
+      : `${providerLabel} · ${model}`;
 
   return (
     <DarkSelect
       ariaLabel="Provider and model"
       value={value}
       options={options}
-      title={`${providerLabel} · ${model}`}
-      maxLabelChars={22}
+      title={title}
+      maxLabelChars={26}
       onChange={(next) => {
+        if (next === AUTO_MODEL_VALUE) {
+          onSelectAuto?.();
+          return;
+        }
         const parsed = decodeChoice(next);
         if (!parsed) return;
         const preset = presetById(parsed.providerId);

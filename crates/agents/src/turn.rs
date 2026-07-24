@@ -47,6 +47,9 @@ pub struct AgentTurnSpec {
     pub owned_paths: Vec<String>,
     #[serde(default = "default_handoff_chars")]
     pub handoff_chars: usize,
+    /// Absolute or workspace-relative image paths for multimodal user content.
+    #[serde(default)]
+    pub image_paths: Vec<String>,
 }
 
 fn default_handoff_chars() -> usize {
@@ -368,7 +371,11 @@ impl AgentTurnBuilder {
                 {
                     None
                 } else {
-                    Some(summary)
+                    // Frame as background only — auto-injection must not hijack a new topic
+                    // (e.g. "updates?" / baseball) into the last Desktop project.
+                    Some(format!(
+                        "PRIOR HANDOFF (background only — do not switch topics or run next_safe_command unless the user asks to Continue / resume this work):\n{summary}"
+                    ))
                 }
             }
             Err(_) => None,
@@ -383,9 +390,9 @@ impl AgentTurnBuilder {
             .unwrap_or_default();
         let scope_clause = match self.preferred_shell_cwd.as_deref() {
             Some(cwd) => format!(
-                "SHELL SCOPE=Home/Desktop: shell__run_command defaults to cwd `{cwd}` when omitted. Prefer this for goals about that folder. fs__* tools remain workspace-scoped."
+                "SHELL SCOPE=Home/Desktop: shell__run_command defaults to cwd `{cwd}` when omitted. Use that default only for Desktop/home goals the user named. For ambiguous prompts, stay in the attached workspace and ask what they mean — do not explore unrelated sibling folders under Desktop. fs__* tools remain workspace-scoped."
             ),
-            None => "SHELL SCOPE=Workspace: shell__run_command defaults to the attached workspace root. Set cwd to ~/Desktop (or $env:USERPROFILE\\\\Desktop) for Desktop/home goals.".into(),
+            None => "SHELL SCOPE=Workspace: shell__run_command defaults to the attached workspace root. Set cwd to ~/Desktop (or $env:USERPROFILE\\\\Desktop) only when the user asks about Desktop/home.".into(),
         };
         let eng_goal = crate::goal::GoalStore::new(&coordination_root)
             .load_active()
@@ -407,7 +414,12 @@ impl AgentTurnBuilder {
         } else {
             (true, None)
         };
-        let eng_goal_clause = eng_goal.as_ref().map(|g| g.prompt_block());
+        let eng_goal_clause = eng_goal.as_ref().map(|g| {
+            format!(
+                "{}\n(ENG GOAL is the Apply contract for this workspace — do not pursue it over a different user topic unless they ask.)",
+                g.prompt_block()
+            )
+        });
         let contract_clause = if autonomy.allows_mutating_tools() && !contract_allows_act {
             Some(
                 "CONTRACT GATE: Act/Automate dial is on but eng-goal contract is incomplete. Read/inspect only this turn — ask the user to fill acceptance criteria, out-of-scope, and verify (or waive). Do not attempt writes."
@@ -532,6 +544,7 @@ impl AgentTurnBuilder {
         Ok(AgentTurnService {
             session,
             prompt: self.spec.prompt,
+            image_paths: self.spec.image_paths,
             workspace_root: self.spec.workspace_root.clone(),
             coordination_root,
             provider: self.spec.provider,
@@ -602,6 +615,7 @@ pub fn enforce_claim_gate(
 pub struct AgentTurnService {
     session: AgentSession,
     prompt: String,
+    image_paths: Vec<String>,
     workspace_root: PathBuf,
     coordination_root: PathBuf,
     provider: String,
@@ -633,6 +647,7 @@ impl AgentTurnService {
         let (events, receiver) = mpsc::channel(128);
         let session = self.session.clone();
         let prompt = self.prompt.clone();
+        let image_paths = self.image_paths.clone();
         let workspace_root = self.workspace_root.clone();
         let coordination_root = self.coordination_root.clone();
         let provider = self.provider.clone();
@@ -642,7 +657,10 @@ impl AgentTurnService {
         let context_compaction = self.context_compaction.clone();
         let verify_on_complete = self.verify_on_complete;
         tokio::spawn(async move {
-            match session.run_turn(prompt.clone(), events.clone()).await {
+            match session
+                .run_turn(prompt.clone(), image_paths, events.clone())
+                .await
+            {
                 Ok(result) => {
                     if let Err(error) = usage
                         .record_turn(&coordination_root, &result)
@@ -875,6 +893,7 @@ mod tests {
             workspace_root: PathBuf::from("."),
             owned_paths: vec![],
             handoff_chars: DEFAULT_HANDOFF_CHARS,
+            image_paths: vec![],
         };
         let desktop = cli.clone();
         assert_eq!(
@@ -922,6 +941,7 @@ mod tests {
             workspace_root: root.clone(),
             owned_paths: vec![],
             handoff_chars: DEFAULT_HANDOFF_CHARS,
+            image_paths: vec![],
         })
         .ledger(ledger.clone())
         .lease_agent(lease_agent)

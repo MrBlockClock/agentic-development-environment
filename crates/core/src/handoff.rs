@@ -332,7 +332,7 @@ impl HandoffCapsule {
         let follow = if host_ran_next {
             "Host already ran next_safe_command — do not re-run unless it failed; prefer verify / one owned-path write."
         } else {
-            "Prefer next_safe_command (or its host result) before expanding scope; avoid discovery loops."
+            "If the user is continuing this handoff, prefer next_safe_command before expanding scope. If they started a new topic, ignore this handoff and follow their message."
         };
         let mut summary = format!(
             "HANDOFF SUMMARY (ade.handoff/v1)\n\

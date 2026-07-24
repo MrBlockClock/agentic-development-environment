@@ -14,7 +14,7 @@ default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
-tauri = { workspace = true }
+tauri = { workspace = true, features = ["unstable"] }
 tauri-plugin-shell = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 serde = { workspace = true }

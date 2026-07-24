@@ -117,6 +117,14 @@ pub enum AgentEvent {
     Cancelled {
         reason: String,
     },
+    /// Desktop should attach a workspace or open the in-shell Browser.
+    HostIntent {
+        action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -325,7 +333,7 @@ impl AgentSession {
         let session = self.clone();
         let prompt = prompt.into();
         tokio::spawn(async move {
-            match session.run_turn(prompt, events.clone()).await {
+            match session.run_turn(prompt, Vec::new(), events.clone()).await {
                 Ok(result) => {
                     let _ = events.send(AgentEvent::Completed { result }).await;
                 }
@@ -349,6 +357,7 @@ impl AgentSession {
     pub async fn run_turn(
         &self,
         prompt: String,
+        image_paths: Vec<String>,
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<AgentTurnResult, AdeError> {
         self.model.validate_spend_limits()?;
@@ -368,9 +377,15 @@ impl AgentSession {
             .await;
 
         let (provider_tools, tool_routes) = self.provider_tools().await?;
+        let user_content = crate::vision::user_message_content(
+            &prompt,
+            &image_paths,
+            &self.model.id,
+            &self.workspace_root,
+        )?;
         let mut messages = vec![
             json!({ "role": "system", "content": self.system_prompt }),
-            json!({ "role": "user", "content": prompt }),
+            json!({ "role": "user", "content": user_content }),
         ];
         let mut all_text = String::new();
         let mut total_usage = ProviderUsage::default();
@@ -693,12 +708,14 @@ impl AgentSession {
                         envelope: Some(envelope),
                     })
                     .await;
-                let (is_error, text, content) = if route.host {
+                let (is_error, text, content, host_intent) = if route.host {
                     match self.call_host_tool(&route.tool, &arguments).await {
-                        Ok(text) => (false, text.clone(), Value::String(text)),
+                        Ok((text, intent)) => {
+                            (false, text.clone(), Value::String(text), intent)
+                        }
                         Err(error) => {
                             let text = error.to_string();
-                            (true, text.clone(), Value::String(text))
+                            (true, text.clone(), Value::String(text), None)
                         }
                     }
                 } else {
@@ -714,6 +731,7 @@ impl AgentSession {
                         } else {
                             Value::String(result.text)
                         },
+                        None,
                     )
                 };
                 let raw_for_model = if text.is_empty() {
@@ -734,6 +752,15 @@ impl AgentSession {
                         text: text.clone(),
                     })
                     .await;
+                if let Some((action, path, url)) = host_intent {
+                    let _ = events
+                        .send(AgentEvent::HostIntent {
+                            action,
+                            path,
+                            url,
+                        })
+                        .await;
+                }
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call.id,
@@ -914,7 +941,11 @@ impl AgentSession {
         Ok(())
     }
 
-    async fn call_host_tool(&self, tool: &str, arguments: &Value) -> Result<String, AdeError> {
+    async fn call_host_tool(
+        &self,
+        tool: &str,
+        arguments: &Value,
+    ) -> Result<(String, Option<(String, Option<String>, Option<String>)>), AdeError> {
         match tool {
             "activate_skill" => {
                 let name = arguments
@@ -923,7 +954,7 @@ impl AgentSession {
                     .unwrap_or("")
                     .trim();
                 let skill = SkillLoader::new(&self.workspace_root).activate(name)?;
-                Ok(skill_body_block(&skill))
+                Ok((skill_body_block(&skill), None))
             }
             "compact_context" => {
                 // C4: rubric gate — require non-empty reason; reject mid-stuck patterns.
@@ -954,8 +985,11 @@ impl AgentSession {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim();
-                Ok(format!(
+                Ok((
+                    format!(
                     "ade.compact_context: accepted trigger={reason}; intent={intent}. Harness will emit a boundary capsule and clear older tool blobs. Fire when a sub-task is resolved/converging; suppress mid-derivation or while stuck debugging."
+                    ),
+                    None,
                 ))
             }
             "web_fetch" => {
@@ -964,7 +998,7 @@ impl AgentSession {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim();
-                crate::web::web_fetch(url).await
+                Ok((crate::web::web_fetch(url).await?, None))
             }
             "web_search" => {
                 let query = arguments
@@ -972,10 +1006,43 @@ impl AgentSession {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim();
-                crate::web::web_search(query).await
+                Ok((crate::web::web_search(query).await?, None))
             }
-            "read_file" => self.host_read_file(arguments),
-            "write_file" => self.host_write_file(arguments),
+            "create_named" => {
+                let name = arguments
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let parent = arguments
+                    .get("parent")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let root =
+                    crate::workspace_scaffold::create_named_workspace_on_disk(name, parent)?;
+                let path = root.display().to_string();
+                Ok((
+                    format!(
+                        "Created ADE workspace at {path}. Desktop will attach it. Continue in the next turn under Apply to write project files (do not paste a full blueprint into chat)."
+                    ),
+                    Some(("attach_workspace".into(), Some(path), None)),
+                ))
+            }
+            "open" => {
+                let url = arguments
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let normalized = crate::workspace_scaffold::normalize_browser_open_url(url)?;
+                Ok((
+                    format!("Opening {normalized} in ADE Browser."),
+                    Some(("open_browser".into(), None, Some(normalized))),
+                ))
+            }
+            "read_file" => Ok((self.host_read_file(arguments)?, None)),
+            "write_file" => Ok((self.host_write_file(arguments)?, None)),
             "run_command" => {
                 let command = arguments
                     .get("command")
@@ -989,16 +1056,19 @@ impl AgentSession {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .or(self.preferred_shell_cwd.as_deref());
-                crate::shell::run_command(
-                    &self.workspace_root,
-                    command,
-                    timeout_secs,
-                    crate::shell::ShellOptions {
-                        inspect_only: !self.autonomy.allows_mutating_tools(),
-                        cwd,
-                    },
-                )
-                .await
+                Ok((
+                    crate::shell::run_command(
+                        &self.workspace_root,
+                        command,
+                        timeout_secs,
+                        crate::shell::ShellOptions {
+                            inspect_only: !self.autonomy.allows_mutating_tools(),
+                            cwd,
+                        },
+                    )
+                    .await?,
+                    None,
+                ))
             }
             other => Err(AdeError::NotFound(format!("unknown host tool '{other}'"))),
         }
@@ -1398,6 +1468,52 @@ fn host_tools() -> Vec<HostToolDef> {
             annotations: ToolAnnotations {
                 read_only_hint: Some(false),
                 ade_effect: Some(ToolEffect::WorkspaceWrite),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "workspace".into(),
+            tool: "create_named".into(),
+            description: "Create a new named ADE project folder (AGENTS.md + .ade/) on Desktop by default, then Desktop attaches it. Use for greenfield apps/demos — do not paste full project blueprints into chat. Continue writing files in the next turn under Apply.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Folder name only (e.g. oee-dashboard)"
+                    },
+                    "parent": {
+                        "type": "string",
+                        "description": "Optional parent directory (default: Desktop)"
+                    }
+                },
+                "required": ["name"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
+                ..Default::default()
+            },
+        },
+        HostToolDef {
+            server: "browser".into(),
+            tool: "open".into(),
+            description: "Open a URL in the ADE in-shell Browser tab. For local servers use http://localhost:PORT (not https).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "http(s) URL or localhost:PORT"
+                    }
+                },
+                "required": ["url"],
+                "x-ade-effect": "read_only"
+            }),
+            annotations: ToolAnnotations {
+                read_only_hint: Some(true),
+                ade_effect: Some(ToolEffect::ReadOnly),
                 ..Default::default()
             },
         },

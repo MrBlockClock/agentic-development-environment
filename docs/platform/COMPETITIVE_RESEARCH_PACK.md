@@ -1,11 +1,13 @@
 # ADE Competitive Research Pack (Jul 2026)
 
-Companion canvases (open beside chat):
+Companion canvases were lean-cleaned into `canvases/_archive/` (recoverable). Live board: `ADE-master-gameplan.canvas.tsx`.
 
-1. `ADE-research-method.canvas.tsx` — how to research without SEO compost
-2. `ADE-top20-harsh-teardown.canvas.tsx` — top ~20 landscape + harsh criticism
-3. `ADE-engineering-layout.canvas.tsx` — loop/harness/layout debts + ADE build force
-4. `Ideal-ADE-masterplan.canvas.tsx` — Ideal product spine (prior)
+Archived companions:
+
+1. `_archive/ADE-research-method.canvas.tsx` — how to research without SEO compost
+2. `_archive/ADE-top20-harsh-teardown.canvas.tsx` — top ~20 landscape + harsh criticism
+3. `_archive/ADE-engineering-layout.canvas.tsx` — loop/harness/layout debts + ADE build force
+4. Ideal product spine — see `IDEAL_ADE_MASTERPLAN.md` (+ archived Ideal development plan canvas)
 
 ## Reality checks (do not ignore)
 
@@ -27,8 +29,8 @@ Refuse: VS Code fork war, autocomplete latency race, Audit-as-home, nine-way equ
 Claude Code + Codex CLI are installed but **not authenticated** (blocked).
 Copilot CLI absent; Cline extension not headless-runnable.
 
-See canvases:
-- `ADE-protocol-scorecard.canvas.tsx` (filled scorecard + I1 implications)
+See:
+- `_archive/ADE-protocol-scorecard.canvas.tsx` (filled scorecard + I1 implications)
 - Evidence under `.ade/research/` (gitignored)
 
 **Unblock peers:** `claude /login`, `codex login`, then re-run the same three tasks and replace provisional (P) scores with hands-on (H).

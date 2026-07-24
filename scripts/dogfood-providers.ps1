@@ -18,6 +18,7 @@ function Show-Status([string]$Provider) {
 
 function Test-Turn([string]$Provider, [string]$BaseUrl, [string]$Model, [string]$Expect) {
   Write-Host "-- $Provider / $Model"
+  # Observe-only smoke: $0 rates OK (no verify-on-complete / cargo test).
   $out = & $ade agent --provider $Provider --base-url $BaseUrl --model $Model `
     --autonomy observe --max-steps 1 --input-cost-per-mtok 0 --output-cost-per-mtok 0 `
     "Reply with exactly: $Expect" 2>&1 | Out-String

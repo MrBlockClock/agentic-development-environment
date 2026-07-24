@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-23
 - **Supersedes in part:** DEC-A-010 (VSCodium host), DEC-A-012 (Open VSX companion)
-- **Canvas:** ADE-zed-only-fork-research.canvas.tsx
+- **Canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `canvases/_archive/ADE-zed-only-fork-research.canvas.tsx`
 
 ## Context
 

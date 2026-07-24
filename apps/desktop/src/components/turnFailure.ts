@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER,
   PROVIDER_PRESETS,
   presetById,
+  suggestVisionTarget,
   type ProviderPreset,
 } from "../providers";
 
@@ -20,6 +21,7 @@ export type TurnFailureKind =
   | "lease_conflict"
   | "contract_gate"
   | "risk_gate"
+  | "vision_required"
   | "unknown";
 
 export type EffortTier = "low" | "medium" | "high";
@@ -146,6 +148,40 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
     : null;
 
   if (
+    lower.includes("vision_required") ||
+    lower.includes("does not support image") ||
+    lower.includes("model does not support images") ||
+    (lower.includes("does not support") && lower.includes("image"))
+  ) {
+    const target = suggestVisionTarget(ctx.providerId);
+    const visionAction: TurnFailureAction | null = target
+      ? target.sameProvider
+        ? {
+            id: "retry_alt_model",
+            label: `Retry with ${target.model}`,
+            model: target.model,
+          }
+        : {
+            id: "switch_provider",
+            label: `Switch to ${presetById(target.providerId)?.label ?? target.providerId} · ${target.model}`,
+            providerId: target.providerId,
+            baseUrl: target.baseUrl,
+            model: target.model,
+          }
+      : null;
+    return {
+      kind: "vision_required",
+      title: "Model can’t see images",
+      summary: visionAction
+        ? `This model is text-only. Switch to a vision-capable model to describe or analyze attached images.`
+        : "This model is text-only. Pick a vision-capable model (Claude, GPT-4.1, or a *-vl* FreeLLM model), then retry.",
+      // Require an explicit click — vision models may be paid / different keys.
+      autoFix: null,
+      actions: ([visionAction, retry, openKeys].filter(Boolean) as TurnFailureAction[]),
+    };
+  }
+
+  if (
     lower.includes("tool-call limit") ||
     lower.includes("tool call limit") ||
     (lower.includes("budget exhausted") && lower.includes("round")) ||
@@ -235,10 +271,16 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
   }
 
   if (
-    /http\s*5\d\d/.test(lower) ||
+    /http\s*[/:]?\s*5\d\d/.test(lower) ||
+    (/\b5\d\d\b/.test(lower) &&
+      (lower.includes("server error") ||
+        lower.includes("provider error") ||
+        lower.includes("gateway") ||
+        lower.includes("status"))) ||
     lower.includes("internal server error") ||
     lower.includes("bad gateway") ||
-    lower.includes("service unavailable")
+    lower.includes("service unavailable") ||
+    lower.includes('"message":"internal server error"')
   ) {
     const actions = [switchModel, retry, switchProvider, openKeys].filter(
       Boolean,
@@ -323,13 +365,13 @@ export function evaluateTurnFailure(ctx: TurnFailureContext): TurnFailureAdvice 
   if (lower.includes("spend_honesty") || (lower.includes("spend") && lower.includes("$/mtok"))) {
     return {
       kind: "spend_cap",
-      title: "Spend rates required",
+      title: "Free model + spend caps",
       summary:
-        "Session/daily caps are on but $/MTok rates are $0. Set Input/Output rates to your provider invoice class, or confirm unmetered.",
-      autoFix: null,
+        "ADE has daily/session spend caps on, but this model is $0/token (typical for free models). Continue without metering, or set real rates in Settings for paid models.",
+      autoFix: { id: "confirm_unmetered", label: "Continue without metering" },
       actions: [
-        { id: "confirm_unmetered", label: "Confirm unmetered & retry" },
-        { id: "open_spend_rates", label: "Open spend rates" },
+        { id: "confirm_unmetered", label: "Continue without metering" },
+        { id: "open_spend_rates", label: "Open spend settings" },
         retry,
       ],
     };

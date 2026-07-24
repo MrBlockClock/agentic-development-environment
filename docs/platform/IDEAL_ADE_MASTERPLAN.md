@@ -2,7 +2,7 @@
 
 **Schema:** `ade.ideal-masterplan/v1`  
 **Status:** Research-backed product plan · I1–I6 Ideal spine shipped · 2026-07-20  
-**Companion canvas:** Ideal-ADE-masterplan.canvas.tsx
+**Companion canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `canvases/_archive/` (Ideal-ADE-masterplan was never in the lean set; Ideal development plan archived)
 
 ## Positioning
 

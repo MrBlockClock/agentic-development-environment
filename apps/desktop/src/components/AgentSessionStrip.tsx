@@ -65,6 +65,8 @@ type AgentSessionStripProps = {
   /** H4: switch autonomy to Suggest/Planner. */
   onSwitchSuggest?: () => void;
   isolateEnabled?: boolean;
+  /** Standard Home: one-line status unless lease conflict (always expanded). */
+  compact?: boolean;
 };
 
 /** Standard honesty strip: who we are + whether Apply can take write leases. */
@@ -81,6 +83,7 @@ export function AgentSessionStrip({
   onEnableIsolate,
   onSwitchSuggest,
   isolateEnabled = false,
+  compact = false,
 }: AgentSessionStripProps): ReactNode {
   const short = agentId.slice(0, 8);
   const conflict = mutating ? writableConflict(leases, agentId, ownedPaths) : null;
@@ -111,6 +114,28 @@ export function AgentSessionStrip({
       statusLabel = "Will claim write lease on Go";
       statusClass = "text-amber-200/90";
     }
+  }
+
+  if (compact && !conflict) {
+    return (
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-0.5 py-0.5">
+        <div className={`min-w-0 truncate text-[10px] ${statusClass}`} title={agentId}>
+          {statusLabel}
+          <span className="ml-1.5 font-mono text-slate-600">{short}</span>
+        </div>
+        {onNewChat && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onNewChat}
+            title="Clear this workspace chat"
+            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300 disabled:opacity-40"
+          >
+            + Chat
+          </button>
+        )}
+      </div>
+    );
   }
 
   return (

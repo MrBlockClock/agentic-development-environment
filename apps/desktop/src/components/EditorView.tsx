@@ -51,8 +51,20 @@ function readIntent(): EditorIntent | null {
   }
 }
 
-export function EditorView() {
-  const [pathInput, setPathInput] = useState(".ade/dogfood/editor-spike.md");
+export function EditorView({
+  initialPath,
+  autoPick = false,
+  onTitleChange,
+}: {
+  /** Open this path on mount (skips sessionStorage intent when set). */
+  initialPath?: string | null;
+  /** Open the file picker once when no initialPath. */
+  autoPick?: boolean;
+  onTitleChange?: (title: string) => void;
+} = {}) {
+  const [pathInput, setPathInput] = useState(
+    initialPath?.trim() || ".ade/dogfood/editor-spike.md",
+  );
   const [relativePath, setRelativePath] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
@@ -74,6 +86,15 @@ export function EditorView() {
     const tag = mode === "diff" ? "diff" : dirty ? "unsaved" : "edit";
     return `${relativePath} · ${tag}`;
   }, [dirty, mode, relativePath]);
+
+  useEffect(() => {
+    if (!onTitleChange) return;
+    const short = relativePath
+      ? relativePath.replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
+        relativePath
+      : "Editor";
+    onTitleChange(short);
+  }, [onTitleChange, relativePath]);
 
   const applyFile = useCallback((file: WorkspaceTextFile) => {
     setRelativePath(file.path);
@@ -195,19 +216,6 @@ export function EditorView() {
     }
   }, [loadDiff]);
 
-  useEffect(() => {
-    if (!isTauri()) return;
-    const intent = readIntent();
-    if (!intent) return;
-    if (intent.mode === "handoff") {
-      void loadHandoff();
-    } else if (intent.mode === "diff") {
-      void loadDiff(intent.path);
-    } else if (intent.mode === "edit") {
-      void loadPath(intent.path);
-    }
-  }, [loadDiff, loadHandoff, loadPath]);
-
   const pickOpen = useCallback(async () => {
     if (!isTauri()) return;
     const selected = await open({
@@ -218,6 +226,28 @@ export function EditorView() {
     if (!selected || Array.isArray(selected)) return;
     await loadPath(selected);
   }, [loadPath]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    if (initialPath?.trim()) {
+      void loadPath(initialPath.trim());
+      return;
+    }
+    if (autoPick) {
+      void pickOpen();
+      return;
+    }
+    const intent = readIntent();
+    if (!intent) return;
+    if (intent.mode === "handoff") {
+      void loadHandoff();
+    } else if (intent.mode === "diff") {
+      void loadDiff(intent.path);
+    } else if (intent.mode === "edit") {
+      void loadPath(intent.path);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount / tab open once
+  }, []);
 
   const save = useCallback(async () => {
     if (!isTauri()) return;

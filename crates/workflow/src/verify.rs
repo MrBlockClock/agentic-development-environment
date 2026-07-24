@@ -372,9 +372,12 @@ impl CommandSpec {
     }
 
     fn run(&self, root: &Path) -> std::io::Result<Output> {
+        // Dogfood/agent shells may set ADE_ALLOW_UNPRICED=1 for $0 rates. That
+        // must not leak into cargo test — gold g55 asserts unpriced caps stay blocked.
         Command::new(&self.program)
             .args(&self.args)
             .current_dir(root)
+            .env_remove("ADE_ALLOW_UNPRICED")
             .output()
     }
 }

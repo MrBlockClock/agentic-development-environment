@@ -2,7 +2,7 @@
 
 **Schema:** `ade.effort-budget/v1`  
 **Status:** **B0–B4 shipped** · Next track: SpendGuard /$ **or** Orchestrator (see multi-host M1)  
-**Canvas:** ADE-effort-budget-gameplan.canvas.tsx (condensed) · **ADE-multihost-gameplan.canvas.tsx** (master)  
+**Canvas:** `ADE-master-gameplan.canvas.tsx` (live master) · archive: `canvases/_archive/` (prior effort / multihost boards)  
 **Depends on:** N4 Continuity · turnFailure Fix&retry · Product DNA (harness owns budgets)
 
 ## Verdict

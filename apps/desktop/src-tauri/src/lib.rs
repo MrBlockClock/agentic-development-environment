@@ -9,6 +9,7 @@ pub fn run() {
             ade_desktop_crate::commands::open_ade_on_itself,
             ade_desktop_crate::commands::list_workspaces,
             ade_desktop_crate::commands::open_workspace,
+            ade_desktop_crate::commands::open_default_workspace,
             ade_desktop_crate::commands::workspace_create_defaults,
             ade_desktop_crate::commands::create_named_workspace,
             ade_desktop_crate::commands::create_workspace,
@@ -29,6 +30,7 @@ pub fn run() {
             ade_desktop_crate::commands::mcp_disconnect,
             ade_desktop_crate::commands::mcp_call_tool,
             ade_desktop_crate::commands::run_agent_turn,
+            ade_desktop_crate::commands::cancel_agent_turn,
             ade_desktop_crate::commands::list_recipes,
             ade_desktop_crate::commands::rank_recipes,
             ade_desktop_crate::commands::list_rules,
@@ -44,6 +46,11 @@ pub fn run() {
             ade_desktop_crate::commands::initialize_recipe,
             ade_desktop_crate::commands::open_browser_window,
             ade_desktop_crate::commands::browser_window_url,
+            ade_desktop_crate::commands::close_browser_window,
+            ade_desktop_crate::commands::browser_embed,
+            ade_desktop_crate::commands::browser_set_bounds,
+            ade_desktop_crate::commands::browser_navigate,
+            ade_desktop_crate::commands::browser_set_visible,
             ade_desktop_crate::commands::pty_spawn,
             ade_desktop_crate::commands::pty_write,
             ade_desktop_crate::commands::pty_resize,
@@ -83,6 +90,9 @@ pub fn run() {
             ade_desktop_crate::commands::workspace_read_text,
             ade_desktop_crate::commands::workspace_write_text,
             ade_desktop_crate::commands::workspace_text_diff,
+            ade_desktop_crate::commands::chat_stage_path,
+            ade_desktop_crate::commands::chat_stage_bytes,
+            ade_desktop_crate::commands::chat_open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

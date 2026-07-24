@@ -2,18 +2,64 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "desktop: build-frontend",
+            "type": "shell",
+            "command": "npm",
+            "args": ["run", "build"],
+            "options": {
+                "cwd": "${workspaceFolder}/apps/desktop"
+            },
+            "group": "build",
+            "problemMatcher": ["$tsc"],
+            "detail": "Build Vite/React frontend into apps/desktop/dist for embedded WebView."
+        },
+        {
             "label": "tauri: build-debug",
+            "dependsOn": ["desktop: build-frontend"],
+            "dependsOrder": "sequence",
             "type": "shell",
             "command": "cargo",
             "args": [
                 "build",
                 "--manifest-path",
-                "apps/desktop/src-tauri/Cargo.toml",
-                "--no-default-features"
+                "apps/desktop/src-tauri/Cargo.toml"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+                }
+            },
             "group": "build",
             "problemMatcher": ["$rustc"],
-            "detail": "Build Tauri desktop app in debug mode (Rust only)."
+            "detail": "Build Tauri desktop with embedded frontend (custom-protocol)."
+        },
+        {
+            "label": "vite:dev",
+            "type": "shell",
+            "command": "npm",
+            "args": ["run", "dev"],
+            "options": {
+                "cwd": "${workspaceFolder}/apps/desktop"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "vite",
+                "pattern": {
+                    "regexp": "^$"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".",
+                    "endsPattern": "Local:\\s+http://localhost:1420"
+                }
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "detail": "Start Vite on http://localhost:1420 for Tauri HMR."
         },
         {
             "label": "tauri: dev",
@@ -21,10 +67,23 @@
             "command": "npm",
             "args": ["run", "tauri", "dev"],
             "options": {
-                "cwd": "${workspaceFolder}/apps/desktop"
+                "cwd": "${workspaceFolder}/apps/desktop",
+                "env": {
+                    "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+                }
             },
             "group": "build",
-            "problemMatcher": ["$tsc", "$eslint-stylish"],
+            "problemMatcher": {
+                "owner": "tauri-dev",
+                "pattern": {
+                    "regexp": "^$"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".",
+                    "endsPattern": "(Local:\\s+http://localhost:1420|App\\.|Finished)"
+                }
+            },
             "detail": "Run Tauri in dev mode with Vite frontend hot-reload.",
             "isBackground": true,
             "presentation": {
@@ -46,6 +105,12 @@
                 "-D",
                 "warnings"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+                }
+            },
             "group": "test",
             "problemMatcher": ["$rustc"],
             "detail": "Run clippy on the full workspace (excludes desktop app)."
@@ -60,6 +125,12 @@
                 "--exclude",
                 "ade-desktop-app"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+                }
+            },
             "group": "test",
             "problemMatcher": ["$rustc"],
             "detail": "Run cargo tests on the full workspace (excludes desktop app)."
@@ -69,6 +140,9 @@
             "type": "shell",
             "command": "cargo",
             "args": ["fmt", "--check"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "group": "test",
             "problemMatcher": [],
             "detail": "Check rustfmt compliance without writing changes."

@@ -15,7 +15,7 @@ ade-workflow = { path = "../workflow" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-tauri = { workspace = true }
+tauri = { workspace = true, features = ["unstable"] }
 tauri-plugin-shell = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tracing = { workspace = true }

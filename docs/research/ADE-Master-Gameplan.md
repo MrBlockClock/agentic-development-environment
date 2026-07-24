@@ -308,12 +308,13 @@ Solo next: dogfood + gold green — Mission Control / Zed fork stay deferred.
 | This PDF | Master build plan |
 | `ADE-master-gameplan.canvas.tsx` | Interactive board |
 | Ideal ADE / What ADE Could Do | Normative + capability |
-| Tokenomics / Compaction deep-dives | Channel science |
+| Tokenomics / Compaction deep-dives | Channel science (`ADE-token-economics-research` · `llm-tokenization-fertility-research`) |
 | Agents Meet Humans | Market habits |
 | DEC-A-014 | Priority law (harness-first) |
 | DEC-A-015 | Fork ladder — stay L1 |
 | `evals/gold/manifest.json` | Gold 65 + dogfood flags |
-| Prior `ADE-harness-multiagent-gameplan` | H-track detail |
+| `ADE-harness-multiagent-gameplan.canvas.tsx` | H-track detail |
+| `canvases/_archive/` | Retired boards (Ideal, multihost, Zed deepdives, N3, competitive pack, …) |
 
 ---
 

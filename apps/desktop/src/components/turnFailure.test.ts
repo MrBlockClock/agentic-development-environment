@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { evaluateTurnFailure } from "./turnFailure.ts";
 
+test("classifies vision_required and prefers Claude on OpenCode", () => {
+  const advice = evaluateTurnFailure({
+    error:
+      "vision_required: model `deepseek-v4-flash-free` does not support images. Switch to a vision-capable model.",
+    providerId: "opencode",
+    model: "deepseek-v4-flash-free",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "vision_required");
+  assert.equal(advice.autoFix, null);
+  const switchAction = advice.actions.find((action) => action.id === "retry_alt_model");
+  assert.ok(switchAction);
+  if (switchAction?.id === "retry_alt_model") {
+    assert.equal(switchAction.model, "claude-haiku-4-5");
+  }
+});
+
 test("classifies OpenCode HTTP 500 and prefers alt model autofix", () => {
   const advice = evaluateTurnFailure({
     error:
@@ -16,6 +33,17 @@ test("classifies OpenCode HTTP 500 and prefers alt model autofix", () => {
   if (advice.autoFix?.id === "retry_alt_model") {
     assert.notEqual(advice.autoFix.model, "big-pickle");
   }
+});
+
+test("classifies bare Internal Server Error JSON as provider_5xx", () => {
+  const advice = evaluateTurnFailure({
+    error:
+      'opencode zen failed: {"type":"error","error":{"type":"error","message":"Internal server error"}}',
+    providerId: "opencode",
+    model: "big-pickle",
+    baseUrl: "https://opencode.ai/zen/v1",
+  });
+  assert.equal(advice.kind, "provider_5xx");
 });
 
 test("classifies auth as Keys (no autofix)", () => {

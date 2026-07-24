@@ -1986,6 +1986,7 @@ async fn main() -> anyhow::Result<()> {
                     workspace_root: root.clone(),
                     owned_paths: write_paths,
                     handoff_chars: 1_500,
+                    image_paths: vec![],
                 })
                 .ledger(ledger)
                 .autonomy(autonomy_level)

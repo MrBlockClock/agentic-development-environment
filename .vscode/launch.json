@@ -9,6 +9,28 @@
                 "args": [
                     "build",
                     "--manifest-path",
+                    "apps/desktop/src-tauri/Cargo.toml"
+                ],
+                "filter": {
+                    "name": "ade-desktop-app",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/apps/desktop",
+            "env": {
+                "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+            },
+            "preLaunchTask": "tauri: build-debug"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Tauri (Rust + Vite HMR)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--manifest-path",
                     "apps/desktop/src-tauri/Cargo.toml",
                     "--no-default-features"
                 ],
@@ -19,7 +41,10 @@
             },
             "args": [],
             "cwd": "${workspaceFolder}/apps/desktop",
-            "preLaunchTask": "tauri: build-debug"
+            "env": {
+                "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+            },
+            "preLaunchTask": "vite:dev"
         },
         {
             "type": "chrome",
@@ -56,6 +81,9 @@
                 }
             },
             "cwd": "${workspaceFolder}",
+            "env": {
+                "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+            },
             "console": "integratedTerminal"
         },
         {
@@ -69,7 +97,10 @@
                     "kind": "lib"
                 }
             },
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "CARGO_TARGET_DIR": "${workspaceFolder}/../ade-target"
+            }
         }
     ]
 }

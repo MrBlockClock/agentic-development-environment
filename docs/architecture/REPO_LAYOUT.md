@@ -3,7 +3,7 @@
 **Schema:** `ade.repo-layout/v1`  
 **Status:** Active · evolutionary (no big-bang crate move)  
 **ADR:** [DEC-A-010](../decisions/DEC-A-010-multi-host-agent-os.md) · [DEC-A-011](../decisions/DEC-A-011-repo-layout.md)  
-**Canvas:** `ADE-multihost-gameplan.canvas.tsx`
+**Canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `canvases/_archive/ADE-multihost-gameplan.canvas.tsx`
 
 ## Principle
 

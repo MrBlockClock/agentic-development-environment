@@ -2,10 +2,20 @@ import type { Components } from "react-markdown";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import {
   splitOptionSegments,
   type OptionItem,
 } from "./optionSegments";
+import {
+  normalizeAssistantMath,
+  safeMarkdownHref,
+} from "./assistantMarkdownPrep";
+import { FileLinkChip } from "./AttachmentChips";
+import { isFileLikeHref } from "./fileKind";
+import { openChatPath } from "./attachIngest";
 
 export {
   splitOptionSegments,
@@ -13,6 +23,17 @@ export {
   NEXT_ACTIONS_SCHEMA,
 } from "./optionSegments";
 export type { OptionItem, AssistantSegment } from "./optionSegments";
+export { normalizeAssistantMath, safeMarkdownHref } from "./assistantMarkdownPrep";
+
+function labelFromChildren(children: ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") {
+    return String(children);
+  }
+  if (Array.isArray(children)) {
+    return children.map(labelFromChildren).join("");
+  }
+  return "";
+}
 
 const components: Components = {
   p: ({ children }) => (
@@ -22,6 +43,9 @@ const components: Components = {
     <strong className="font-semibold text-slate-50">{children}</strong>
   ),
   em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
+  del: ({ children }) => (
+    <del className="text-slate-500 line-through decoration-slate-500/80">{children}</del>
+  ),
   ul: ({ children }) => (
     <ul className="mb-3 list-disc space-y-1 pl-5 text-[13px] leading-6 text-slate-200 last:mb-0">
       {children}
@@ -32,17 +56,74 @@ const components: Components = {
       {children}
     </ol>
   ),
-  li: ({ children }) => <li className="leading-6">{children}</li>,
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      className="text-blue-300 underline decoration-blue-400/40 underline-offset-2 hover:text-blue-200"
-      target="_blank"
-      rel="noreferrer"
-    >
-      {children}
-    </a>
-  ),
+  li: ({ children, className }) => {
+    const task = typeof className === "string" && className.includes("task-list-item");
+    return (
+      <li className={`leading-6 ${task ? "list-none" : ""} ${className ?? ""}`.trim()}>
+        {children}
+      </li>
+    );
+  },
+  input: ({ checked, disabled, type }) => {
+    if (type !== "checkbox") return null;
+    return (
+      <input
+        type="checkbox"
+        checked={Boolean(checked)}
+        disabled={disabled !== false}
+        readOnly
+        className="mr-2 align-middle accent-blue-400"
+        aria-hidden
+      />
+    );
+  },
+  a: ({ href, children }) => {
+    const safe = safeMarkdownHref(href);
+    if (!safe) {
+      return <span className="text-slate-300">{children}</span>;
+    }
+    if (isFileLikeHref(safe)) {
+      const label = labelFromChildren(children) || safe;
+      return (
+        <FileLinkChip
+          href={safe}
+          label={label}
+          onOpen={(target) => void openChatPath(target)}
+        />
+      );
+    }
+    const external = /^https?:/i.test(safe);
+    return (
+      <a
+        href={safe}
+        className="text-blue-300 underline decoration-blue-400/40 underline-offset-2 hover:text-blue-200"
+        target={external ? "_blank" : undefined}
+        rel={external ? "noreferrer noopener" : undefined}
+      >
+        {children}
+      </a>
+    );
+  },
+  img: ({ src, alt, title }) => {
+    const safe = safeMarkdownHref(typeof src === "string" ? src : undefined);
+    if (!safe || !/^https?:/i.test(safe)) {
+      return (
+        <span className="text-[12px] text-slate-500">
+          [image blocked{alt ? `: ${alt}` : ""}]
+        </span>
+      );
+    }
+    return (
+      <img
+        src={safe}
+        alt={alt ?? ""}
+        title={title}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className="my-2 max-h-80 max-w-full rounded-lg border border-white/10 object-contain"
+      />
+    );
+  },
   code: ({ className, children }) => {
     const inline = !className;
     if (inline) {
@@ -77,6 +158,17 @@ const components: Components = {
   h3: ({ children }) => (
     <h3 className="mb-1.5 mt-1 text-[13px] font-semibold text-slate-100 first:mt-0">{children}</h3>
   ),
+  h4: ({ children }) => (
+    <h4 className="mb-1 mt-1 text-[13px] font-semibold text-slate-100 first:mt-0">{children}</h4>
+  ),
+  h5: ({ children }) => (
+    <h5 className="mb-1 mt-1 text-[12px] font-semibold text-slate-200 first:mt-0">{children}</h5>
+  ),
+  h6: ({ children }) => (
+    <h6 className="mb-1 mt-1 text-[12px] font-semibold uppercase tracking-wide text-slate-400 first:mt-0">
+      {children}
+    </h6>
+  ),
   hr: () => <hr className="my-3 border-white/10" />,
   table: ({ children }) => (
     <div className="thin-scrollbar mb-3 overflow-x-auto last:mb-0">
@@ -92,13 +184,35 @@ const components: Components = {
     <th className="px-2 py-1.5 font-semibold first:pl-0 last:pr-0">{children}</th>
   ),
   td: ({ children }) => <td className="px-2 py-1.5 first:pl-0 last:pr-0">{children}</td>,
+  // GFM footnotes
+  sup: ({ children }) => (
+    <sup className="text-[10px] text-blue-300/90">{children}</sup>
+  ),
+  section: ({ children, className }) => {
+    if (typeof className === "string" && className.includes("footnotes")) {
+      return (
+        <section className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-slate-500">
+          {children}
+        </section>
+      );
+    }
+    return <section className={className}>{children}</section>;
+  },
 };
 
 function MarkdownChunk({ text }: { text: string }) {
   if (!text.trim()) return null;
+  const prepared = normalizeAssistantMath(text);
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-      {text}
+    <ReactMarkdown
+      remarkPlugins={[
+        remarkGfm,
+        [remarkMath, { singleDollarTextMath: true }],
+      ]}
+      rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore" }]]}
+      components={components}
+    >
+      {prepared}
     </ReactMarkdown>
   );
 }
@@ -150,7 +264,7 @@ function OptionsBox({
   );
 }
 
-/** Render assistant chat markdown (GFM tables, option boxes, no raw HTML). */
+/** Render assistant chat markdown (GFM, KaTeX math, option boxes, no raw HTML). */
 export function AssistantMarkdown({
   text,
   onPickOption,

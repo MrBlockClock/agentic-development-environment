@@ -89,7 +89,7 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-100">Settings</h2>
           <p className="mt-0.5 text-[11px] leading-5 text-slate-500">
-            Defaults for Home turns. Keys stay in the vault under Keys.
+            Defaults for Home. API keys live under Keys.
           </p>
           {note && <p className="mt-1.5 text-[11px] text-emerald-200/90">{note}</p>}
         </div>
@@ -216,8 +216,8 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
               Effort (turn gas tank)
             </div>
             <div className="mb-1.5 text-[10px] text-slate-500">
-              Caps tool rounds + output tokens for this turn — not model smartness. Low =
-              Suggest/inspect (16) · Med = Apply/Continuity (24) · High = Automate (32)
+              How many tool steps this turn can take. Low = quick look · Med = normal work ·
+              High = long runs
             </div>
             <div className="flex flex-wrap gap-1.5">
               {(["low", "medium", "high"] as EffortLevel[]).map((level) => (
