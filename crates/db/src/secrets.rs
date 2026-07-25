@@ -485,6 +485,18 @@ const FREE_ENV_KEY_MAP: &[(&str, &str)] = &[
     ("ADE_ANTHROPIC_API_KEY", "anthropic"),
 ];
 
+/// Parse `ADE_<PROVIDER>_API_KEY` → normalized provider id (`foo-bar`).
+fn provider_from_ade_env_key(key: &str) -> Option<String> {
+    let rest = key.strip_prefix("ADE_")?;
+    let provider = rest.strip_suffix("_API_KEY")?;
+    let normalized = provider.to_ascii_lowercase().replace('_', "-");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
 /// Env vars that are present (never returns secret values).
 pub fn list_env_key_candidates() -> Vec<(String, String)> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -502,14 +514,10 @@ pub fn list_env_key_candidates() -> Vec<(String, String)> {
         }
     }
     for (key, value) in std::env::vars() {
-        let Some(rest) = key.as_str().strip_prefix("ADE_") else {
+        let Some(provider) = provider_from_ade_env_key(&key) else {
             continue;
         };
-        let Some(raw_provider) = rest.strip_suffix("_API_KEY") else {
-            continue;
-        };
-        let provider = raw_provider.to_ascii_lowercase().replace('_', "-");
-        if provider.is_empty() || value.trim().is_empty() || seen.contains(&provider) {
+        if value.trim().is_empty() || seen.contains(&provider) {
             continue;
         }
         seen.insert(provider.clone());
@@ -535,14 +543,10 @@ fn collect_env_provider_secrets() -> Vec<(String, String)> {
         }
     }
     for (key, value) in std::env::vars() {
-        let Some(rest) = key.as_str().strip_prefix("ADE_") else {
+        let Some(provider) = provider_from_ade_env_key(&key) else {
             continue;
         };
-        let Some(raw_provider) = rest.strip_suffix("_API_KEY") else {
-            continue;
-        };
-        let provider = raw_provider.to_ascii_lowercase().replace('_', "-");
-        if provider.is_empty() || value.trim().is_empty() || by_provider.contains_key(&provider) {
+        if value.trim().is_empty() || by_provider.contains_key(&provider) {
             continue;
         }
         by_provider.insert(provider, value.trim().to_owned());
