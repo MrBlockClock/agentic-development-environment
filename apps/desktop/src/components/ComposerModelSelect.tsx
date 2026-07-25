@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchProviderModels,
+  modelOptionLabel,
   presetById,
   PROVIDER_PRESETS,
   type ProviderPreset,
@@ -73,6 +74,7 @@ export function ComposerModelSelect({
     }
 
     for (const preset of PROVIDER_PRESETS) {
+      if (preset.custom && preset.id !== providerId) continue;
       const models =
         preset.id === providerId
           ? mergeModels(liveModels, preset.models, model)
@@ -84,7 +86,7 @@ export function ComposerModelSelect({
         seen.add(value);
         out.push({
           value,
-          label: id,
+          label: modelOptionLabel(preset.id, id),
           group: preset.label,
         });
       }
@@ -97,7 +99,7 @@ export function ComposerModelSelect({
         PROVIDER_PRESETS.find((p) => p.id === providerId)?.label ?? providerId;
       out.splice(onSelectAuto ? 1 : 0, 0, {
         value: current,
-        label: model,
+        label: modelOptionLabel(providerId, model),
         group: label || "Current",
       });
     }

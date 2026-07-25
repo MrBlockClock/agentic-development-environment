@@ -167,7 +167,7 @@ export function SidebarRailLists({
                     title="Close session"
                     aria-label={`Close ${tab.title}`}
                     onClick={() => onCloseSession(tab.id)}
-                    className="mr-1 grid size-6 shrink-0 place-items-center rounded text-[11px] text-slate-600 opacity-0 transition group-hover:opacity-100 hover:bg-white/8 hover:text-slate-300"
+                    className="mr-1 grid size-6 shrink-0 place-items-center rounded text-[11px] text-slate-600/0 transition group-hover:text-slate-600 hover:bg-white/8 hover:text-slate-300"
                   >
                     ✕
                   </button>

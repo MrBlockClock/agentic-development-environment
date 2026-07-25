@@ -1,5 +1,34 @@
 @import "tailwindcss";
 
+/**
+ * Surface tokens (F1). Author new UI against these, not raw hex.
+ * surface-0 app · surface-1 rail · surface-2 panel · surface-3 raised
+ * Semantic tone maps to the harness vocabulary: ready / warn / danger / info,
+ * plus authority (global guidance) and work (audit + plan) for Atlas layers.
+ */
+@theme {
+  --color-surface-0: #080b11;
+  --color-surface-1: #0b0f16;
+  --color-surface-2: #0d121a;
+  --color-surface-3: #141a22;
+
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-strong: rgba(255, 255, 255, 0.14);
+
+  --color-ink: #e8edf5;
+  --color-ink-dim: #94a3b8;
+  --color-ink-faint: #64748b;
+
+  --color-accent: #58a6ff;
+  --color-ready: #34d399;
+  --color-warn: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #38bdf8;
+  --color-authority: #a78bfa;
+
+  --shadow-panel: 0 12px 45px rgba(0, 0, 0, 0.15);
+}
+
 /* KaTeX in assistant markdown — keep formulas readable on the dark surface. */
 .ade-assistant-md .katex {
   font-size: 1.05em;

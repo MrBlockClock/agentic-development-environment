@@ -40,4 +40,34 @@ test.describe("ADE sidebar IA", () => {
     expect(homeSize).toBeGreaterThanOrEqual(12);
     expect(homeSize).toBeLessThanOrEqual(15);
   });
+
+  test("Insight is one destination with Trust and Analytics sub-tabs", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const sidebar = page.getByTestId("ade-sidebar");
+
+    // The four looking-surfaces collapse into one rail row.
+    await expect(sidebar.getByRole("button", { name: "Insight" })).toBeVisible();
+    await expect(sidebar.getByRole("button", { name: "Atlas" })).toHaveCount(0);
+    await expect(sidebar.getByRole("button", { name: "Plan Map" })).toHaveCount(0);
+
+    await sidebar.getByRole("button", { name: "Insight" }).click();
+
+    const tabs = page.getByRole("tablist", { name: "Insight sections" });
+    await expect(tabs).toBeVisible();
+    await expect(tabs.getByRole("tab", { name: "Trust" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    // Analytics ships on Standard — it must not need Debug.
+    const analytics = tabs.getByRole("tab", { name: "Analytics" });
+    await expect(analytics).toBeVisible();
+    await analytics.click();
+    await expect(analytics).toHaveAttribute("aria-selected", "true");
+
+    // Maps stay Debug density.
+    await expect(tabs.getByRole("tab", { name: "Atlas" })).toHaveCount(0);
+  });
 });

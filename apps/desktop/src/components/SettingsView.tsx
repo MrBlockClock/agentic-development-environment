@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { PROVIDER_PRESETS } from "../providers";
+import {
+  firstModelId,
+  formatContextTokens,
+  modelContextWindow,
+  PROVIDER_PRESETS,
+} from "../providers";
 import { Disclosure, Hint } from "./ui";
 import { GearIcon } from "./DarkSelect";
 
@@ -72,9 +77,18 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
     if (!preset) return;
     window.localStorage.setItem(AGENT_PROVIDER_KEY, preset.id);
     window.localStorage.setItem(AGENT_BASE_URL_KEY, preset.baseUrl);
-    window.localStorage.setItem(AGENT_MODEL_KEY, preset.models[0] || "");
+    const modelId = firstModelId(preset);
+    window.localStorage.setItem(AGENT_MODEL_KEY, modelId);
+    window.localStorage.setItem(
+      "ade_agent_context_window",
+      String(modelContextWindow(preset.id, modelId)),
+    );
     setProviderId(preset.id);
-    flash(`Provider → ${preset.label}`);
+    flash(
+      `Provider → ${preset.label} · ${formatContextTokens(
+        modelContextWindow(preset.id, modelId),
+      )} ctx`,
+    );
   };
 
   const providerLabel =

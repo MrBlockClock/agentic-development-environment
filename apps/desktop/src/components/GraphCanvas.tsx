@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -14,6 +15,15 @@ type GraphCanvasProps = {
   className?: string;
   minScale?: number;
   maxScale?: number;
+  /** Bump to re-fit — lets the parent bind fit to a keyboard shortcut or relayout. */
+  fitToken?: number;
+  /**
+   * Floor for `Fit`. Fitting a wide graph into a short pane can shrink labels
+   * past readability; prefer a legible zoom the user pans over an illegible
+   * overview.
+   */
+  fitMinScale?: number;
+  toolbarExtra?: ReactNode;
   children: ReactNode;
 };
 
@@ -27,6 +37,9 @@ export function GraphCanvas({
   className = "",
   minScale = 0.35,
   maxScale = 2.5,
+  fitToken = 0,
+  fitMinScale,
+  toolbarExtra,
   children,
 }: GraphCanvasProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -51,12 +64,22 @@ export function GraphCanvas({
     const pad = 32;
     const availW = Math.max(el.clientWidth - pad, 80);
     const availH = Math.max(el.clientHeight - pad, 80);
-    const next = clampScale(
-      Math.min(availW / Math.max(contentWidth, 1), availH / Math.max(contentHeight, 1)),
+    const raw = Math.min(
+      availW / Math.max(contentWidth, 1),
+      availH / Math.max(contentHeight, 1),
     );
+    const next = clampScale(Math.max(raw, fitMinScale ?? minScale));
     setScale(next);
     setOffset({ x: pad / 2, y: pad / 2 });
-  }, [clampScale, contentHeight, contentWidth]);
+  }, [clampScale, contentHeight, contentWidth, fitMinScale, minScale]);
+
+  // Re-fit only on an explicit token bump, so graphs that prefer 100% keep it.
+  const lastFitToken = useRef(fitToken);
+  useEffect(() => {
+    if (fitToken === lastFitToken.current) return;
+    lastFitToken.current = fitToken;
+    fit();
+  }, [fit, fitToken]);
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -137,7 +160,10 @@ export function GraphCanvas({
         <span className="font-mono text-[10px] text-slate-500">
           {Math.round(scale * 100)}%
         </span>
-        <span className="ml-auto text-[10px] text-slate-600">
+        {toolbarExtra ? (
+          <div className="ml-2 flex min-w-0 items-center gap-1.5">{toolbarExtra}</div>
+        ) : null}
+        <span className="ml-auto hidden text-[10px] text-slate-600 sm:inline">
           Drag empty space to pan · wheel to zoom
         </span>
       </div>

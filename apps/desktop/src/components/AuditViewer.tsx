@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { signedUsd, usd } from "../format";
 import { invoke, isTauri } from "../ipc";
 import { Disclosure } from "./ui";
 
@@ -203,13 +204,12 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
                 </div>
               </div>
               <div className="text-right font-mono text-[10px] text-slate-400">
-                ${row.actual_usd.toFixed(4)}
+                {usd(row.actual_usd)}
                 <div className="text-slate-600">
-                  reserved ${row.reserved_usd.toFixed(4)}
+                  reserved {usd(row.reserved_usd)}
                   {row.status === "committed" || row.reserved_usd > 0 ? (
                     <span className="ml-1">
-                      · Δ $
-                      {(row.reserved_usd - row.actual_usd).toFixed(4)}
+                      · Δ {signedUsd(row.reserved_usd - row.actual_usd)}
                     </span>
                   ) : null}
                 </div>

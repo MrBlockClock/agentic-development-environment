@@ -50,7 +50,7 @@ export function ShellTabBar({
               title={tab.title}
               onClick={() => onSelect(tab.id)}
             >
-              <span className="shrink-0 text-[10px] opacity-70" aria-hidden>
+              <span className="shrink-0 text-[10px] text-current/70" aria-hidden>
                 {KIND_ICON[tab.kind]}
               </span>
               <span className="truncate text-[11px] font-medium leading-none">

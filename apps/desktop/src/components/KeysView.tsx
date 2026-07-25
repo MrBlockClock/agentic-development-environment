@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "../ipc";
 import {
   DEFAULT_BASE_URL,
+  DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   PROVIDER_PRESETS,
   canonicalBaseUrl,
+  firstModelId,
+  formatContextTokens,
+  modelContextWindow,
+  modelOptionLabel,
   presetById,
   type ProviderPreset,
 } from "../providers";
@@ -16,6 +21,7 @@ import { Disclosure, Hint } from "./ui";
 const AGENT_PROVIDER_KEY = "ade_agent_provider";
 const AGENT_BASE_URL_KEY = "ade_agent_base_url";
 const AGENT_MODEL_KEY = "ade_agent_model";
+const AGENT_CONTEXT_KEY = "ade_agent_context_window";
 
 type ProviderKeyStatus = {
   profile: string;
@@ -46,16 +52,21 @@ type KeysViewProps = {
   onContinueToAgent?: () => void;
 };
 
-const GET_KEY_URL: Record<string, string> = {
-  opencode: "https://opencode.ai/auth",
-  openai: "https://platform.openai.com/api-keys",
-  anthropic: "https://console.anthropic.com/settings/keys",
-  openrouter: "https://openrouter.ai/keys",
+type EnvKeyCandidate = {
+  provider: string;
+  env_var: string;
 };
 
 function readStored(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   return window.localStorage.getItem(key) || fallback;
+}
+
+function defaultVisibleProviderIds(active: string): string[] {
+  const listed = PROVIDER_PRESETS.filter(
+    (preset) => preset.recommended || preset.listed,
+  ).map((preset) => preset.id);
+  return Array.from(new Set([active, ...listed]));
 }
 
 function maskLabel(configured: boolean): string {
@@ -85,6 +96,13 @@ export function KeysView({
   const [model, setModel] = useState(() =>
     readStored(AGENT_MODEL_KEY, DEFAULT_MODEL),
   );
+  const [contextWindow, setContextWindow] = useState(() => {
+    const stored = Number(readStored(AGENT_CONTEXT_KEY, ""));
+    if (Number.isFinite(stored) && stored > 0) return String(Math.floor(stored));
+    const providerId = readStored(AGENT_PROVIDER_KEY, DEFAULT_PROVIDER);
+    const modelId = readStored(AGENT_MODEL_KEY, DEFAULT_MODEL);
+    return String(modelContextWindow(providerId, modelId));
+  });
   const [inputCostPerMtok, setInputCostPerMtok] = useState("");
   const [outputCostPerMtok, setOutputCostPerMtok] = useState("");
   const [maxCostUsd, setMaxCostUsd] = useState("0.05");
@@ -97,13 +115,12 @@ export function KeysView({
   const [expandedId, setExpandedId] = useState<string | null>(() =>
     readStored(AGENT_PROVIDER_KEY, DEFAULT_PROVIDER),
   );
-  const [visibleIds, setVisibleIds] = useState<string[]>(() => {
-    const active = readStored(AGENT_PROVIDER_KEY, DEFAULT_PROVIDER);
-    const recommended = PROVIDER_PRESETS.filter((p) => p.recommended).map(
-      (p) => p.id,
-    );
-    return Array.from(new Set([active, ...recommended]));
-  });
+  const [visibleIds, setVisibleIds] = useState<string[]>(() =>
+    defaultVisibleProviderIds(
+      readStored(AGENT_PROVIDER_KEY, DEFAULT_PROVIDER),
+    ),
+  );
+  const [envCandidates, setEnvCandidates] = useState<EnvKeyCandidate[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -130,10 +147,14 @@ export function KeysView({
     setBusy(true);
     setMessage(null);
     try {
-      const rows = await invoke<ProviderVaultRow[]>("key_status_all", {
-        profile,
-      });
+      const [rows, candidates] = await Promise.all([
+        invoke<ProviderVaultRow[]>("key_status_all", { profile }),
+        invoke<EnvKeyCandidate[]>("key_env_candidates").catch(
+          () => [] as EnvKeyCandidate[],
+        ),
+      ]);
       setVaultRows(rows);
+      setEnvCandidates(candidates);
       const configuredIds = rows
         .filter((row) => row.configured)
         .map((row) => row.provider);
@@ -174,6 +195,12 @@ export function KeysView({
       window.localStorage.setItem(AGENT_MODEL_KEY, model.trim());
     }
   }, [model]);
+  useEffect(() => {
+    const n = Number(contextWindow);
+    if (Number.isFinite(n) && n > 0) {
+      window.localStorage.setItem(AGENT_CONTEXT_KEY, String(Math.floor(n)));
+    }
+  }, [contextWindow]);
 
   const configuredMap = useMemo(() => {
     const map = new Map<string, boolean>();
@@ -192,6 +219,15 @@ export function KeysView({
   );
 
   const currentPreset = presetById(provider);
+  const isCustom = Boolean(currentPreset?.custom);
+  const contextOverride = Number(contextWindow);
+  const activeContext = modelContextWindow(
+    provider,
+    model,
+    isCustom && Number.isFinite(contextOverride) && contextOverride > 0
+      ? contextOverride
+      : null,
+  );
   const modelOptions =
     currentPreset?.models?.length
       ? currentPreset.models
@@ -212,8 +248,26 @@ export function KeysView({
 
   const applyPreset = (preset: ProviderPreset, expand = true) => {
     setProvider(preset.id);
-    setBaseUrl(preset.baseUrl);
-    setModel(preset.models[0] ?? DEFAULT_MODEL);
+    setBaseUrl(
+      preset.custom
+        ? readStored(AGENT_BASE_URL_KEY, preset.baseUrl) || preset.baseUrl
+        : preset.baseUrl,
+    );
+    const nextModel = preset.custom
+      ? readStored(AGENT_MODEL_KEY, firstModelId(preset)) || firstModelId(preset)
+      : firstModelId(preset);
+    setModel(nextModel);
+    setContextWindow(
+      String(
+        modelContextWindow(
+          preset.id,
+          nextModel,
+          preset.custom
+            ? Number(readStored(AGENT_CONTEXT_KEY, "")) || null
+            : null,
+        ),
+      ),
+    );
     setStatus(null);
     setSmoke(null);
     setSecret("");
@@ -225,9 +279,21 @@ export function KeysView({
 
   const selectActive = (preset: ProviderPreset) => {
     setProvider(preset.id);
-    setBaseUrl(preset.baseUrl);
-    if (!preset.models.includes(model)) {
-      setModel(preset.models[0] ?? DEFAULT_MODEL);
+    if (preset.custom) {
+      setBaseUrl(
+        baseUrl.trim() ||
+          readStored(AGENT_BASE_URL_KEY, preset.baseUrl) ||
+          preset.baseUrl,
+      );
+    } else {
+      setBaseUrl(preset.baseUrl);
+    }
+    if (preset.models.length > 0 && !preset.models.includes(model)) {
+      const next = firstModelId(preset);
+      setModel(next);
+      setContextWindow(String(modelContextWindow(preset.id, next)));
+    } else if (!preset.custom) {
+      setContextWindow(String(modelContextWindow(preset.id, model)));
     }
     setSmoke(null);
   };
@@ -248,6 +314,13 @@ export function KeysView({
       window.localStorage.setItem(AGENT_PROVIDER_KEY, result.provider);
       window.localStorage.setItem(AGENT_BASE_URL_KEY, baseUrl.trim());
       window.localStorage.setItem(AGENT_MODEL_KEY, model.trim());
+      const ctx = Number(contextWindow);
+      if (Number.isFinite(ctx) && ctx > 0) {
+        window.localStorage.setItem(
+          AGENT_CONTEXT_KEY,
+          String(Math.floor(ctx)),
+        );
+      }
       await refreshAll();
       setMessage(
         andContinue ? "Key saved. Opening Home…" : "Key saved to OS vault.",
@@ -356,6 +429,68 @@ export function KeysView({
     }
   };
 
+  const importEnvKeys = async (force = false, onlyProvider?: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<{
+        imported: string[];
+        skipped: string[];
+        detail: string;
+      }>("key_import_env", {
+        profile,
+        force,
+        provider: onlyProvider ?? null,
+      });
+      setMessage(
+        `${result.detail}${
+          result.imported.length
+            ? ` · ${result.imported.join(", ")}`
+            : ""
+        }`,
+      );
+      if (result.imported.length > 0) {
+        setVisibleIds((prev) =>
+          Array.from(new Set([...prev, ...result.imported])),
+        );
+        const first = presetById(result.imported[0]!);
+        if (first) applyPreset(first, true);
+      }
+      await refreshAll();
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activateKeyless = async (preset: ProviderPreset) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await invoke<ProviderKeyStatus>("key_activate_keyless", {
+        profile,
+        provider: preset.id,
+      });
+      setStatus(result);
+      applyPreset(preset, true);
+      setMessage(`Activated ${preset.label} (keyless).`);
+      await refreshAll();
+    } catch (reason) {
+      setMessage(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const envCandidateMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of envCandidates) {
+      map.set(row.provider, row.env_var);
+    }
+    return map;
+  }, [envCandidates]);
+
   const activeConfigured = Boolean(configuredMap.get(provider));
   const canGoHome = activeConfigured || Boolean(secret.trim());
 
@@ -401,14 +536,38 @@ export function KeysView({
               </span>
             </div>
           </div>
-          <DarkSelect
-            ariaLabel="Model for Home"
-            value={modelOptions.includes(model) ? model : modelOptions[0] ?? ""}
-            options={modelOptions.map((id) => ({ value: id, label: id }))}
-            onChange={setModel}
-            className="min-w-44"
-            maxLabelChars={36}
-          />
+          {isCustom ? (
+            <input
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              spellCheck={false}
+              placeholder="model id"
+              className="min-w-40 rounded-lg border border-white/10 bg-[#101620] px-2.5 py-1.5 font-mono text-[11px] text-slate-200 outline-hidden focus:border-blue-400/40"
+            />
+          ) : (
+            <DarkSelect
+              ariaLabel="Model for Home"
+              value={
+                modelOptions.includes(model) ? model : modelOptions[0] ?? ""
+              }
+              options={modelOptions.map((id) => ({
+                value: id,
+                label: modelOptionLabel(provider, id),
+              }))}
+              onChange={(next) => {
+                setModel(next);
+                setContextWindow(String(modelContextWindow(provider, next)));
+              }}
+              className="min-w-44"
+              maxLabelChars={40}
+            />
+          )}
+          <span
+            className="rounded-md border border-white/8 bg-white/3 px-2 py-1 text-[10px] font-medium text-slate-400"
+            title="Context window (tokens)"
+          >
+            {formatContextTokens(activeContext)} ctx
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -439,51 +598,69 @@ export function KeysView({
             </h2>
             <p className="text-[10px] text-slate-600">
               {configuredCount} key{configuredCount === 1 ? "" : "s"} in vault ·
+              {envCandidates.length > 0
+                ? ` ${envCandidates.length} in env · `
+                : " "}
               expand one to edit
             </p>
           </div>
-          <div className="relative" ref={addMenuRef}>
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              aria-expanded={addOpen}
-              aria-haspopup="menu"
-              disabled={addablePresets.length === 0}
-              onClick={() => setAddOpen((open) => !open)}
-              className="grid size-7 place-items-center rounded-md border border-white/10 bg-white/3 text-[15px] font-medium text-slate-300 hover:bg-white/6 disabled:opacity-40"
+              disabled={busy || envCandidates.length === 0}
+              onClick={() => void importEnvKeys(false)}
+              className="rounded-md border border-white/10 px-2 py-1 text-[10px] font-medium text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-40"
               title={
-                addablePresets.length
-                  ? "Add provider"
-                  : "All known providers listed"
+                envCandidates.length
+                  ? `Import ${envCandidates.map((c) => c.env_var).join(", ")}`
+                  : "No GROQ_API_KEY / FREELMAPI_KEY / … in this process env"
               }
             >
-              +
+              Import env
             </button>
-            {addOpen && addablePresets.length > 0 && (
-              <div
-                role="menu"
-                className="absolute right-0 z-40 mt-1.5 w-52 overflow-hidden rounded-lg border border-white/12 bg-[#121820] py-1 shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+            <div className="relative" ref={addMenuRef}>
+              <button
+                type="button"
+                aria-expanded={addOpen}
+                aria-haspopup="menu"
+                disabled={addablePresets.length === 0}
+                onClick={() => setAddOpen((open) => !open)}
+                className="grid size-7 place-items-center rounded-md border border-white/10 bg-white/3 text-[15px] font-medium text-slate-300 hover:bg-white/6 disabled:opacity-40"
+                title={
+                  addablePresets.length
+                    ? "Add provider"
+                    : "All known providers listed"
+                }
               >
-                {addablePresets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="menuitem"
-                    className="flex w-full flex-col px-3 py-1.5 text-left hover:bg-white/6"
-                    onClick={() => {
-                      applyPreset(preset, true);
-                      setAddOpen(false);
-                    }}
-                  >
-                    <span className="text-[11px] font-medium text-slate-200">
-                      {preset.label}
-                    </span>
-                    <span className="truncate text-[10px] text-slate-600">
-                      {preset.hint ?? preset.baseUrl}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
+                +
+              </button>
+              {addOpen && addablePresets.length > 0 && (
+                <div
+                  role="menu"
+                  className="absolute right-0 z-40 mt-1.5 w-52 overflow-hidden rounded-lg border border-white/12 bg-[#121820] py-1 shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+                >
+                  {addablePresets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full flex-col px-3 py-1.5 text-left hover:bg-white/6"
+                      onClick={() => {
+                        applyPreset(preset, true);
+                        setAddOpen(false);
+                      }}
+                    >
+                      <span className="text-[11px] font-medium text-slate-200">
+                        {preset.label}
+                      </span>
+                      <span className="truncate text-[10px] text-slate-600">
+                        {preset.hint ?? preset.baseUrl}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -492,7 +669,8 @@ export function KeysView({
             const isActive = provider === preset.id;
             const isExpanded = expandedId === preset.id;
             const configured = Boolean(configuredMap.get(preset.id));
-            const getKeyUrl = GET_KEY_URL[preset.id];
+            const getKeyUrl = preset.getKeyUrl;
+            const envVar = envCandidateMap.get(preset.id);
 
             return (
               <li key={preset.id}>
@@ -535,6 +713,21 @@ export function KeysView({
                       {preset.recommended && (
                         <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-500">
                           recommended
+                        </span>
+                      )}
+                      {preset.custom && (
+                        <span className="rounded bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-violet-200/90">
+                          custom
+                        </span>
+                      )}
+                      {preset.keyless && (
+                        <span className="rounded bg-emerald-400/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-emerald-300/90">
+                          keyless
+                        </span>
+                      )}
+                      {envVar && !configured && (
+                        <span className="rounded bg-sky-400/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300/90">
+                          env ready
                         </span>
                       )}
                       {isActive && (
@@ -598,6 +791,80 @@ export function KeysView({
                       <p className="text-[10px] leading-4 text-slate-600">
                         {preset.hint}
                       </p>
+                    )}
+
+                    {preset.custom && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <label className="block sm:col-span-2">
+                          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                            Base URL
+                          </span>
+                          <input
+                            value={baseUrl}
+                            onChange={(event) => setBaseUrl(event.target.value)}
+                            spellCheck={false}
+                            placeholder="https://host/v1"
+                            className="w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 font-mono text-xs text-slate-200 outline-hidden focus:border-blue-400/40"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                            Model id
+                          </span>
+                          <input
+                            value={model}
+                            onChange={(event) => setModel(event.target.value)}
+                            spellCheck={false}
+                            placeholder="llama3.2"
+                            className="w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 font-mono text-xs text-slate-200 outline-hidden focus:border-blue-400/40"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                            Context window
+                            <Hint text="Tokens the model can see. Used by the Home context meter." />
+                          </span>
+                          <input
+                            type="number"
+                            min={1024}
+                            step={1024}
+                            value={contextWindow}
+                            onChange={(event) =>
+                              setContextWindow(event.target.value)
+                            }
+                            placeholder={String(DEFAULT_CONTEXT_WINDOW)}
+                            className="w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 font-mono text-xs text-slate-200 outline-hidden focus:border-blue-400/40"
+                          />
+                          <span className="mt-1 block text-[10px] text-slate-600">
+                            {formatContextTokens(activeContext)} tokens
+                          </span>
+                        </label>
+                      </div>
+                    )}
+
+                    {!preset.custom && preset.models.length > 0 && (
+                      <div className="rounded-lg border border-white/6 bg-black/20 px-2.5 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                          Models · context
+                        </div>
+                        <ul className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto font-mono text-[10px] text-slate-400">
+                          {preset.models.map((id) => (
+                            <li
+                              key={id}
+                              className="flex items-center justify-between gap-2"
+                            >
+                              <span className="truncate text-slate-300">
+                                {id}
+                              </span>
+                              <span className="shrink-0 text-slate-500">
+                                {formatContextTokens(
+                                  modelContextWindow(preset.id, id),
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
 
                     <label className="block">
@@ -664,6 +931,27 @@ export function KeysView({
                           className="rounded-md px-2.5 py-1.5 text-[11px] text-slate-500 hover:text-slate-300 disabled:opacity-50"
                         >
                           Import OpenCode
+                        </button>
+                      )}
+                      {envVar && (
+                        <button
+                          type="button"
+                          onClick={() => void importEnvKeys(true, preset.id)}
+                          disabled={busy}
+                          className="rounded-md px-2.5 py-1.5 text-[11px] text-sky-300/90 hover:bg-sky-400/10 disabled:opacity-50"
+                          title={`Import ${envVar} into ADE vault`}
+                        >
+                          Import {envVar}
+                        </button>
+                      )}
+                      {preset.keyless && !configured && (
+                        <button
+                          type="button"
+                          onClick={() => void activateKeyless(preset)}
+                          disabled={busy}
+                          className="rounded-md bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-50"
+                        >
+                          Activate
                         </button>
                       )}
                       {getKeyUrl && (

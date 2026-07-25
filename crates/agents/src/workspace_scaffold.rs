@@ -190,8 +190,7 @@ pub fn normalize_browser_open_url(raw: &str) -> Result<String, AdeError> {
         }
     };
     let lower = with_scheme.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower == "about:blank")
-    {
+    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower == "about:blank") {
         return Err(AdeError::Config(
             "only http, https, and about:blank are allowed".into(),
         ));
@@ -226,7 +225,8 @@ mod tests {
     fn create_named_writes_agents() {
         let parent = std::env::temp_dir().join(format!("ade-ws-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&parent).unwrap();
-        let root = create_named_workspace_on_disk("DemoApp", Some(parent.to_str().unwrap())).unwrap();
+        let root =
+            create_named_workspace_on_disk("DemoApp", Some(parent.to_str().unwrap())).unwrap();
         assert!(root.join("AGENTS.md").is_file());
         assert!(root.join(".ade").join("workspace.json").is_file());
         let _ = std::fs::remove_dir_all(parent);

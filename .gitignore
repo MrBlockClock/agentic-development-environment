@@ -40,8 +40,10 @@ Thumbs.db
 .ade/artifacts/
 **/agent-transcripts/
 
-# Per-environment data directories (local/staging/production)
-/data/
+# Per-environment data directories (local/staging/production).
+# Unanchored: the data dir is created relative to the cwd, so launching
+# `ade serve` or `tauri dev` from a subdirectory drops one there too.
+data/
 
 # Alternate Cargo target dir used by some local shells
 ade-target/
@@ -69,5 +71,7 @@ test-results/
 playwright-report/
 **/storageState.json
 *.db
+*.db-wal
+*.db-shm
 *.sqlite*
 *.tursodb

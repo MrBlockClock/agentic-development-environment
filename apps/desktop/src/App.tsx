@@ -10,6 +10,7 @@ import {
 import { RulesEditor } from "./components/RulesEditor";
 import { PlanMap } from "./components/PlanMap";
 import { AtlasView } from "./components/AtlasView";
+import { AnalyticsView } from "./components/AnalyticsView";
 import { AgentActivityFeed } from "./components/AgentActivityFeed";
 import {
   evaluateTurnFailure,
@@ -56,7 +57,13 @@ import {
 } from "./components/DesktopRequired";
 import { ProviderSelect } from "./components/ModelPicker";
 import { ComposerModelSelect } from "./components/ComposerModelSelect";
-import { Chip, Disclosure } from "./components/ui";
+import {
+  Chip,
+  Disclosure,
+  MetricCard,
+  Panel,
+  SubTabs,
+} from "./components/ui";
 import { AttachmentChips } from "./components/AttachmentChips";
 import {
   type ChatAttachment,
@@ -72,6 +79,7 @@ import {
   pickAttachmentFilesViaInput,
 } from "./components/attachIngest";
 import { DESKTOP_REQUIRED_VIEWS } from "./capabilities";
+import { usd } from "./format";
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
@@ -79,6 +87,8 @@ import {
   PROVIDER_PRESETS,
   autoModelForSlot,
   canonicalBaseUrl,
+  firstModelId,
+  modelContextWindow,
   modelSupportsVision,
   slotFromAutonomy,
 } from "./providers";
@@ -93,6 +103,7 @@ const AGENT_PROVIDER_KEY = "ade_agent_provider";
 const AGENT_BASE_URL_KEY = "ade_agent_base_url";
 const AGENT_MODEL_KEY = "ade_agent_model";
 const AGENT_MODEL_MODE_KEY = "ade_agent_model_mode";
+const AGENT_CONTEXT_KEY = "ade_agent_context_window";
 const AGENT_EFFORT_KEY = "ade_agent_effort";
 const NAV_OPEN_KEY = "ade_nav_open";
 type ModelMode = "auto" | "pin";
@@ -326,19 +337,56 @@ const navGroups: NavGroup[] = [
   },
   {
     tier: 1,
-    items: [{ id: "Audit", label: "Trust", icon: "◉" }],
+    items: [{ id: "Insight", label: "Insight", icon: "◉" }],
   },
   {
     tier: 2,
     title: "More",
     items: [
       { id: "Rules", label: "Guidance", icon: "☰" },
-      { id: "Atlas", label: "Atlas", icon: "◈" },
-      { id: "Plan", label: "Plan Map", icon: "◇" },
       { id: "MCP", label: "MCP", icon: "⬡", desktopOnly: true },
     ],
   },
 ];
+
+/**
+ * Insight = the four "looking" surfaces behind one nav destination.
+ * Trust and Analytics ship on Standard; the maps stay Debug density.
+ */
+type InsightSectionId = "Audit" | "Analytics" | "Plan" | "Atlas";
+
+const INSIGHT_SECTIONS: {
+  id: InsightSectionId;
+  label: string;
+  hint: string;
+  debugOnly?: boolean;
+}[] = [
+  {
+    id: "Audit",
+    label: "Trust",
+    hint: "What happened, and is it safe — drift, risk, envelopes, audit log",
+  },
+  {
+    id: "Analytics",
+    label: "Analytics",
+    hint: "What it cost and whether it worked — trend, attribution, reserve Δ",
+  },
+  {
+    id: "Plan",
+    label: "Plan Map",
+    hint: "What is planned, in what order, gated by what",
+    debugOnly: true,
+  },
+  {
+    id: "Atlas",
+    label: "Atlas",
+    hint: "How authority relates to work",
+    debugOnly: true,
+  },
+];
+
+const INSIGHT_IDS = new Set<string>(INSIGHT_SECTIONS.map((section) => section.id));
+const INSIGHT_STORAGE_KEY = "ade_insight_section";
 
 function setupLightClass(tone: SetupLight): string {
   if (tone === "ready") return "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.55)]";
@@ -900,9 +948,24 @@ function App() {
       openTerminalTab();
       return;
     }
+    if (viewId === "Insight") {
+      const remembered = window.localStorage.getItem(INSIGHT_STORAGE_KEY);
+      setActiveTabId(null);
+      setActiveView(
+        remembered && INSIGHT_IDS.has(remembered) ? remembered : "Audit",
+      );
+      return;
+    }
     setActiveTabId(null);
     setActiveView(viewId);
   }, [openEditorTab, openTerminalTab, shellTabs]);
+
+  /** Insight sub-tab switch — remembered so the rail returns you where you left. */
+  const openInsightSection = useCallback((section: string) => {
+    window.localStorage.setItem(INSIGHT_STORAGE_KEY, section);
+    setActiveTabId(null);
+    setActiveView(section);
+  }, []);
 
   const setSurfaceModePersisted = (mode: SurfaceMode) => {
     // Simple is parked — any guided request becomes Standard.
@@ -918,11 +981,13 @@ function App() {
     }
   }, [surfaceMode]);
 
-  /** Debug-only nav: maps / editor / MCP — Terminal + Browser stay on Standard for Default dogfood. */
-  const DEBUG_NAV_IDS = useMemo(
-    () => new Set(["Atlas", "Plan", "MCP", "Editor"]),
-    [],
-  );
+  /**
+   * Debug-only nav: editor / MCP — Terminal + Browser stay on Standard for
+   * Default dogfood. Atlas and Plan Map are Insight sub-tabs now: Debug shows
+   * them by default, and a deep link may still open one on Standard rather than
+   * bouncing the user to Home.
+   */
+  const DEBUG_NAV_IDS = useMemo(() => new Set(["MCP", "Editor"]), []);
 
   const visibleNav = useMemo(
     () =>
@@ -936,6 +1001,19 @@ function App() {
         }))
         .filter((group) => group.items.length > 0),
     [DEBUG_NAV_IDS, surfaceMode],
+  );
+
+  /** Map sub-tabs appear on Debug, or on Standard once a deep link opened one. */
+  const insightTabs = useMemo(
+    () =>
+      INSIGHT_SECTIONS.filter(
+        (section) => !section.debugOnly || debugChrome || activeView === section.id,
+      ).map((section) => ({
+        id: section.id,
+        label: section.label,
+        hint: section.hint,
+      })),
+    [debugChrome, activeView],
   );
 
   useEffect(() => {
@@ -1678,6 +1756,7 @@ function App() {
                     }}
                     className={navItemClass(
                       activeView === item.id ||
+                        (item.id === "Insight" && INSIGHT_IDS.has(activeView)) ||
                         (item.id === "Home" && activeView === "Agent") ||
                         (item.id === "Home" &&
                           Boolean(
@@ -1746,11 +1825,7 @@ function App() {
                     storageKey="ade_nav_more_fold"
                     defaultOpen={false}
                     forceOpen={
-                      debugChrome &&
-                      (activeView === "Rules" ||
-                        activeView === "Atlas" ||
-                        activeView === "Plan" ||
-                        activeView === "MCP")
+                      debugChrome && (activeView === "Rules" || activeView === "MCP")
                     }
                   >
                     {renderItems()}
@@ -1857,7 +1932,8 @@ function App() {
           activeView === "Agent" ||
           activeView === "Browser" ||
           activeView === "Editor" ||
-          activeView === "Terminal"
+          activeView === "Terminal" ||
+          INSIGHT_IDS.has(activeView)
             ? "flex flex-col overflow-hidden"
             : "thin-scrollbar overflow-y-auto"
         }`}
@@ -1891,15 +1967,13 @@ function App() {
                   ? "Environment"
                   : activeView === "Rules"
                     ? "Guidance"
-                    : activeView === "Plan"
-                      ? "Plan Map"
+                    : INSIGHT_IDS.has(activeView)
+                      ? "Insight"
                       : activeView === "Verify"
                         ? "Test project"
                         : activeView === "Recipes"
                           ? "Stack"
-                          : activeView === "Audit"
-                            ? "Trust"
-                            : activeView}
+                          : activeView}
                 {debugChrome && (
                   <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
                     Debug
@@ -2001,7 +2075,9 @@ function App() {
                 ? `flex min-h-0 flex-1 flex-col overflow-hidden ${
                     activeView === "Browser" ? "p-2 sm:p-3" : "p-4 sm:p-5"
                   }`
-                : "mx-auto max-w-350 p-4 sm:p-5"
+                : INSIGHT_IDS.has(activeView)
+                  ? "mx-auto flex min-h-0 w-full max-w-350 flex-1 flex-col overflow-hidden p-4 sm:p-5"
+                  : "mx-auto max-w-350 p-4 sm:p-5"
           }
         >
           {!isTauri() && (
@@ -2021,6 +2097,16 @@ function App() {
             <div className="mb-5 rounded-xl border border-red-400/20 bg-red-400/7 px-4 py-3 text-xs text-red-200">
               {error}
             </div>
+          )}
+
+          {/* Sub-navigation is chrome: it stays put even when the data read fails. */}
+          {INSIGHT_IDS.has(activeView) && (
+            <SubTabs
+              className="mb-3 shrink-0 self-start"
+              items={insightTabs}
+              activeId={activeView}
+              onSelect={openInsightSection}
+            />
           )}
 
           {loading && !dashboard ? (
@@ -2309,44 +2395,65 @@ function App() {
                   onContinueToAgent={() => openNavView("Home")}
                 />
               )}
-              {activeView === "Audit" && (
-                <AuditView
-                  audit={dashboard.audit}
-                  handoffs={dashboard.handoff.recent}
-                  onRefresh={() => void refresh()}
-                  onOpenSettings={() => setActiveView("Settings")}
-                />
-              )}
-              {activeView === "Plan" && (
-                <PlanMap
-                  plan={dashboard.plan}
-                  scorePercent={scorePercent}
-                  verifyResults={verifyResults}
-                  executing={executing}
-                  focusPhaseId={planFocusPhaseId}
-                  onExecute={() => void executePlan()}
-                  onRunAudit={() => void runAudit()}
-                  onRunVerify={() => void runVerify()}
-                  onOpenGuidance={() => setActiveView("Rules")}
-                  onOpenAtlas={(phaseId) => {
-                    setAtlasFocusNodeId(phaseId ? `phase:${phaseId}` : "hub-plan");
-                    setActiveView("Atlas");
-                  }}
-                />
-              )}
-              {activeView === "Atlas" && (
-                <AtlasView
-                  auditFindings={dashboard.audit.findings}
-                  planPhases={dashboard.plan.phases}
-                  verifyGates={verifyResults.map((r) => r.gate)}
-                  handoffs={dashboard.handoff.recent}
-                  focusNodeId={atlasFocusNodeId}
-                  onOpenGuidance={() => setActiveView("Rules")}
-                  onOpenPlan={(phaseId) => {
-                    setPlanFocusPhaseId(phaseId ?? null);
-                    setActiveView("Plan");
-                  }}
-                />
+              {INSIGHT_IDS.has(activeView) && (
+                <div
+                  className={
+                    activeView === "Atlas"
+                      ? "flex min-h-0 flex-1 flex-col"
+                      : "thin-scrollbar min-h-0 flex-1 overflow-y-auto pr-0.5"
+                  }
+                >
+                  {activeView === "Audit" && (
+                    <AuditView
+                      audit={dashboard.audit}
+                      handoffs={dashboard.handoff.recent}
+                      onRefresh={() => void refresh()}
+                      onOpenSettings={() => setActiveView("Settings")}
+                      onOpenAnalytics={() => openInsightSection("Analytics")}
+                    />
+                  )}
+                  {activeView === "Analytics" && (
+                    <AnalyticsView
+                      verifyResults={verifyResults}
+                      tasks={dashboard.tasks}
+                      handoffs={dashboard.handoff.recent}
+                      onOpenSettings={() => setActiveView("Settings")}
+                      onOpenTrust={() => openInsightSection("Audit")}
+                      onOpenVerify={() => setActiveView("Verify")}
+                    />
+                  )}
+                  {activeView === "Plan" && (
+                    <PlanMap
+                      plan={dashboard.plan}
+                      scorePercent={scorePercent}
+                      verifyResults={verifyResults}
+                      executing={executing}
+                      focusPhaseId={planFocusPhaseId}
+                      onExecute={() => void executePlan()}
+                      onRunAudit={() => void runAudit()}
+                      onRunVerify={() => void runVerify()}
+                      onOpenGuidance={() => setActiveView("Rules")}
+                      onOpenAtlas={(phaseId) => {
+                        setAtlasFocusNodeId(phaseId ? `phase:${phaseId}` : "hub-plan");
+                        openInsightSection("Atlas");
+                      }}
+                    />
+                  )}
+                  {activeView === "Atlas" && (
+                    <AtlasView
+                      auditFindings={dashboard.audit.findings}
+                      planPhases={dashboard.plan.phases}
+                      verifyGates={verifyResults}
+                      handoffs={dashboard.handoff.recent}
+                      focusNodeId={atlasFocusNodeId}
+                      onOpenGuidance={() => setActiveView("Rules")}
+                      onOpenPlan={(phaseId) => {
+                        setPlanFocusPhaseId(phaseId ?? null);
+                        openInsightSection("Plan");
+                      }}
+                    />
+                  )}
+                </div>
               )}
               {activeView === "Verify" && (
                 <VerifyView
@@ -2360,9 +2467,9 @@ function App() {
                 <RulesEditor
                   onOpenAtlas={() => {
                     setAtlasFocusNodeId("hub-workspace");
-                    setActiveView("Atlas");
+                    openInsightSection("Atlas");
                   }}
-                  onOpenPlan={() => setActiveView("Plan")}
+                  onOpenPlan={() => openInsightSection("Plan")}
                 />
               )}
               {activeView === "Settings" && (
@@ -4024,7 +4131,17 @@ function AgentView({
     costMicros: 0,
   });
   const sessionCountedRef = useRef<string | null>(null);
-  const contextLimit = 128_000;
+  const contextLimit = useMemo(() => {
+    const stored =
+      typeof window !== "undefined"
+        ? Number(window.localStorage.getItem(AGENT_CONTEXT_KEY) || "")
+        : NaN;
+    const override =
+      provider === "custom" && Number.isFinite(stored) && stored > 0
+        ? Math.floor(stored)
+        : null;
+    return modelContextWindow(provider, model, override);
+  }, [provider, model]);
   type TurnRecord = {
     id: string;
     createdAt: string;
@@ -6034,9 +6151,13 @@ function AgentView({
               showRecommended={false}
               onChange={(preset) => {
                 setProvider(preset.id);
-                setBaseUrl(preset.baseUrl);
-                if (modelMode === "pin") {
-                  setModel(preset.models[0] ?? DEFAULT_MODEL);
+                setBaseUrl(
+                  preset.custom
+                    ? baseUrl.trim() || preset.baseUrl
+                    : preset.baseUrl,
+                );
+                if (modelMode === "pin" && !preset.custom) {
+                  setModel(firstModelId(preset));
                 }
               }}
             />
@@ -6406,11 +6527,13 @@ function AuditView({
   handoffs,
   onRefresh,
   onOpenSettings,
+  onOpenAnalytics,
 }: {
   audit: AuditReport;
   handoffs: HandoffHistoryItem[];
   onRefresh: () => void;
   onOpenSettings: () => void;
+  onOpenAnalytics?: () => void;
 }) {
   const [ignoreBusy, setIgnoreBusy] = useState(false);
   const [ignoreMessage, setIgnoreMessage] = useState<string | null>(null);
@@ -6480,11 +6603,25 @@ function AuditView({
   };
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
-      <Panel title="Trust" subtitle={`${audit.score}/${audit.score_max} readiness score`}>
+    <div className="space-y-4">
+      <Panel
+        title="Trust"
+        subtitle={`${audit.score}/${audit.score_max} readiness score`}
+        actions={
+          onOpenAnalytics ? (
+            <button
+              type="button"
+              onClick={onOpenAnalytics}
+              className="rounded-lg border border-white/10 bg-white/4 px-2.5 py-1 text-[11px] text-slate-300 hover:bg-white/8"
+            >
+              Cost trend in Analytics →
+            </button>
+          ) : undefined
+        }
+      >
         <p className="mb-4 text-[12px] leading-5 text-slate-500">
-          A simple scoreboard for setup health, spend, and recent activity — not the Home
-          screen.
+          Is this workspace safe to act in, and what did the agent actually do?
+          Cost trend, model attribution, and reserve accuracy live in Analytics.
         </p>
 
         {audit.blockers.length > 0 && (
@@ -6550,58 +6687,46 @@ function AuditView({
           </div>
         </div>
 
+        {/* Cap headroom is a safety signal; the analytical view lives in Analytics. */}
         <div className="mb-5 rounded-xl border border-white/8 bg-white/2 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
+            <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Spend
+                Budget headroom
               </div>
               <div className="mt-0.5 text-[12px] text-slate-400">
-                Used / reserved / remaining vs daily cap (invoice class)
+                {spend
+                  ? `${usd(spend.remaining_usd)} left of the ${usd(spend.daily_cap_usd)} daily cap`
+                  : "No spend data for this period yet"}
               </div>
+              {spend && (
+                <div className="mt-1 flex flex-wrap gap-3 font-mono text-[10px] text-slate-600">
+                  <span>used {usd(spend.used_usd)}</span>
+                  <span>reserved {usd(spend.reserved_usd)}</span>
+                  <span>period {spend.period_key}</span>
+                </div>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/5"
-            >
-              <GearIcon className="size-3" />
-              Caps
-            </button>
-          </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard
-              dense
-              label="Used"
-              value={spend ? `$${spend.used_usd.toFixed(4)}` : "—"}
-              accent="blue"
-            />
-            <MetricCard
-              dense
-              label="Reserved"
-              value={spend ? `$${spend.reserved_usd.toFixed(4)}` : "—"}
-              accent="slate"
-            />
-            <MetricCard
-              dense
-              label="Remaining"
-              value={spend ? `$${spend.remaining_usd.toFixed(4)}` : "—"}
-              accent={spend && spend.remaining_usd <= 0 ? "red" : "slate"}
-            />
-            <MetricCard
-              dense
-              label="Daily cap"
-              value={spend ? `$${spend.daily_cap_usd.toFixed(2)}` : "—"}
-              accent="slate"
-            />
-          </div>
-          {spend && (
-            <div className="mt-2 flex flex-wrap gap-3 font-mono text-[10px] text-slate-600">
-              <span>active ${spend.daily_usd.toFixed(4)} (used+reserved)</span>
-              <span>session cap ${spend.session_cap_usd.toFixed(2)}</span>
-              <span>period {spend.period_key}</span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {onOpenAnalytics && (
+                <button
+                  type="button"
+                  onClick={onOpenAnalytics}
+                  className="rounded-md border border-blue-400/25 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-blue-100 hover:bg-blue-500/20"
+                >
+                  Analytics
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/5"
+              >
+                <GearIcon className="size-3" />
+                Caps
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
         <Disclosure
@@ -7109,64 +7234,6 @@ function emptyValueForType(type: string | undefined): unknown {
   }
 }
 
-function Panel({
-  title,
-  subtitle,
-  dense = false,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  dense?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      className={`rounded-2xl border border-white/7 bg-[#0d121a]/85 shadow-[0_12px_45px_rgba(0,0,0,0.15)] ${
-        dense ? "p-4" : "p-5"
-      }`}
-    >
-      <div className={subtitle ? (dense ? "mb-3" : "mb-5") : dense ? "mb-3" : "mb-4"}>
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {subtitle ? <p className="mt-0.5 text-[11px] text-slate-600">{subtitle}</p> : null}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  accent,
-  dense = false,
-}: {
-  label: string;
-  value: string;
-  accent: "blue" | "green" | "red" | "violet" | "slate";
-  dense?: boolean;
-}) {
-  const colors = {
-    blue: "text-blue-300",
-    green: "text-emerald-300",
-    red: "text-red-300",
-    violet: "text-violet-300",
-    slate: "text-slate-300",
-  };
-  return (
-    <div
-      className={`rounded-xl border border-white/7 bg-[#0d121a]/80 ${
-        dense ? "px-3 py-2.5" : "px-4 py-4"
-      }`}
-    >
-      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-600">{label}</div>
-      <div className={`mt-1 font-semibold ${dense ? "text-lg" : "text-xl"} ${colors[accent]}`}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
 function SpendUsageStrip({
   compact = false,
   className = "",
@@ -7231,13 +7298,13 @@ function SpendUsageStrip({
         className={`font-mono text-[10px] tabular-nums ${
           overDaily ? "text-amber-200" : "text-slate-500"
         } ${className}`}
-        title={`period ${spend.period_key} · used $${spend.used_usd.toFixed(4)} · reserved $${spend.reserved_usd.toFixed(4)}`}
+        title={`period ${spend.period_key} · used ${usd(spend.used_usd)} · reserved ${usd(spend.reserved_usd)}`}
       >
-        Used ${spend.used_usd.toFixed(4)}
+        Used {usd(spend.used_usd)}
         {" · "}
-        rem ${spend.remaining_usd.toFixed(4)}
+        rem {usd(spend.remaining_usd)}
         {" · "}
-        cap ${spend.daily_cap_usd.toFixed(2)}
+        cap {usd(spend.daily_cap_usd)}
       </div>
     );
   }
@@ -7260,14 +7327,14 @@ function SpendUsageStrip({
             overDaily ? "text-amber-200" : "text-slate-300"
           }`}
         >
-          Used ${spend.used_usd.toFixed(4)}
+          Used {usd(spend.used_usd)}
         </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-3 font-mono text-[10px] text-slate-500">
-        <span>reserved ${spend.reserved_usd.toFixed(4)}</span>
-        <span>remaining ${spend.remaining_usd.toFixed(4)}</span>
-        <span>daily cap ${spend.daily_cap_usd.toFixed(2)}</span>
-        <span>session cap ${spend.session_cap_usd.toFixed(2)}</span>
+        <span>reserved {usd(spend.reserved_usd)}</span>
+        <span>remaining {usd(spend.remaining_usd)}</span>
+        <span>daily cap {usd(spend.daily_cap_usd)}</span>
+        <span>session cap {usd(spend.session_cap_usd)}</span>
         <span>period {spend.period_key}</span>
       </div>
     </div>
@@ -7458,7 +7525,7 @@ function ContextUsageButton({
           )}
           {showSpend && (
             <div className="mt-2 text-[10px] text-slate-500">
-              Session spend ≈ ${(sessionSpendMicros / 1_000_000).toFixed(4)}
+              Session spend ≈ {usd(sessionSpendMicros / 1_000_000)}
             </div>
           )}
           {onSaveGoal && (

@@ -11,6 +11,7 @@ export type AdeCapability =
   | "recipes_browse_fit"
   | "guidance_read"
   | "atlas_plan_map"
+  | "analytics"
   | "local_api_token"
   | "agent_turns"
   | "provider_keys"
@@ -59,6 +60,13 @@ export const ADE_CAPABILITY_MATRIX: CapabilityRow[] = [
     desktop: true,
     browser: true,
     note: "Reads + profile set over local API",
+  },
+  {
+    id: "analytics",
+    label: "Analytics (spend trend, attribution, reserve Δ)",
+    desktop: true,
+    browser: false,
+    note: "Aggregates the local usage ledger over IPC; no loopback route by design",
   },
   {
     id: "local_api_token",

@@ -474,15 +474,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<DashboardSnapsh
 }
 
 fn any_provider_key_configured(vault: &dyn ade_db::secrets::ProviderKeyVault) -> bool {
-    const PROVIDERS: &[&str] = &[
-        "opencode",
-        "freellm",
-        "openai",
-        "anthropic",
-        "openrouter",
-        "azure-openai",
-    ];
-    PROVIDERS
+    ade_db::secrets::KNOWN_PROVIDERS
         .iter()
         .any(|provider| vault.contains("local", provider).unwrap_or(false))
 }
@@ -887,6 +879,12 @@ pub struct OpenCodeImportResult {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvKeyCandidate {
+    pub provider: String,
+    pub env_var: String,
+}
+
 /// List known BYOK providers and whether a vault credential exists (never returns secrets).
 #[tauri::command]
 pub fn key_status_all(
@@ -894,16 +892,8 @@ pub fn key_status_all(
     profile: Option<String>,
 ) -> Result<Vec<ProviderVaultRow>, String> {
     let profile = resolve_profile(profile)?;
-    const PROVIDERS: &[&str] = &[
-        "opencode",
-        "freellm",
-        "openai",
-        "anthropic",
-        "openrouter",
-        "azure-openai",
-    ];
-    let mut rows = Vec::with_capacity(PROVIDERS.len());
-    for provider in PROVIDERS {
+    let mut rows = Vec::with_capacity(ade_db::secrets::KNOWN_PROVIDERS.len());
+    for provider in ade_db::secrets::KNOWN_PROVIDERS {
         let configured = state
             .key_vault
             .contains(&profile, provider)
@@ -914,6 +904,78 @@ pub fn key_status_all(
         });
     }
     Ok(rows)
+}
+
+/// Which free/BYOK env vars are present (names only — never secret values).
+#[tauri::command]
+pub fn key_env_candidates() -> Result<Vec<EnvKeyCandidate>, String> {
+    Ok(ade_db::secrets::list_env_key_candidates()
+        .into_iter()
+        .map(|(provider, env_var)| EnvKeyCandidate { provider, env_var })
+        .collect())
+}
+
+/// Import free/BYOK keys from process env into the OS vault (explicit user action).
+#[tauri::command]
+pub fn key_import_env(
+    state: State<'_, AppState>,
+    profile: Option<String>,
+    force: Option<bool>,
+    provider: Option<String>,
+) -> Result<OpenCodeImportResult, String> {
+    let profile = resolve_profile(profile)?;
+    let force = force.unwrap_or(false);
+    let only = provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+    let before: Vec<(String, String)> = ade_db::secrets::list_env_key_candidates()
+        .into_iter()
+        .filter(|(id, _)| only.as_ref().is_none_or(|want| want == id))
+        .collect();
+    let imported = ade_db::secrets::import_env_provider_keys_explicit(
+        state.key_vault.as_ref(),
+        &profile,
+        force,
+        only.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
+    let before_empty = before.is_empty();
+    let skipped: Vec<String> = before
+        .into_iter()
+        .map(|(provider, _)| provider)
+        .filter(|provider| !imported.contains(provider))
+        .collect();
+    Ok(OpenCodeImportResult {
+        detail: if imported.is_empty() {
+            if before_empty {
+                "No provider keys found in environment (set GROQ_API_KEY, FREELMAPI_KEY, …)".into()
+            } else {
+                "Env keys already in vault (pass force to overwrite)".into()
+            }
+        } else {
+            format!(
+                "Imported {} provider key(s) from environment",
+                imported.len()
+            )
+        },
+        imported,
+        skipped,
+    })
+}
+
+/// Activate a keyless free gateway by storing a local sentinel (never a real secret).
+#[tauri::command]
+pub fn key_activate_keyless(
+    state: State<'_, AppState>,
+    profile: Option<String>,
+    provider: String,
+) -> Result<ProviderKeyStatus, String> {
+    let profile = resolve_profile(profile)?;
+    ade_db::secrets::activate_keyless_provider(state.key_vault.as_ref(), &profile, &provider)
+        .map_err(|error| error.to_string())?;
+    key_status_for(state.key_vault.as_ref(), &profile, provider.trim())
 }
 
 /// Import API keys from OpenCode Desktop's auth.json into the ADE OS vault.
@@ -1767,10 +1829,7 @@ pub fn open_browser_window(
 }
 
 #[tauri::command]
-pub fn browser_window_url(
-    app: AppHandle,
-    label: Option<String>,
-) -> Result<Option<String>, String> {
+pub fn browser_window_url(app: AppHandle, label: Option<String>) -> Result<Option<String>, String> {
     let window_label = resolve_browser_label(label.clone());
     if let Some(webview) = app.get_webview(&window_label) {
         return webview

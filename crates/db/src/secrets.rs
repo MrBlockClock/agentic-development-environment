@@ -394,13 +394,160 @@ mod dpapi {
     }
 }
 
+/// Known BYOK provider ids (Keys vault status + smoke lists).
+pub const KNOWN_PROVIDERS: &[&str] = &[
+    "opencode",
+    "freellm",
+    "custom",
+    "groq",
+    "cerebras",
+    "google",
+    "openrouter",
+    "mistral",
+    "github",
+    "cohere",
+    "nvidia",
+    "sambanova",
+    "deepseek",
+    "together",
+    "fireworks",
+    "huggingface",
+    "zhipu",
+    "ollama-cloud",
+    "cloudflare",
+    "llm7",
+    "pollinations",
+    "kilo",
+    "ovh",
+    "agnes",
+    "reka",
+    "openai",
+    "anthropic",
+    "azure-openai",
+];
+
+/// Providers that work without a real API key (local sentinel stored in vault).
+pub const KEYLESS_PROVIDERS: &[&str] = &["llm7", "pollinations", "kilo", "ovh"];
+
+pub const KEYLESS_SENTINEL: &str = "ade-keyless";
+
+/// Well-known free/BYOK env vars → ADE provider id (first non-empty wins per provider).
+const FREE_ENV_KEY_MAP: &[(&str, &str)] = &[
+    ("FREELMAPI_KEY", "freellm"),
+    ("ADE_FREELLM_API_KEY", "freellm"),
+    ("ADE_CUSTOM_API_KEY", "custom"),
+    ("GROQ_API_KEY", "groq"),
+    ("ADE_GROQ_API_KEY", "groq"),
+    ("CEREBRAS_API_KEY", "cerebras"),
+    ("ADE_CEREBRAS_API_KEY", "cerebras"),
+    ("GEMINI_API_KEY", "google"),
+    ("GOOGLE_API_KEY", "google"),
+    ("GOOGLE_AI_API_KEY", "google"),
+    ("ADE_GOOGLE_API_KEY", "google"),
+    ("OPENROUTER_API_KEY", "openrouter"),
+    ("ADE_OPENROUTER_API_KEY", "openrouter"),
+    ("MISTRAL_API_KEY", "mistral"),
+    ("ADE_MISTRAL_API_KEY", "mistral"),
+    ("GITHUB_TOKEN", "github"),
+    ("GITHUB_MODELS_TOKEN", "github"),
+    ("ADE_GITHUB_API_KEY", "github"),
+    ("COHERE_API_KEY", "cohere"),
+    ("ADE_COHERE_API_KEY", "cohere"),
+    ("NVIDIA_API_KEY", "nvidia"),
+    ("ADE_NVIDIA_API_KEY", "nvidia"),
+    ("SAMBANOVA_API_KEY", "sambanova"),
+    ("ADE_SAMBANOVA_API_KEY", "sambanova"),
+    ("DEEPSEEK_API_KEY", "deepseek"),
+    ("ADE_DEEPSEEK_API_KEY", "deepseek"),
+    ("TOGETHER_API_KEY", "together"),
+    ("ADE_TOGETHER_API_KEY", "together"),
+    ("FIREWORKS_API_KEY", "fireworks"),
+    ("ADE_FIREWORKS_API_KEY", "fireworks"),
+    ("HF_TOKEN", "huggingface"),
+    ("HUGGINGFACE_API_KEY", "huggingface"),
+    ("ADE_HUGGINGFACE_API_KEY", "huggingface"),
+    ("ZHIPU_API_KEY", "zhipu"),
+    ("ZAI_API_KEY", "zhipu"),
+    ("ADE_ZHIPU_API_KEY", "zhipu"),
+    ("OLLAMA_API_KEY", "ollama-cloud"),
+    ("ADE_OLLAMA_CLOUD_API_KEY", "ollama-cloud"),
+    ("CLOUDFLARE_API_TOKEN", "cloudflare"),
+    ("ADE_CLOUDFLARE_API_KEY", "cloudflare"),
+    ("LLM7_API_KEY", "llm7"),
+    ("ADE_LLM7_API_KEY", "llm7"),
+    ("AGNES_API_KEY", "agnes"),
+    ("ADE_AGNES_API_KEY", "agnes"),
+    ("REKA_API_KEY", "reka"),
+    ("ADE_REKA_API_KEY", "reka"),
+    ("OPENAI_API_KEY", "openai"),
+    ("ADE_OPENAI_API_KEY", "openai"),
+    ("ANTHROPIC_API_KEY", "anthropic"),
+    ("ADE_ANTHROPIC_API_KEY", "anthropic"),
+];
+
+/// Env vars that are present (never returns secret values).
+pub fn list_env_key_candidates() -> Vec<(String, String)> {
+    let mut seen = std::collections::BTreeSet::<String>::new();
+    let mut out = Vec::new();
+    for (env_name, provider) in FREE_ENV_KEY_MAP {
+        if seen.contains(*provider) {
+            continue;
+        }
+        if let Ok(value) = std::env::var(env_name) {
+            if !value.trim().is_empty() {
+                seen.insert((*provider).to_string());
+                out.push(((*provider).to_string(), (*env_name).to_string()));
+            }
+        }
+    }
+    for (key, value) in std::env::vars() {
+        let Some(rest) = key.strip_prefix("ADE_") else {
+            continue;
+        };
+        let Some(provider) = rest.strip_suffix("_API_KEY") else {
+            continue;
+        };
+        let provider = provider.to_ascii_lowercase().replace('_', "-");
+        if provider.is_empty() || value.trim().is_empty() || seen.contains(&provider) {
+            continue;
+        }
+        seen.insert(provider.clone());
+        out.push((provider, key));
+    }
+    out
+}
+
+fn collect_env_provider_secrets() -> Vec<(String, String)> {
+    let mut by_provider: BTreeMap<String, String> = BTreeMap::new();
+    for (env_name, provider) in FREE_ENV_KEY_MAP {
+        if by_provider.contains_key(*provider) {
+            continue;
+        }
+        if let Ok(value) = std::env::var(env_name) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                by_provider.insert((*provider).to_string(), trimmed.to_string());
+            }
+        }
+    }
+    for (key, value) in std::env::vars() {
+        let Some(rest) = key.strip_prefix("ADE_") else {
+            continue;
+        };
+        let Some(provider) = rest.strip_suffix("_API_KEY") else {
+            continue;
+        };
+        let provider = provider.to_ascii_lowercase().replace('_', "-");
+        if provider.is_empty() || value.trim().is_empty() || by_provider.contains_key(&provider) {
+            continue;
+        }
+        by_provider.insert(provider, value.trim().to_string());
+    }
+    by_provider.into_iter().collect()
+}
+
 /// When `ADE_IMPORT_ENV_KEYS=1` (or `true`), copy common provider env vars into the
 /// OS keychain for the given profile. Never logs secret values.
-///
-/// Supported:
-/// - `OPENAI_API_KEY` → provider `openai`
-/// - `ANTHROPIC_API_KEY` → provider `anthropic`
-/// - `ADE_<PROVIDER>_API_KEY` → provider `<provider>` (lowercased)
 ///
 /// Existing vault entries are left unchanged unless `ADE_IMPORT_ENV_KEYS=force`.
 pub fn import_env_provider_keys(
@@ -415,41 +562,48 @@ pub fn import_env_provider_keys(
         return Ok(vec![]);
     }
     let force = mode == "force";
+    import_env_provider_keys_explicit(vault, profile, force, None)
+}
 
+/// Explicit UI/CLI import of free/BYOK env keys (does not require ADE_IMPORT_ENV_KEYS).
+/// When `only_provider` is set, imports just that id.
+pub fn import_env_provider_keys_explicit(
+    vault: &dyn ProviderKeyVault,
+    profile: &str,
+    force: bool,
+    only_provider: Option<&str>,
+) -> Result<Vec<String>, AdeError> {
+    let only = only_provider
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
     let mut imported = Vec::new();
-    let mut candidates: Vec<(String, String)> = Vec::new();
-
-    if let Ok(value) = std::env::var("OPENAI_API_KEY") {
-        if !value.trim().is_empty() {
-            candidates.push(("openai".into(), value));
-        }
-    }
-    if let Ok(value) = std::env::var("ANTHROPIC_API_KEY") {
-        if !value.trim().is_empty() {
-            candidates.push(("anthropic".into(), value));
-        }
-    }
-    for (key, value) in std::env::vars() {
-        let Some(rest) = key.strip_prefix("ADE_") else {
-            continue;
-        };
-        let Some(provider) = rest.strip_suffix("_API_KEY") else {
-            continue;
-        };
-        if provider.is_empty() || value.trim().is_empty() {
+    for (provider, value) in collect_env_provider_secrets() {
+        if only.as_ref().is_some_and(|want| want != &provider) {
             continue;
         }
-        candidates.push((provider.to_ascii_lowercase(), value));
-    }
-
-    for (provider, value) in candidates {
         if !force && vault.contains(profile, &provider)? {
             continue;
         }
-        vault.set(profile, &provider, value.trim())?;
+        vault.set(profile, &provider, &value)?;
         imported.push(provider);
     }
     Ok(imported)
+}
+
+/// Store a non-secret sentinel so keyless OpenAI-compatible gateways can be selected.
+pub fn activate_keyless_provider(
+    vault: &dyn ProviderKeyVault,
+    profile: &str,
+    provider: &str,
+) -> Result<(), AdeError> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if !KEYLESS_PROVIDERS.contains(&provider.as_str()) {
+        return Err(AdeError::Provider(format!(
+            "provider `{provider}` is not keyless — paste a key or Import from env"
+        )));
+    }
+    vault.set(profile, &provider, KEYLESS_SENTINEL)
 }
 
 /// Import missing provider keys from OpenCode Desktop `auth.json` (gap-fill only).
@@ -565,6 +719,10 @@ mod tests {
 
     #[test]
     fn import_env_keys_respects_flag_and_skips_existing() {
+        // Isolate from the host shell's free-tier keys (e.g. FREELMAPI_KEY).
+        for (env_name, _) in FREE_ENV_KEY_MAP {
+            std::env::remove_var(env_name);
+        }
         std::env::remove_var("ADE_IMPORT_ENV_KEYS");
         std::env::set_var("OPENAI_API_KEY", "sk-test-openai");
         let vault = InMemoryProviderKeyVault::default();
@@ -598,6 +756,17 @@ mod tests {
 
         std::env::remove_var("ADE_IMPORT_ENV_KEYS");
         std::env::remove_var("OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn activate_keyless_stores_sentinel() {
+        let vault = InMemoryProviderKeyVault::default();
+        activate_keyless_provider(&vault, "local", "pollinations").unwrap();
+        assert_eq!(
+            vault.get("local", "pollinations").unwrap().as_deref(),
+            Some(KEYLESS_SENTINEL)
+        );
+        assert!(activate_keyless_provider(&vault, "local", "groq").is_err());
     }
 
     #[test]

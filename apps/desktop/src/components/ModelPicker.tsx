@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Hint } from "./ui";
 import {
   fetchProviderModels,
+  modelOptionLabel,
   presetById,
   type ProviderPreset,
   PROVIDER_PRESETS,
@@ -150,9 +151,10 @@ export function ModelPicker({
           {options.length === 0 && <option value={value || ""}>{value || "No models"}</option>}
           {options.map((id) => (
             <option key={id} value={id}>
+              {modelOptionLabel(providerId, id)}
               {id.endsWith("-free") || id === "big-pickle" || id === "auto"
-                ? `${id} · free`
-                : id}
+                ? " · free"
+                : ""}
             </option>
           ))}
         </select>

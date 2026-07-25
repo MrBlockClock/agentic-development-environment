@@ -710,9 +710,7 @@ impl AgentSession {
                     .await;
                 let (is_error, text, content, host_intent) = if route.host {
                     match self.call_host_tool(&route.tool, &arguments).await {
-                        Ok((text, intent)) => {
-                            (false, text.clone(), Value::String(text), intent)
-                        }
+                        Ok((text, intent)) => (false, text.clone(), Value::String(text), intent),
                         Err(error) => {
                             let text = error.to_string();
                             (true, text.clone(), Value::String(text), None)
@@ -754,11 +752,7 @@ impl AgentSession {
                     .await;
                 if let Some((action, path, url)) = host_intent {
                     let _ = events
-                        .send(AgentEvent::HostIntent {
-                            action,
-                            path,
-                            url,
-                        })
+                        .send(AgentEvent::HostIntent { action, path, url })
                         .await;
                 }
                 messages.push(json!({
@@ -1019,8 +1013,7 @@ impl AgentSession {
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|s| !s.is_empty());
-                let root =
-                    crate::workspace_scaffold::create_named_workspace_on_disk(name, parent)?;
+                let root = crate::workspace_scaffold::create_named_workspace_on_disk(name, parent)?;
                 let path = root.display().to_string();
                 Ok((
                     format!(

@@ -15,8 +15,6 @@ description: >-
 | G4 | Full script | `scripts/verify-full.ps1` |
 | G5 | Evidence | recipe profile / `scripts/g5-evidence.*` / cargo test |
 
-**UI layout smoke (optional, not a gate):** `pwsh -File scripts/ui-smoke.ps1` — Playwright against Vite preview (`apps/desktop` e2e). Catches sidebar IA / type-size regressions. Does **not** replace G0–G5 and does not drive Tauri IPC.
-
 ## How to run
 
 - CLI: `ade verify --gate G5 --through` (or desktop/browser Verify → posts `/api/verify`)
