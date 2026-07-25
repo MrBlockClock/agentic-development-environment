@@ -10,14 +10,20 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // Force IPv4. `host: false` → Vite binds ::1 only on Windows; WebView2
+    // often resolves localhost to 127.0.0.1 and gets ERR_CONNECTION_REFUSED.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
           host,
           port: 1421,
         }
-      : undefined,
+      : {
+          protocol: "ws",
+          host: "127.0.0.1",
+          port: 1420,
+        },
     watch: {
       ignored: ["**/src-tauri/**"],
     },
