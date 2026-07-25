@@ -489,19 +489,19 @@ const FREE_ENV_KEY_MAP: &[(&str, &str)] = &[
 pub fn list_env_key_candidates() -> Vec<(String, String)> {
     let mut seen = std::collections::BTreeSet::<String>::new();
     let mut out = Vec::new();
-    for (env_name, provider) in FREE_ENV_KEY_MAP {
-        if seen.contains(*provider) {
+    for &(env_name, provider) in FREE_ENV_KEY_MAP {
+        if seen.contains(provider) {
             continue;
         }
         if let Ok(value) = std::env::var(env_name) {
             if !value.trim().is_empty() {
-                seen.insert((*provider).to_string());
-                out.push(((*provider).to_string(), (*env_name).to_string()));
+                seen.insert(provider.to_string());
+                out.push((provider.to_string(), env_name.to_string()));
             }
         }
     }
     for (key, value) in std::env::vars() {
-        let Some(rest) = key.strip_prefix("ADE_") else {
+        let Some(rest) = key.as_str().strip_prefix("ADE_") else {
             continue;
         };
         let Some(provider) = rest.strip_suffix("_API_KEY") else {
@@ -519,19 +519,19 @@ pub fn list_env_key_candidates() -> Vec<(String, String)> {
 
 fn collect_env_provider_secrets() -> Vec<(String, String)> {
     let mut by_provider: BTreeMap<String, String> = BTreeMap::new();
-    for (env_name, provider) in FREE_ENV_KEY_MAP {
-        if by_provider.contains_key(*provider) {
+    for &(env_name, provider) in FREE_ENV_KEY_MAP {
+        if by_provider.contains_key(provider) {
             continue;
         }
         if let Ok(value) = std::env::var(env_name) {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
-                by_provider.insert((*provider).to_string(), trimmed.to_string());
+                by_provider.insert(provider.to_string(), trimmed.to_string());
             }
         }
     }
     for (key, value) in std::env::vars() {
-        let Some(rest) = key.strip_prefix("ADE_") else {
+        let Some(rest) = key.as_str().strip_prefix("ADE_") else {
             continue;
         };
         let Some(provider) = rest.strip_suffix("_API_KEY") else {
@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn import_env_keys_respects_flag_and_skips_existing() {
         // Isolate from the host shell's free-tier keys (e.g. FREELMAPI_KEY).
-        for (env_name, _) in FREE_ENV_KEY_MAP {
+        for &(env_name, _) in FREE_ENV_KEY_MAP {
             std::env::remove_var(env_name);
         }
         std::env::remove_var("ADE_IMPORT_ENV_KEYS");
