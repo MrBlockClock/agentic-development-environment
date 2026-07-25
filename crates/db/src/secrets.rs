@@ -532,14 +532,11 @@ fn collect_env_provider_secrets() -> Vec<(String, String)> {
         if by_provider.contains_key(provider) {
             continue;
         }
-        match std::env::var(env_name) {
-            Ok(value) => {
-                let trimmed = value.trim();
-                if !trimmed.is_empty() {
-                    by_provider.insert(provider.to_owned(), trimmed.to_owned());
-                }
+        if let Ok(value) = std::env::var(env_name) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                by_provider.insert(provider.to_owned(), trimmed.to_owned());
             }
-            Err(_) => {}
         }
     }
     for (key, value) in std::env::vars() {
