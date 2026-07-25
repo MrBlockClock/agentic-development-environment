@@ -26,7 +26,7 @@ Thumbs.db
 *.pem
 *.key
 
-# ADE local state
+# ADE local state (runtime / dogfood — keep .ade/skills tracked)
 .ade/handoff/
 .ade/chat/
 .ade/goals/
@@ -38,7 +38,17 @@ Thumbs.db
 .ade/plugins/
 .ade/tasks/
 .ade/artifacts/
+.ade/continuity/
+.ade/dogfood/
+.ade/plan/
+.ade/verify/
+.ade/verify-*.json
+.ade/recipe.json
+.ade/handoff-*.md
 **/agent-transcripts/
+
+# Editor local (Zed / Cursor mirrors that are machine-local)
+.zed/
 
 # Per-environment data directories (local/staging/production).
 # Unanchored: the data dir is created relative to the cwd, so launching
