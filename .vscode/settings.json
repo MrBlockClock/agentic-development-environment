@@ -1,6 +1,7 @@
 {
   "rust-analyzer.linkedProjects": ["Cargo.toml"],
   "rust-analyzer.check.command": "check",
+  "rust-analyzer.check.workspace": false,
   "rust-analyzer.cargo.allFeatures": false,
   "rust-analyzer.files.excludeDirs": [
     "../ade-target",

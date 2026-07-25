@@ -1,6 +1,6 @@
 use ade_core::error::AdeError;
 use keyring::{Entry, Error as KeyringError};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -487,27 +487,28 @@ const FREE_ENV_KEY_MAP: &[(&str, &str)] = &[
 
 /// Env vars that are present (never returns secret values).
 pub fn list_env_key_candidates() -> Vec<(String, String)> {
-    let mut seen = std::collections::BTreeSet::<String>::new();
-    let mut out = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<(String, String)> = Vec::new();
     for &(env_name, provider) in FREE_ENV_KEY_MAP {
         if seen.contains(provider) {
             continue;
         }
-        if let Ok(value) = std::env::var(env_name) {
-            if !value.trim().is_empty() {
-                seen.insert(provider.to_string());
-                out.push((provider.to_string(), env_name.to_string()));
+        match std::env::var(env_name) {
+            Ok(value) if !value.trim().is_empty() => {
+                seen.insert(provider.to_owned());
+                out.push((provider.to_owned(), env_name.to_owned()));
             }
+            _ => {}
         }
     }
     for (key, value) in std::env::vars() {
         let Some(rest) = key.as_str().strip_prefix("ADE_") else {
             continue;
         };
-        let Some(provider) = rest.strip_suffix("_API_KEY") else {
+        let Some(raw_provider) = rest.strip_suffix("_API_KEY") else {
             continue;
         };
-        let provider = provider.to_ascii_lowercase().replace('_', "-");
+        let provider = raw_provider.to_ascii_lowercase().replace('_', "-");
         if provider.is_empty() || value.trim().is_empty() || seen.contains(&provider) {
             continue;
         }
@@ -523,25 +524,28 @@ fn collect_env_provider_secrets() -> Vec<(String, String)> {
         if by_provider.contains_key(provider) {
             continue;
         }
-        if let Ok(value) = std::env::var(env_name) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                by_provider.insert(provider.to_string(), trimmed.to_string());
+        match std::env::var(env_name) {
+            Ok(value) => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    by_provider.insert(provider.to_owned(), trimmed.to_owned());
+                }
             }
+            Err(_) => {}
         }
     }
     for (key, value) in std::env::vars() {
         let Some(rest) = key.as_str().strip_prefix("ADE_") else {
             continue;
         };
-        let Some(provider) = rest.strip_suffix("_API_KEY") else {
+        let Some(raw_provider) = rest.strip_suffix("_API_KEY") else {
             continue;
         };
-        let provider = provider.to_ascii_lowercase().replace('_', "-");
+        let provider = raw_provider.to_ascii_lowercase().replace('_', "-");
         if provider.is_empty() || value.trim().is_empty() || by_provider.contains_key(&provider) {
             continue;
         }
-        by_provider.insert(provider, value.trim().to_string());
+        by_provider.insert(provider, value.trim().to_owned());
     }
     by_provider.into_iter().collect()
 }
