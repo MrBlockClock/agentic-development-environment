@@ -205,7 +205,7 @@ Already in harness:
 4. `@` mention palette: files in workspace (ripgrep/path) + MCP tools  
 
 ### Sprint C — Connections hub
-1. Setup → **Connections** nav (MCP + future GitHub)  
+1. Setup → **Integrations** nav (MCP + GitHub / GitLab / Stripe / Azure + recipes) ✅  
 2. URL chip + optional fetch-to-inbox  
 3. Ticket URL parse (GitHub first)
 

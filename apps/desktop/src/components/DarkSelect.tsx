@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 export type DarkSelectOption = {
   value: string;
@@ -28,7 +29,8 @@ type DarkSelectProps = {
 /**
  * Custom select so the open menu matches ADE’s dark chrome.
  * Native &lt;select&gt; popups on Windows stay OS-light and wash out the composer.
- * Menu uses fixed positioning so narrow / overflow-hidden parents cannot clip it.
+ * Menu portals to document.body with fixed coords from the trigger only — never
+ * measure a root that still contains an in-flow menu (that parks the panel mid-chat).
  */
 export function DarkSelect({
   ariaLabel,
@@ -40,15 +42,23 @@ export function DarkSelect({
   maxLabelChars = 28,
 }: DarkSelectProps) {
   const [open, setOpen] = useState(false);
-  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({
+    position: "fixed",
+    visibility: "hidden",
+  });
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
   useLayoutEffect(() => {
-    if (!open || !rootRef.current) return;
+    if (!open) {
+      setMenuStyle({ position: "fixed", visibility: "hidden" });
+      return;
+    }
+    if (!triggerRef.current) return;
     const place = () => {
-      const rect = rootRef.current!.getBoundingClientRect();
+      const rect = triggerRef.current!.getBoundingClientRect();
       const pad = 8;
       // Keep menus out from under the fixed/static sidebar (~15.5rem).
       const sidebarSafe = 248;
@@ -70,6 +80,7 @@ export function DarkSelect({
           bottom: window.innerHeight - rect.top + 6,
           top: "auto",
           maxHeight: Math.min(224, Math.max(120, spaceAbove)),
+          visibility: "visible",
         });
       } else {
         setMenuStyle({
@@ -79,6 +90,7 @@ export function DarkSelect({
           top: rect.bottom + 6,
           bottom: "auto",
           maxHeight: Math.min(224, Math.max(120, spaceBelow)),
+          visibility: "visible",
         });
       }
     };
@@ -89,7 +101,7 @@ export function DarkSelect({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open]);
+  }, [open, options.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -122,9 +134,60 @@ export function DarkSelect({
 
   const groups = groupOptions(options);
 
+  const menu =
+    open &&
+    createPortal(
+      <div
+        ref={menuRef}
+        id={listId}
+        role="listbox"
+        aria-label={ariaLabel}
+        style={menuStyle}
+        className="z-[80] overflow-y-auto rounded-lg border border-white/12 bg-[#121820] py-1 shadow-lg"
+      >
+        {groups.map((group) => (
+          <div key={group.name ?? "default"}>
+            {group.name && (
+              <div className="px-2.5 pb-0.5 pt-1.5 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
+                {group.name}
+              </div>
+            )}
+            {group.items.map((opt) => {
+              const active = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  title={opt.label}
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center px-2.5 py-1.5 text-left text-[11px] transition ${
+                    active
+                      ? "bg-blue-500/20 text-blue-100"
+                      : "text-slate-300 hover:bg-white/6 hover:text-slate-100"
+                  }`}
+                >
+                  <span className="truncate font-mono">{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+        {options.length === 0 && (
+          <div className="px-2.5 py-2 text-[11px] text-slate-500">No options</div>
+        )}
+      </div>,
+      document.body,
+    );
+
   return (
     <div ref={rootRef} className={`relative inline-flex shrink-0 ${className}`}>
       <button
+        ref={triggerRef}
         type="button"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
@@ -142,52 +205,7 @@ export function DarkSelect({
           ▾
         </span>
       </button>
-      {open && (
-        <div
-          ref={menuRef}
-          id={listId}
-          role="listbox"
-          aria-label={ariaLabel}
-          style={menuStyle}
-          className="z-[80] overflow-y-auto rounded-lg border border-white/12 bg-[#121820] py-1"
-        >
-          {groups.map((group) => (
-            <div key={group.name ?? "default"}>
-              {group.name && (
-                <div className="px-2.5 pb-0.5 pt-1.5 text-[9px] font-semibold uppercase tracking-wider text-slate-600">
-                  {group.name}
-                </div>
-              )}
-              {group.items.map((opt) => {
-                const active = opt.value === value;
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    role="option"
-                    aria-selected={active}
-                    title={opt.label}
-                    onClick={() => {
-                      onChange(opt.value);
-                      setOpen(false);
-                    }}
-                    className={`flex w-full items-center px-2.5 py-1.5 text-left text-[11px] transition ${
-                      active
-                        ? "bg-blue-500/20 text-blue-100"
-                        : "text-slate-300 hover:bg-white/6 hover:text-slate-100"
-                    }`}
-                  >
-                    <span className="truncate font-mono">{opt.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-          {options.length === 0 && (
-            <div className="px-2.5 py-2 text-[11px] text-slate-500">No options</div>
-          )}
-        </div>
-      )}
+      {menu}
     </div>
   );
 }

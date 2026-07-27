@@ -16,6 +16,7 @@ export type AdeCapability =
   | "agent_turns"
   | "provider_keys"
   | "mcp_host"
+  | "integrations"
   | "execute_plan"
   | "recipe_initialize"
   | "in_app_browser"
@@ -97,6 +98,13 @@ export const ADE_CAPABILITY_MATRIX: CapabilityRow[] = [
     note: "Process-hosted connections",
   },
   {
+    id: "integrations",
+    label: "Integrations hub",
+    desktop: true,
+    browser: false,
+    note: "Standing connectors (GitHub, GitLab, Stripe, Azure, …) + MCP recipes; OS vault",
+  },
+  {
     id: "execute_plan",
     label: "Approve & execute plan",
     desktop: true,
@@ -152,6 +160,7 @@ export function capabilityAvailable(
 /** Views that must show a Desktop funnel in browser preview. */
 export const DESKTOP_REQUIRED_VIEWS = new Set([
   "Keys",
+  "Integrations",
   "MCP",
   "Browser",
   "Terminal",
@@ -170,6 +179,12 @@ export function desktopRequiredCopy(view: string): {
         title: "Keys need Desktop",
         body: "Provider credentials are stored in the OS vault. Browser preview cannot save or smoke-test API keys.",
         next: "Open ADE Desktop → Keys, then return here for status and checks.",
+      };
+    case "Integrations":
+      return {
+        title: "Integrations need Desktop",
+        body: "Connector tokens and MCP recipes use the Desktop OS vault and process-hosted MCP.",
+        next: "Open ADE Desktop → Setup → Integrations.",
       };
     case "MCP":
       return {

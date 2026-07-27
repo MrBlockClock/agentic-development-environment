@@ -78,7 +78,7 @@ Standard rather than bouncing to Home — reveal on demand, never a dead end.
 ## Nav IA (usage order)
 
 1. **Work:** Home (composer + agent)
-2. **Setup:** Environment · Keys · Stack · Test project — amber/green lights
+2. **Setup:** Environment · Keys · **Integrations** · Stack · Test project — amber/green lights
 3. **Context:** Workspaces · **Insight** · **Terminal** · **Browser**
 4. **More:** Guidance (+ Debug: Editor · MCP)
 5. **Footer:** Debug toggle · Settings gear
@@ -93,6 +93,7 @@ as a sub-tab — the research pack refuses nine-way equal nav.
 | **Home** | Ask ADE / Suggest / Apply in the *attached* folder |
 | **Environment** | First-run readiness checklist for *this* folder |
 | **Keys** | Save an API key (under Setup) |
+| **Integrations** | Standing connectors (GitHub, GitLab, Stripe, Azure, MCP recipes) + host tools |
 | **Stack** | Pick a project recipe (under Setup) |
 | **Test project** | Run build/lint/test gates — not chat |
 | **Workspaces** | New / Open / Default / **Open in Zed** (non-Default) |
@@ -123,7 +124,7 @@ Each fact has exactly one analytical home:
 | Tier | Nav | In-page default |
 |------|-----|-----------------|
 | 0 Work | Home | Composer/Go; Suggest/Apply; Auto model; feed |
-| 1 Setup | Environment, Keys, Stack, Test project | Status lights; gaps / one CTA |
+| 1 Setup | Environment, Keys, Integrations, Stack, Test project | Status lights; gaps / one CTA |
 | 1 Context | Workspaces, Insight, Terminal, Browser | Insight opens on the remembered sub-tab (Trust first run) |
 | 2 More | Guidance | Browse collapsed |
 | Footer | Debug toggle · Settings | Compact; Debug off by default |

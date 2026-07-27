@@ -30,9 +30,11 @@ export function DesktopRequired({
           <li>
             {view === "Keys"
               ? "Add your provider key, then use Agent in Desktop"
-              : view === "MCP"
-                ? "Connect MCP servers in Desktop"
-                : "Run Agent turns in Desktop; keep Verify here if you like"}
+              : view === "Integrations"
+                ? "Connect GitHub / Stripe / MCP recipes in Desktop"
+                : view === "MCP"
+                  ? "Connect MCP servers in Desktop"
+                  : "Run Agent turns in Desktop; keep Verify here if you like"}
           </li>
         </ol>
         {!simpleMode && (

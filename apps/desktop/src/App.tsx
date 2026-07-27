@@ -57,6 +57,7 @@ import {
 } from "./components/DesktopRequired";
 import { ProviderSelect } from "./components/ModelPicker";
 import { ComposerModelSelect } from "./components/ComposerModelSelect";
+import { IntegrationsView } from "./components/IntegrationsView";
 import {
   Chip,
   Disclosure,
@@ -331,6 +332,12 @@ const navGroups: NavGroup[] = [
         setupKey: "environment",
       },
       { id: "Keys", label: "Keys", icon: "◈", desktopOnly: true, setupKey: "keys" },
+      {
+        id: "Integrations",
+        label: "Integrations",
+        icon: "⧉",
+        desktopOnly: true,
+      },
       { id: "Recipes", label: "Stack", icon: "▦", setupKey: "recipes" },
       { id: "Verify", label: "Test project", icon: "✓", setupKey: "verify" },
     ],
@@ -1128,7 +1135,7 @@ function App() {
   }, [dashboard?.workspace_root]);
 
   useEffect(() => {
-    if (activeView === "MCP") {
+    if (activeView === "MCP" || activeView === "Integrations") {
       void refreshMcp();
     }
   }, [activeView, refreshMcp]);
@@ -2202,6 +2209,7 @@ function App() {
                             onContinueHandoff={() => void continueLastHandoff()}
                             onClearTranscript={() => setAgentEvents([])}
                             onOpenKeys={() => openNavView("Keys")}
+                            onOpenIntegrations={() => openNavView("Integrations")}
                             tasks={dashboard.tasks ?? []}
                             planPhaseCount={dashboard.plan.phases.length}
                             onRefresh={() => void refresh()}
@@ -2395,6 +2403,25 @@ function App() {
                   onContinueToAgent={() => openNavView("Home")}
                 />
               )}
+              {activeView === "Integrations" && (
+                <IntegrationsView
+                  mcpServers={mcpServers}
+                  mcpToolCount={mcpTools.length}
+                  onOpenKeys={() => openNavView("Keys")}
+                  onOpenMcp={() => {
+                    setSurfaceModePersisted("dev");
+                    openNavView("MCP");
+                  }}
+                  onOpenView={(view) => {
+                    if (view === "MCP") {
+                      setSurfaceModePersisted("dev");
+                    }
+                    openNavView(view);
+                  }}
+                  onConnectMcp={(input) => void connectMcp(input)}
+                  onRefreshMcp={() => void refreshMcp()}
+                />
+              )}
               {INSIGHT_IDS.has(activeView) && (
                 <div
                   className={
@@ -2473,7 +2500,10 @@ function App() {
                 />
               )}
               {activeView === "Settings" && (
-                <SettingsView onOpenKeys={() => setActiveView("Keys")} />
+                <SettingsView
+                  onOpenKeys={() => setActiveView("Keys")}
+                  onOpenIntegrations={() => openNavView("Integrations")}
+                />
               )}
               {activeView === "MCP" && (
                 <McpView
@@ -3938,7 +3968,7 @@ function Overview({
 function AgentView({
   events,
   busy,
-  connectedTools: _connectedTools,
+  connectedTools,
   onRun,
   initialPrompt = "",
   autoSubmit = false,
@@ -3961,6 +3991,7 @@ function AgentView({
   onContinueHandoff,
   onClearTranscript,
   onOpenKeys,
+  onOpenIntegrations,
   tasks = [],
   planPhaseCount = 0,
   onRefresh,
@@ -3994,6 +4025,7 @@ function AgentView({
   onContinueHandoff?: () => void;
   onClearTranscript?: () => void;
   onOpenKeys?: () => void;
+  onOpenIntegrations?: () => void;
   tasks?: AgentTask[];
   planPhaseCount?: number;
   onRefresh?: () => void;
@@ -6191,6 +6223,51 @@ function AgentView({
           </div>
         </Disclosure>
       )}
+
+      <Disclosure
+        title="Tools"
+        subtitle="What this turn may call — host FS/shell/web plus connected MCP"
+        summary={
+          connectedTools > 0
+            ? `${connectedTools} MCP · ${shellScope === "home" ? "Home" : "Workspace"} shell`
+            : `Host tools · ${shellScope === "home" ? "Home" : "Workspace"} shell`
+        }
+        hint="Integrations are standing connectors (GitHub, Stripe, …). Tools are what the model can invoke this turn."
+        storageKey="ade_composer_tools"
+        className="shrink-0"
+      >
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[10px] text-slate-300">
+            FS · Shell · Web
+          </span>
+          <span className="rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[10px] text-slate-300">
+            Shell: {shellScope === "home" ? "Home" : "Workspace"}
+          </span>
+          <span className="rounded-md border border-violet-400/25 bg-violet-500/10 px-2 py-1 text-[10px] text-violet-100">
+            {connectedTools > 0
+              ? `${connectedTools} MCP tool${connectedTools === 1 ? "" : "s"}`
+              : "No MCP connected"}
+          </span>
+          {onOpenIntegrations && (
+            <button
+              type="button"
+              onClick={onOpenIntegrations}
+              className="rounded-md border border-blue-400/30 bg-blue-500/15 px-2 py-1 text-[10px] font-semibold text-blue-100 hover:bg-blue-500/25"
+            >
+              Integrations
+            </button>
+          )}
+          {onOpenKeys && (
+            <button
+              type="button"
+              onClick={onOpenKeys}
+              className="rounded-md border border-white/10 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-white/5"
+            >
+              Keys
+            </button>
+          )}
+        </div>
+      </Disclosure>
 
       <div
         className={`shrink-0 rounded-2xl border bg-[#141a22] ${

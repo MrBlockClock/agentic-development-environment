@@ -103,7 +103,7 @@ Home            ← work           Trust      what happened · is it safe
   ├ workspaces rail              Analytics  what did it cost · did it work
   └ sessions rail                Plan Map   what is planned      (Debug)
 Setup ▾         ← first run      Atlas      how it all relates   (Debug)
-  Environment · Keys
+  Environment · Keys · Integrations
   Stack · Test project
 Insight         ← looking
 More ▾          ← rare

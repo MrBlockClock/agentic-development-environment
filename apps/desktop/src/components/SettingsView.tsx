@@ -21,6 +21,7 @@ type EffortLevel = "low" | "medium" | "high";
 
 type SettingsViewProps = {
   onOpenKeys: () => void;
+  onOpenIntegrations?: () => void;
 };
 
 function readAutonomy(): AutonomyLevel {
@@ -40,7 +41,7 @@ function readEffort(): EffortLevel {
  * Tier 0: write mode + spend caps.
  * Tier 1: composer defaults + Keys jump.
  */
-export function SettingsView({ onOpenKeys }: SettingsViewProps) {
+export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewProps) {
   const [autonomy, setAutonomy] = useState<AutonomyLevel>(readAutonomy);
   const [effort, setEffort] = useState<EffortLevel>(readEffort);
   const [sessionCap, setSessionCap] = useState(
@@ -284,6 +285,24 @@ export function SettingsView({ onOpenKeys }: SettingsViewProps) {
           </div>
           <span className="text-[11px] font-semibold text-blue-300">Open →</span>
         </button>
+
+        {onOpenIntegrations && (
+          <button
+            type="button"
+            onClick={onOpenIntegrations}
+            className="flex w-full items-center justify-between rounded-lg border border-white/8 bg-white/2 px-3 py-2.5 text-left transition hover:border-white/15 hover:bg-white/4"
+          >
+            <div>
+              <div className="text-[12px] font-medium text-slate-200">
+                Integrations
+              </div>
+              <div className="text-[10px] text-slate-500">
+                GitHub, GitLab, Stripe, Azure, MCP recipes
+              </div>
+            </div>
+            <span className="text-[11px] font-semibold text-blue-300">Open →</span>
+          </button>
+        )}
       </section>
     </div>
   );
