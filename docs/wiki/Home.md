@@ -1,8 +1,13 @@
+---
+layout: default
+title: Home
+---
+
 # ADE Wiki
 
 Welcome to the **Agent Development Environment** documentation.
 
-ADE is a **local harness OS** for agentic software engineering — Rust brain, Tauri Desktop control plane, CLI + optional Zed (ACP). Not an IDE fork.
+ADE is a **local harness OS** for agentic software engineering â€” Rust brain, Tauri Desktop control plane, CLI + optional Zed (ACP). Not an IDE fork.
 
 ## Start here
 
@@ -16,7 +21,7 @@ ADE is a **local harness OS** for agentic software engineering — Rust brain, T
 
 ## One-liner
 
-> Honest budgets · verify-as-truth · safe Apply · Continuity — one ADE brain, many hosts.
+> Honest budgets Â· verify-as-truth Â· safe Apply Â· Continuity â€” one ADE brain, many hosts.
 
 ## Repo
 
@@ -26,4 +31,4 @@ ADE is a **local harness OS** for agentic software engineering — Rust brain, T
 
 ## Status
 
-Actively dogfooded. Mission Control and a full Zed fork are **deferred** — see the [Master Gameplan](https://github.com/MrBlockClock/agentic-development-environment/blob/main/docs/research/ADE-Master-Gameplan.md) for the honest roadmap.
+Actively dogfooded. Mission Control and a full Zed fork are **deferred** â€” see the [Master Gameplan](https://github.com/MrBlockClock/agentic-development-environment/blob/main/docs/research/ADE-Master-Gameplan.md) for the honest roadmap.

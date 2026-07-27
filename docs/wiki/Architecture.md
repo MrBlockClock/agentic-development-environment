@@ -1,16 +1,21 @@
+---
+layout: default
+title: Architecture
+---
+
 # Architecture
 
 ADE is **one Rust agent OS** (harness). Editors and UIs are **hosts**, not forks inside this repo.
 
 ```
-                 ┌─────────────────────────┐
-                 │   ADE harness (crates)  │
-                 │  agents · workflow · $  │
-                 └───────────┬─────────────┘
-        ┌────────────────────┼────────────────────┐
-        ▼                    ▼                    ▼
+                 â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                 â”‚   ADE harness (crates)  â”‚
+                 â”‚  agents Â· workflow Â· $  â”‚
+                 â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+        â–¼                    â–¼                    â–¼
  apps/cli + acp        apps/desktop         hosts/* (docs)
- `ade` / `ade acp`     Tauri control plane  Zed · …
+ `ade` / `ade acp`     Tauri control plane  Zed Â· â€¦
 ```
 
 ## Crates (brain)
@@ -29,7 +34,7 @@ ADE is **one Rust agent OS** (harness). Editors and UIs are **hosts**, not forks
 
 | App | Role |
 |-----|------|
-| `apps/desktop` | Control plane — composer, Trust, Analytics, Integrations |
+| `apps/desktop` | Control plane â€” composer, Trust, Analytics, Integrations |
 | `apps/cli` | `ade` CLI including `ade acp` for Zed |
 
 ## Canonical docs

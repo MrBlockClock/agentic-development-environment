@@ -1,0 +1,9 @@
+title: ADE
+description: Agent Development Environment — local harness OS for agentic software engineering
+theme: jekyll-theme-cayman
+show_downloads: false
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: true

@@ -1,3 +1,8 @@
+---
+layout: default
+title: Getting Started
+---
+
 # Getting Started
 
 ## Prerequisites
@@ -14,7 +19,7 @@ cd agentic-development-environment
 cp .env.example .env
 ```
 
-Do **not** commit secrets. Prefer Desktop → **Keys** (OS vault) for provider credentials.
+Do **not** commit secrets. Prefer Desktop â†’ **Keys** (OS vault) for provider credentials.
 
 ## Rust golden path
 
@@ -40,8 +45,8 @@ npm run tauri dev
 Vite serves **`http://127.0.0.1:1420`**. Keep the terminal open.
 
 1. Attach a workspace folder  
-2. **Setup → Keys** — add a provider key  
-3. **Home** — Suggest first; Apply when you have a contract  
+2. **Setup â†’ Keys** â€” add a provider key  
+3. **Home** â€” Suggest first; Apply when you have a contract  
 
 ## In-repo guide
 
