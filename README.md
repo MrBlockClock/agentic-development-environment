@@ -9,7 +9,7 @@ ADE runs the agent loop with **honest spend**, **verify-as-truth**, **leases / I
 
 | | |
 |--|--|
-| **Wiki** | [Documentation site](https://github.com/MrBlockClock/agentic-development-environment/wiki) |
+| **Docs site** | [mrblockclock.github.io/…/ade](https://mrblockclock.github.io/agentic-development-environment/) |
 | **Stack** | Rust workspace · Tauri Desktop · React · MCP · OS key vault |
 | **Autonomy** | Suggest → Apply → Automate (with verify gates) |
 
@@ -25,7 +25,7 @@ Most “agent IDEs” optimize chat chrome. ADE optimizes the **harness**:
 - **Continuity** — handoff capsules + thrift resume (no paste theater)  
 - **Multi-host** — one brain, many eyes (Desktop control plane; Zed optional)
 
-Deep dive: [docs/research/ADE-Master-Gameplan.md](docs/research/ADE-Master-Gameplan.md) · [Wiki Home](https://github.com/MrBlockClock/agentic-development-environment/wiki)
+Deep dive: [docs/research/ADE-Master-Gameplan.md](docs/research/ADE-Master-Gameplan.md) · [Docs site](https://mrblockclock.github.io/agentic-development-environment/)
 
 ---
 
@@ -56,7 +56,7 @@ npm run tauri dev             # Vite on http://127.0.0.1:1420 + ADE window
 cargo run -p ade-cli -- --help
 ```
 
-Full guide: [docs/guides/getting-started.md](docs/guides/getting-started.md) · [Wiki · Getting Started](https://github.com/MrBlockClock/agentic-development-environment/wiki/Getting-Started)
+Full guide: [docs/guides/getting-started.md](docs/guides/getting-started.md) · [Docs · Getting Started](https://mrblockclock.github.io/agentic-development-environment/guides/getting-started.html)
 
 ---
 
@@ -101,7 +101,7 @@ Surface plan: [docs/platform/ADE_SURFACE_GAMEPLAN.md](docs/platform/ADE_SURFACE_
 | Risk HITL | Secrets / infra / migrate / publish need confirm even under Automate |
 | Verify | Automate expects verify-on-complete; Trust owns the audit trail |
 
-Details: [Wiki · Safety and Spend](https://github.com/MrBlockClock/agentic-development-environment/wiki/Safety-and-Spend) · `AGENTS.md`
+Details: [Docs · Safety and Spend](https://mrblockclock.github.io/agentic-development-environment/wiki/Safety-and-Spend.html) · `AGENTS.md`
 
 ---
 
@@ -109,7 +109,7 @@ Details: [Wiki · Safety and Spend](https://github.com/MrBlockClock/agentic-deve
 
 | Doc | Purpose |
 |-----|---------|
-| [Wiki](https://github.com/MrBlockClock/agentic-development-environment/wiki) | Polished entry + guides |
+| [Docs site](https://mrblockclock.github.io/agentic-development-environment/) | Polished entry + guides |
 | [Getting started](docs/guides/getting-started.md) | Build, Desktop, CLI |
 | [Architecture](docs/architecture/REPO_LAYOUT.md) | Multi-host layout |
 | [Master gameplan](docs/research/ADE-Master-Gameplan.md) | What shipped / why |
