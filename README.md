@@ -9,7 +9,7 @@ ADE runs the agent loop with **honest spend**, **verify-as-truth**, **leases / I
 
 | | |
 |--|--|
-| **Docs site** | [mrblockclock.github.io/…/ade](https://mrblockclock.github.io/agentic-development-environment/) |
+| **Docs site** | [mrblockclock.github.io/agentic-development-environment](https://mrblockclock.github.io/agentic-development-environment/) |
 | **Stack** | Rust workspace · Tauri Desktop · React · MCP · OS key vault |
 | **Autonomy** | Suggest → Apply → Automate (with verify gates) |
 
