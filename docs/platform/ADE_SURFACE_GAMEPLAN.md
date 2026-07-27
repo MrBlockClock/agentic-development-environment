@@ -1,3 +1,8 @@
+---
+layout: default
+title: ADE SURFACE GAMEPLAN
+---
+
 # ADE Surface Gameplan — Atlas, Analytics, and a Cleaner Desktop
 
 **Schema:** `ade.surface-gameplan/v1`

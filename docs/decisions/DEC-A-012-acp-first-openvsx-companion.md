@@ -1,3 +1,8 @@
+---
+layout: default
+title: DEC-A-012-acp-first-openvsx-companion
+---
+
 # DEC-A-012 — ACP first (Open VSX companion retired)
 
 - **Status:** Superseded by DEC-A-013 (2026-07-23)

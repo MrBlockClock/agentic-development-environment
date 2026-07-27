@@ -1,3 +1,8 @@
+---
+layout: default
+title: DEC-A-011-repo-layout
+---
+
 # DEC-A-011 — Repository layout (evolutionary)
 
 - **Status:** Accepted

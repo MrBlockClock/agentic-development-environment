@@ -1,3 +1,8 @@
+---
+layout: default
+title: Composer Media Tools Integrations
+---
+
 # ADE Composer — Media, Connections, Tools & Integrations Gameplan
 
 **Date:** 2026-07-23  

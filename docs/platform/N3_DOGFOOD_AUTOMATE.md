@@ -1,3 +1,8 @@
+---
+layout: default
+title: N3 DOGFOOD AUTOMATE
+---
+
 # N3 — Dogfood Automate acceptance
 
 **Schema:** `ade.n3-dogfood/v1`  

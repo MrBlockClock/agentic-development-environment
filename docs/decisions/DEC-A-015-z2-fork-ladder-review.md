@@ -1,3 +1,8 @@
+---
+layout: default
+title: DEC-A-015-z2-fork-ladder-review
+---
+
 # DEC-A-015 — Z2 fork-ladder review (post soft shell)
 
 - **Status:** Accepted  

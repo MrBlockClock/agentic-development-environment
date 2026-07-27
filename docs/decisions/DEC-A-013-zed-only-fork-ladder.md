@@ -1,3 +1,8 @@
+---
+layout: default
+title: DEC-A-013-zed-only-fork-ladder
+---
+
 # DEC-A-013 — Zed-only hosts; fork ladder (gated)
 
 - **Status:** Accepted

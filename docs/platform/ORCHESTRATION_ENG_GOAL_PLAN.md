@@ -1,3 +1,8 @@
+---
+layout: default
+title: ORCHESTRATION ENG GOAL PLAN
+---
+
 # ADE Orchestration → Eng-Goal Product Plan
 
 **Schema:** `ade.orch-eng-goal/v1`  

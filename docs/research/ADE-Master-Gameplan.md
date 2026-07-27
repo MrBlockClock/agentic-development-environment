@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Master Gameplan
 pdf_options:
   format: Letter
   margin: 14mm

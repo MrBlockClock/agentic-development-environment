@@ -109,7 +109,8 @@ Details: [Docs · Safety and Spend](https://mrblockclock.github.io/agentic-devel
 
 | Doc | Purpose |
 |-----|---------|
-| [Docs site](https://mrblockclock.github.io/agentic-development-environment/) | Polished entry + guides |
+| [Docs site](https://mrblockclock.github.io/agentic-development-environment/) | Full wiki — guides, **studies**, platform, ADRs |
+| [Research & studies](https://mrblockclock.github.io/agentic-development-environment/research/) | Market, tokenomics, compaction, master gameplan |
 | [Getting started](docs/guides/getting-started.md) | Build, Desktop, CLI |
 | [Architecture](docs/architecture/REPO_LAYOUT.md) | Multi-host layout |
 | [Master gameplan](docs/research/ADE-Master-Gameplan.md) | What shipped / why |

@@ -1,4 +1,6 @@
 ---
+layout: default
+title: What ADE Could Do
 pdf_options:
   format: Letter
   margin: 15mm

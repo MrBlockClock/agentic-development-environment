@@ -1,3 +1,8 @@
+---
+layout: default
+title: COMPETITIVE RESEARCH PACK
+---
+
 # ADE Competitive Research Pack (Jul 2026)
 
 Companion canvases were lean-cleaned into `canvases/_archive/` (recoverable). Live board: `ADE-master-gameplan.canvas.tsx`.

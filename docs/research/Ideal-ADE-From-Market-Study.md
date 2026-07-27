@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Ideal ADE From Market Study
 pdf_options:
   format: Letter
   margin: 15mm

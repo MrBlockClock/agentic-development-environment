@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Agents Meet Humans
 pdf_options:
   format: Letter
   margin: 15mm

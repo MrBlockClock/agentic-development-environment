@@ -1,3 +1,8 @@
+---
+layout: default
+title: ARCHITECTURE SYNTHESIS
+---
+
 # ADE Architecture Synthesis
 
 **Schema:** `ade.architecture/synthesis-v1`

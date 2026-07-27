@@ -1,3 +1,8 @@
+---
+layout: default
+title: IDEAL ADE DEVELOPMENT PLAN
+---
+
 # Ideal ADE Development Plan
 
 **Schema:** `ade.ideal-dev-plan/v1`  

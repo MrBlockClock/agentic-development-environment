@@ -1,3 +1,8 @@
+---
+layout: default
+title: IDEAL ADE MASTERPLAN
+---
+
 # Ideal ADE Masterplan
 
 **Schema:** `ade.ideal-masterplan/v1`  

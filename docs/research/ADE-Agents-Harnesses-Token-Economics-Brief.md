@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Agents, Harnesses & Amplification
 pdf_options:
   format: Letter
   margin: 18mm

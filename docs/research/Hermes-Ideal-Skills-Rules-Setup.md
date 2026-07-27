@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Ideal Hermes Skills and Rules
 pdf_options:
   format: Letter
   margin: 14mm

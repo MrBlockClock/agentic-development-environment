@@ -1,3 +1,8 @@
+---
+layout: default
+title: ADE GUIDANCE ATLAS PLAN MAP
+---
+
 # ADE Guidance, Atlas, and Plan Map
 
 **Schema:** `ade.guidance-atlas-plan/v1`  

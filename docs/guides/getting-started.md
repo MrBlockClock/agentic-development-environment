@@ -1,3 +1,8 @@
+---
+layout: default
+title: Getting Started
+---
+
 # Getting started with ADE
 
 ADE is a **local Agent Development Environment**: Rust harness + Tauri Desktop control plane + CLI. This guide gets you building and running on a developer machine.

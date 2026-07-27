@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Human-Agent Habits Deep Dive
 pdf_options:
   format: Letter
   margin: 16mm

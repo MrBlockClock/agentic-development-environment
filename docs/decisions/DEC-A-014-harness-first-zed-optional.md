@@ -1,3 +1,8 @@
+---
+layout: default
+title: DEC-A-014-harness-first-zed-optional
+---
+
 # DEC-A-014 — Harness-first; Zed host is optional path
 
 - **Status:** Accepted

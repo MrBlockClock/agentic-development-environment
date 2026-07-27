@@ -1,3 +1,8 @@
+---
+layout: default
+title: Repository Layout
+---
+
 # ADE repository layout (multi-host)
 
 **Schema:** `ade.repo-layout/v1`  

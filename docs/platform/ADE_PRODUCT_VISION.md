@@ -1,3 +1,8 @@
+---
+layout: default
+title: ADE PRODUCT VISION
+---
+
 # ADE Product Vision: End-Goal & System Design
 
 **Schema:** `ade.product-vision/v1`

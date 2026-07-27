@@ -1,3 +1,8 @@
+---
+layout: default
+title: ADE STACK FIT
+---
+
 # ADE Stack Fit
 
 **Schema:** `ade.stack-fit/v1`  

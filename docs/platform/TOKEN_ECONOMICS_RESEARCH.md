@@ -1,3 +1,8 @@
+---
+layout: default
+title: TOKEN ECONOMICS RESEARCH
+---
+
 # Economic Tokenization — Science, Evidence, ADE Mapping
 
 **Schema:** `ade.token-econ-research/v1`  

@@ -1,3 +1,8 @@
+---
+layout: default
+title: DEC-A-010-multi-host-agent-os
+---
+
 # DEC-A-010 — Multi-host Agent OS
 
 - **Status:** Accepted (amended 2026-07-23 by DEC-A-013)

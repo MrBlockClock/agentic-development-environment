@@ -1,3 +1,8 @@
+---
+layout: default
+title: EFFORT TURN BUDGET PLAN
+---
+
 # Effort / Turn Budget Honesty Plan
 
 **Schema:** `ade.effort-budget/v1`  

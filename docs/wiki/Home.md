@@ -1,34 +1,23 @@
 ---
 layout: default
-title: Home
+title: ADE Wiki Home
 ---
 
 # ADE Wiki
 
-Welcome to the **Agent Development Environment** documentation.
+**A local harness OS for agentic software engineering** — not an IDE fork.
 
-ADE is a **local harness OS** for agentic software engineering â€” Rust brain, Tauri Desktop control plane, CLI + optional Zed (ACP). Not an IDE fork.
+→ **[Full docs site home](../)** (guides · studies · platform · ADRs)
 
-## Start here
+## Quick links
 
-| Page | For |
-|------|-----|
-| [[Getting-Started]] | Clone, build, Desktop, CLI |
-| [[Architecture]] | Multi-host layout & crates |
-| [[Desktop]] | Product surface (Home, Setup, Insight, Integrations) |
-| [[Safety-and-Spend]] | BYOK, caps, risk HITL, verify |
-| [[Contributing]] | PR / quality bar |
+- [[Getting-Started]]
+- [[Architecture]]
+- [[Desktop]]
+- [[Safety-and-Spend]]
+- [[Studies]]
+- [[Contributing]]
 
 ## One-liner
 
-> Honest budgets Â· verify-as-truth Â· safe Apply Â· Continuity â€” one ADE brain, many hosts.
-
-## Repo
-
-- Source: [agentic-development-environment](https://github.com/MrBlockClock/agentic-development-environment)
-- License: MIT
-- Contract: [`AGENTS.md`](https://github.com/MrBlockClock/agentic-development-environment/blob/main/AGENTS.md)
-
-## Status
-
-Actively dogfooded. Mission Control and a full Zed fork are **deferred** â€” see the [Master Gameplan](https://github.com/MrBlockClock/agentic-development-environment/blob/main/docs/research/ADE-Master-Gameplan.md) for the honest roadmap.
+> Quality ≈ **model × harness × human process**. ADE owns the harness.

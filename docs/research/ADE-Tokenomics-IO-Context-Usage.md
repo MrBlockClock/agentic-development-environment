@@ -1,4 +1,6 @@
 ---
+layout: default
+title: ADE Tokenomics
 pdf_options:
   format: Letter
   margin: 15mm

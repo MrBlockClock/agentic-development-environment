@@ -1,3 +1,8 @@
+---
+layout: default
+title: G4 DOGFOOD ISOLATE APPLY
+---
+
 # G4 — Dogfood Isolate Apply
 
 **Schema:** `ade.g4-isolate-dogfood/v1`  

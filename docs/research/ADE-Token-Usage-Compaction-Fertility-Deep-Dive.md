@@ -1,4 +1,6 @@
 ---
+layout: default
+title: Compaction & Fertility
 pdf_options:
   format: Letter
   margin: 14mm
