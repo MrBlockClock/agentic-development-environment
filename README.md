@@ -1,8 +1,14 @@
 # ADE — Agent Development Environment
 
-**A local harness OS for agentic software engineering** — not another IDE fork.
+> Repo: `agentic-development-environment` · ADE = Agent Development Environment.
 
-ADE runs the agent loop with **honest spend**, **verify-as-truth**, **leases / Isolate worktrees**, and **Continuity** across turns. **Desktop** (Tauri) is the control plane; **CLI** and optional **Zed via ACP** are hosts on the same Rust brain.
+**A local Rust agent runtime with a Tauri desktop control plane** — not another IDE fork.
+
+## In plain English
+
+ADE runs coding agents with **budget caps**, **test gates before “done”**, and **isolated git worktrees** for parallel changes. Think *agent orchestration + guardrails*, not a Cursor clone.
+
+**Desktop** (Tauri) is the full shell (chat, Keys, MCP). **CLI** and optional **Zed via ACP** share the same Rust harness. A **browser preview** can talk to `ade serve` for status, verify, and analytics — agent turns stay on Desktop.
 
 [![CI](https://github.com/MrBlockClock/agentic-development-environment/actions/workflows/ci.yml/badge.svg)](https://github.com/MrBlockClock/agentic-development-environment/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -10,19 +16,19 @@ ADE runs the agent loop with **honest spend**, **verify-as-truth**, **leases / I
 | | |
 |--|--|
 | **Docs site** | [mrblockclock.github.io/agentic-development-environment](https://mrblockclock.github.io/agentic-development-environment/) |
-| **Stack** | Rust workspace · Tauri Desktop · React · MCP · OS key vault |
+| **Stack** | Rust · Tauri 2 · React · SQLite ledger · MCP · OS key vault |
 | **Autonomy** | Suggest → Apply → Automate (with verify gates) |
 
 ---
 
 ## Why ADE
 
-Most “agent IDEs” optimize chat chrome. ADE optimizes the **harness**:
+Most agent tools optimize chat UI. ADE optimizes what happens *between* prompts:
 
 - **Spend honesty** — reserve → reconcile $; Trust shows used / reserved / remaining; never silent $0 on priced turns  
 - **Verify-as-truth** — gates (G0–G5), not model self-certify  
 - **Safe Apply** — eng-goal contracts, path leases, Isolate worktrees, risk HITL  
-- **Continuity** — handoff capsules + thrift resume (no paste theater)  
+- **Continuity** — handoff capsules + thrift resume (no manual copy-paste handoffs)  
 - **Multi-host** — one brain, many eyes (Desktop control plane; Zed optional)
 
 Deep dive: [docs/research/ADE-Master-Gameplan.md](docs/research/ADE-Master-Gameplan.md) · [Docs site](https://mrblockclock.github.io/agentic-development-environment/)
@@ -49,6 +55,16 @@ cd apps/desktop
 npm install
 npm run tauri dev             # Vite on http://127.0.0.1:1420 + ADE window
 ```
+
+**Browser preview (optional, read-mostly):**
+
+```bash
+# from repo root — then open http://127.0.0.1:1420 and paste the same token
+$env:ADE_API_TOKEN='ade-local-dev'   # PowerShell
+cargo run -p ade-cli -- serve --bind 127.0.0.1:3210
+```
+
+Agent turns, Keys, and MCP require Desktop. Status, Verify, Stack, Guidance, and Analytics work in the browser when the API is connected.
 
 **CLI:**
 

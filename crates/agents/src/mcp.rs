@@ -15,6 +15,9 @@ pub struct McpServerConfig {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Extra process env (e.g. vault-injected tokens). Never logged.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
     /// Set only after a human reviews this exact command and argument list.
     #[serde(default)]
     pub approved: bool,
@@ -88,6 +91,9 @@ impl McpHost {
 
         let mut command = Command::new(&config.command);
         command.args(&config.args);
+        for (key, value) in &config.env {
+            command.env(key, value);
+        }
         let transport = TokioChildProcess::new(&mut command).map_err(|error| {
             AdeError::Mcp(format!("failed to start '{}': {error}", config.name))
         })?;
@@ -313,6 +319,7 @@ mod tests {
                 "-y".into(),
                 "@modelcontextprotocol/server-filesystem".into(),
             ],
+            env: BTreeMap::new(),
             approved: false,
         }
     }

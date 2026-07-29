@@ -128,16 +128,18 @@ export function SidebarRailLists({
           >
             Sessions
           </span>
-          <button
-            type="button"
-            title="New agent session"
-            aria-label="New agent session"
-            data-testid="ade-session-new"
-            onClick={onNewSession}
-            className="grid size-6 place-items-center rounded text-[13px] text-slate-500 hover:bg-white/6 hover:text-slate-200"
-          >
-            +
-          </button>
+          {isTauri() && (
+            <button
+              type="button"
+              title="New agent session"
+              aria-label="New agent session"
+              data-testid="ade-session-new"
+              onClick={onNewSession}
+              className="grid size-6 place-items-center rounded text-[13px] text-slate-500 hover:bg-white/6 hover:text-slate-200"
+            >
+              +
+            </button>
+          )}
         </div>
         <div className="space-y-px" data-testid="ade-session-list">
           {agentSessions.map((tab) => {
@@ -182,6 +184,9 @@ export function SidebarRailLists({
 }
 
 export async function fetchWorkspaceList(): Promise<WorkspaceListSnapshot | null> {
-  if (!isTauri()) return null;
-  return invoke<WorkspaceListSnapshot>("list_workspaces");
+  try {
+    return await invoke<WorkspaceListSnapshot>("list_workspaces");
+  } catch {
+    return null;
+  }
 }

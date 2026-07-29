@@ -57,34 +57,26 @@ export function clearBrowserApiToken(): void {
   window.localStorage.removeItem(API_TOKEN_STORAGE_KEY);
 }
 
-export type AdeApiErrorKind = "offline" | "auth" | "http" | "desktop_only";
-
 export class AdeApiError extends Error {
-  readonly kind: AdeApiErrorKind;
+  readonly kind: "offline" | "auth" | "http" | "desktop_only";
 
-  constructor(kind: AdeApiErrorKind, message: string) {
+  constructor(
+    kind: AdeApiError["kind"],
+    message: string,
+  ) {
     super(message);
     this.name = "AdeApiError";
     this.kind = kind;
-  }
-
-  static is(value: unknown): value is AdeApiError {
-    return value instanceof AdeApiError;
   }
 }
 
 export type BrowserApiProbe = {
   reachable: boolean;
   apiOk: boolean;
-  /** True when /api rejected with 401 (token missing or wrong). */
   authRequired: boolean | null;
   detail: string;
 };
 
-/**
- * Probe loopback health (public) then a coordination read (/api/state).
- * Does not invent tokens — uses saved/env bearer only.
- */
 export async function probeBrowserApi(): Promise<BrowserApiProbe> {
   try {
     const health = await fetch(`${apiBase}/health/live`, { method: "GET" });
@@ -93,7 +85,7 @@ export async function probeBrowserApi(): Promise<BrowserApiProbe> {
         reachable: false,
         apiOk: false,
         authRequired: null,
-        detail: `Health check failed (HTTP ${health.status}).`,
+        detail: `Health check failed (${health.status}).`,
       };
     }
   } catch {
@@ -101,52 +93,40 @@ export async function probeBrowserApi(): Promise<BrowserApiProbe> {
       reachable: false,
       apiOk: false,
       authRequired: null,
-      detail: `Cannot reach ${apiBase}. Start with \`ade serve --bind 127.0.0.1:3210\`.`,
+      detail: `Cannot reach ${apiBase}.`,
     };
   }
 
-  const token = getBrowserApiToken();
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
   try {
-    const response = await fetch(`${apiBase}/api/state`, { headers });
-    if (response.status === 401) {
-      return {
-        reachable: true,
-        apiOk: false,
-        authRequired: true,
-        detail: token
-          ? "Bearer token rejected — it must match ADE_API_TOKEN on `ade serve`."
-          : "API requires a bearer token. Save ADE_API_TOKEN below (or set VITE_ADE_API_TOKEN).",
-      };
-    }
-    if (!response.ok) {
-      return {
-        reachable: true,
-        apiOk: false,
-        authRequired: false,
-        detail: `API /state returned HTTP ${response.status}.`,
-      };
-    }
+    await http("/api/state");
     return {
       reachable: true,
       apiOk: true,
       authRequired: false,
-      detail: token ? "Authorized against local ADE API." : "Local API reachable (no token set).",
+      detail: "Connected to local ADE API.",
     };
-  } catch {
+  } catch (reason) {
+    if (reason instanceof AdeApiError && reason.kind === "auth") {
+      return {
+        reachable: true,
+        apiOk: false,
+        authRequired: true,
+        detail: reason.message,
+      };
+    }
     return {
       reachable: true,
       apiOk: false,
       authRequired: null,
-      detail: "Health ok but /api/state failed — check CORS or serve logs.",
+      detail:
+        reason instanceof Error
+          ? reason.message
+          : "Health ok but /api/state failed — check CORS or serve logs.",
     };
   }
 }
 
-/** Read-only commands that map onto the local ADE HTTP API in browser mode. */
+/** Read-only / coordination commands that map onto the local ADE HTTP API. */
 const httpReads: Record<string, string> = {
   get_dashboard: "/api/state",
   list_recipes: "/api/recipes",
@@ -155,6 +135,8 @@ const httpReads: Record<string, string> = {
   list_guidance_profiles: "/api/guidance/profiles",
   get_active_guidance_profile: "/api/guidance/active-profile",
   run_global_audit: "/api/guidance/global-audit",
+  guided_wins_status: "/api/guided/wins",
+  list_workspaces: "/api/workspaces/list",
 };
 
 /**
@@ -209,8 +191,8 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * Tauri `invoke` with a browser fallback: coordination reads + verify go to the
- * local HTTP API; MCP list returns empty; mutations need desktop.
+ * Tauri `invoke` with a browser fallback: coordination + analytics + guided
+ * wins go to the local HTTP API; MCP list returns empty; agent/vault/PTY stay Desktop.
  */
 export async function invoke<T>(
   command: string,
@@ -246,6 +228,44 @@ export async function invoke<T>(
       body: JSON.stringify(args?.answers ?? args ?? {}),
     });
   }
+  if (command === "preview_recipe_scaffold") {
+    return http<T>("/api/recipes/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipe: args?.recipe,
+        project_name: args?.projectName ?? args?.project_name ?? null,
+        force: Boolean(args?.force),
+      }),
+    });
+  }
+  if (command === "guided_mark_win") {
+    return http<T>("/api/guided/wins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ win: String(args?.win ?? "") }),
+    });
+  }
+  if (command === "guided_understand_project") {
+    return http<T>("/api/guided/understand", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  }
+  if (command === "spend_ledger_recent") {
+    const limit = Number(args?.limit ?? 40);
+    return http<T>(`/api/spend/ledger?limit=${encodeURIComponent(String(limit))}`);
+  }
+  if (command === "spend_summary") {
+    const params = new URLSearchParams();
+    const session = args?.sessionCapUsd ?? args?.session_cap_usd;
+    const daily = args?.dailyCapUsd ?? args?.daily_cap_usd;
+    if (session != null) params.set("session_cap_usd", String(session));
+    if (daily != null) params.set("daily_cap_usd", String(daily));
+    const qs = params.toString();
+    return http<T>(`/api/spend/summary${qs ? `?${qs}` : ""}`);
+  }
   const route = httpReads[command];
   if (route) {
     return http<T>(route);
@@ -253,7 +273,7 @@ export async function invoke<T>(
   throw new AdeApiError(
     "desktop_only",
     `"${command}" requires the ADE desktop app. Browser preview supports ` +
-      "dashboard/recipes/verify/rules/skills via the local API; MCP connect and agent turns need Tauri. " +
-      "EXECUTE is not available over HTTP by design.",
+      "dashboard, recipes, verify, guidance, guided wins, analytics, and workspace list via `ade serve`. " +
+      "Keys vault, MCP host, Agent turns, Editor, Terminal, and EXECUTE stay on Desktop.",
   );
 }

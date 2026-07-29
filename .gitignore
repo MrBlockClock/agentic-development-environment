@@ -79,6 +79,7 @@ apps/desktop/src-tauri/gen/
 .venv/
 test-results/
 playwright-report/
+apps/desktop/e2e/artifacts/
 **/storageState.json
 *.db
 *.db-wal

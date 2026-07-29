@@ -2,6 +2,7 @@ pub mod agent_routes;
 pub mod analytics_routes;
 pub mod audit_routes;
 pub mod auth;
+pub mod guided_routes;
 pub mod middleware;
 pub mod project_routes;
 pub mod router;

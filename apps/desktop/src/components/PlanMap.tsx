@@ -73,6 +73,7 @@ export function PlanMap({
   scorePercent,
   verifyResults,
   executing,
+  executeAvailable = true,
   focusPhaseId = null,
   onExecute,
   onRunAudit,
@@ -84,6 +85,7 @@ export function PlanMap({
   scorePercent: number;
   verifyResults: VerifyResult[];
   executing: boolean;
+  executeAvailable?: boolean;
   focusPhaseId?: string | null;
   onExecute: () => void;
   onRunAudit?: () => void;
@@ -349,10 +351,19 @@ export function PlanMap({
                 <button
                   type="button"
                   onClick={onExecute}
-                  disabled={executing}
-                  className="w-full rounded-lg bg-violet-500/90 py-2 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
+                  disabled={executing || !executeAvailable}
+                  title={
+                    executeAvailable
+                      ? undefined
+                      : "Approve & execute requires ADE Desktop"
+                  }
+                  className="w-full rounded-lg bg-blue-500/90 py-2 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
                 >
-                  {executing ? "Executing…" : "Approve and execute"}
+                  {executing
+                    ? "Executing…"
+                    : executeAvailable
+                      ? "Approve and execute"
+                      : "Execute · Desktop"}
                 </button>
               </div>
             ) : (

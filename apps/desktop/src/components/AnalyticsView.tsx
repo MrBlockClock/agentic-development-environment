@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke, isTauri } from "../ipc";
+import { invoke } from "../ipc";
 import {
   BarSeries,
   Chip,
@@ -74,7 +74,6 @@ export function AnalyticsView({
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
-    if (!isTauri()) return;
     setLoading(true);
     setError(null);
     const sessionCap = Number(
@@ -160,26 +159,6 @@ export function AnalyticsView({
   const costPerCompletedTask =
     outcome.completedTasks > 0 ? stats.actual / outcome.completedTasks : null;
 
-  if (!isTauri()) {
-    return (
-      <div className="space-y-4">
-        <AnalyticsHeader
-          windowId={windowId}
-          onWindow={setWindowId}
-          rowCount={0}
-          loading={false}
-          onRefresh={() => {}}
-        />
-        <EmptyState
-          title="Analytics needs Desktop"
-          body="The usage ledger lives in the local ADE database and is read over IPC. Browser preview has no ledger access by design."
-          actionLabel={onOpenTrust ? "Open Trust" : undefined}
-          onAction={onOpenTrust}
-        />
-      </div>
-    );
-  }
-
   const noData = (ledger ?? []).length === 0;
 
   return (
@@ -237,44 +216,57 @@ export function AnalyticsView({
                     : "green"
               }
               sub={summary ? `of ${usd(summary.daily_cap_usd)} daily cap` : "no cap set"}
-              hint="Daily cap minus used and reserved, straight from SpendGuard."
-            />
-            <MetricCard
-              label="Tokens in / out"
-              value={`${compactCount(stats.tokensIn)} / ${compactCount(stats.tokensOut)}`}
-              accent="sky"
-              sub={`${stats.turns} ledger row${stats.turns === 1 ? "" : "s"}`}
-            />
-            <MetricCard
-              label="Cost per verified turn"
-              value={costPerVerifiedTurn === null ? "—" : usd(costPerVerifiedTurn)}
-              accent="violet"
-              sub={
-                outcome.completedTurns > 0
-                  ? `${outcome.completedTurns} completed turn${outcome.completedTurns === 1 ? "" : "s"}`
-                  : "no completed turns recorded"
-              }
-              hint="Committed spend divided by turns that ended completed. The number that survives model routing changes."
-            />
-            <MetricCard
-              label="Cost per completed task"
-              value={costPerCompletedTask === null ? "—" : usd(costPerCompletedTask)}
-              accent="violet"
-              sub={
-                outcome.completedTasks > 0
-                  ? `${outcome.completedTasks} task${outcome.completedTasks === 1 ? "" : "s"} done`
-                  : "no completed tasks in queue"
-              }
-              hint="Optimise this, not raw token spend."
+              hint="Daily cap minus used and reserved."
             />
           </div>
+
+          <Disclosure
+            title="Efficiency"
+            summary={
+              costPerVerifiedTurn === null
+                ? `${compactCount(stats.tokensIn)} / ${compactCount(stats.tokensOut)} tokens`
+                : `${usd(costPerVerifiedTurn)} / verified turn`
+            }
+            defaultOpen={false}
+            storageKey="ade_analytics_efficiency"
+            className="border-white/8 bg-black/15"
+          >
+            <div className="grid gap-2.5 sm:grid-cols-3">
+              <MetricCard
+                label="Tokens in / out"
+                value={`${compactCount(stats.tokensIn)} / ${compactCount(stats.tokensOut)}`}
+                accent="sky"
+                sub={`${stats.turns} ledger row${stats.turns === 1 ? "" : "s"}`}
+              />
+              <MetricCard
+                label="Cost per verified turn"
+                value={costPerVerifiedTurn === null ? "—" : usd(costPerVerifiedTurn)}
+                accent="blue"
+                sub={
+                  outcome.completedTurns > 0
+                    ? `${outcome.completedTurns} completed turn${outcome.completedTurns === 1 ? "" : "s"}`
+                    : "no completed turns recorded"
+                }
+                hint="Committed spend divided by turns that ended completed."
+              />
+              <MetricCard
+                label="Cost per completed task"
+                value={costPerCompletedTask === null ? "—" : usd(costPerCompletedTask)}
+                accent="blue"
+                sub={
+                  outcome.completedTasks > 0
+                    ? `${outcome.completedTasks} task${outcome.completedTasks === 1 ? "" : "s"} done`
+                    : "no completed tasks in queue"
+                }
+                hint="Optimise this, not raw token spend."
+              />
+            </div>
+          </Disclosure>
 
           <Panel
             title="Spend trend"
             subtitle="Committed actuals stacked under open reserves, by local day."
             actions={
-              // The cap is labelled by the chart itself — as a line when it
-              // fits the scale, as an off-scale note when it does not.
               <Legend
                 items={[
                   { label: "committed", color: TONE_FILL.accent },

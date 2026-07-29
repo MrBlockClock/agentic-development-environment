@@ -52,7 +52,6 @@ import {
   type PathLease as StripLease,
 } from "./components/AgentSessionStrip";
 import {
-  CapabilityMatrix,
   DesktopRequired,
 } from "./components/DesktopRequired";
 import { ProviderSelect } from "./components/ModelPicker";
@@ -300,7 +299,7 @@ type NavItem = {
   icon: string;
   desktopOnly?: boolean;
   /** Optional status light for first-run / setup guidance. */
-  setupKey?: "environment" | "keys" | "recipes" | "verify";
+  setupKey?: "environment" | "keys" | "integrations" | "recipes" | "verify";
 };
 
 /** 0 = daily work, 1 = setup / context, 2 = rare configure / debug density */
@@ -337,6 +336,7 @@ const navGroups: NavGroup[] = [
         label: "Integrations",
         icon: "⧉",
         desktopOnly: true,
+        setupKey: "integrations",
       },
       { id: "Recipes", label: "Stack", icon: "▦", setupKey: "recipes" },
       { id: "Verify", label: "Test project", icon: "✓", setupKey: "verify" },
@@ -719,11 +719,11 @@ const HOME_AGENT_TAB = "agent-home";
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeView, setActiveView] = useState("Home");
-  const [shellTabs, setShellTabs] = useState<ShellTab[]>([
+  const [shellTabs, setShellTabs] = useState<ShellTab[]>(() => [
     {
       id: HOME_AGENT_TAB,
       kind: "agent",
-      title: "Agent",
+      title: typeof window !== "undefined" && !isTauri() ? "Home" : "Agent",
       closable: false,
       ephemeral: false,
     },
@@ -859,6 +859,8 @@ function App() {
       if (!selected || Array.isArray(selected)) return;
       filePath = selected;
     }
+    // Editor lives under Debug nav — enable it so Continuity/header deep links stick.
+    setSurfaceModePersisted("dev");
     const id = newTabId("editor");
     const tab: ShellTab = {
       id,
@@ -1172,6 +1174,9 @@ function App() {
       : verifyResults.length > 0
         ? "ready"
         : "todo";
+    // Optional: green when any MCP is live; does not gate first-run overall.
+    const integrations: SetupLight =
+      mcpServers.length > 0 ? "ready" : "todo";
     const blockers = (dashboard?.audit.blockers.length ?? 0) > 0;
     const environment: SetupLight = blockers
       ? "warn"
@@ -1184,8 +1189,8 @@ function App() {
         : environment === "todo" || keys === "todo" || recipes === "todo" || verify === "todo"
           ? "todo"
           : "ready";
-    return { overall, environment, keys, recipes, verify } as const;
-  }, [dashboard, verifyFailed, verifyResults.length]);
+    return { overall, environment, keys, integrations, recipes, verify } as const;
+  }, [dashboard, mcpServers.length, verifyFailed, verifyResults.length]);
 
   const lightForSetupKey = (key: NavItem["setupKey"]): SetupLight | null => {
     if (!key) return null;
@@ -1316,6 +1321,12 @@ function App() {
   };
 
   const executePlan = async () => {
+    if (!isTauri()) {
+      setError(
+        "Approve & execute requires ADE Desktop (no EXECUTE over HTTP by design).",
+      );
+      return;
+    }
     if (
       !window.confirm(
         "Apply the current approved plan? ADE will only write to its owned paths.",
@@ -1343,14 +1354,24 @@ function App() {
     command: string;
     args: string[];
     approved: boolean;
+    vaultProvider?: string | null;
+    vaultEnvKeys?: string[];
   }) => {
     setMcpBusy(true);
     setError(null);
     try {
-      await invoke("mcp_connect", input);
+      await invoke("mcp_connect", {
+        name: input.name,
+        command: input.command,
+        args: input.args,
+        approved: input.approved,
+        vaultProvider: input.vaultProvider ?? null,
+        vaultEnvKeys: input.vaultEnvKeys ?? [],
+      });
       await refreshMcp();
     } catch (reason) {
       setError(String(reason));
+      throw reason;
     } finally {
       setMcpBusy(false);
     }
@@ -1692,6 +1713,12 @@ function App() {
     projectName: string;
     force: boolean;
   }) => {
+    if (!isTauri()) {
+      setError(
+        "Initialize recipe writes files via Desktop. Use Preview in browser, then open ADE Desktop to apply.",
+      );
+      return;
+    }
     setRecipeBusy(true);
     setError(null);
     try {
@@ -1764,14 +1791,8 @@ function App() {
                     className={navItemClass(
                       activeView === item.id ||
                         (item.id === "Insight" && INSIGHT_IDS.has(activeView)) ||
-                        (item.id === "Home" && activeView === "Agent") ||
                         (item.id === "Home" &&
-                          Boolean(
-                            shellTabs.find(
-                              (tab) =>
-                                tab.id === activeTabId && tab.kind === "agent",
-                            ),
-                          )),
+                          (activeView === "Home" || activeView === "Agent")),
                       group.tier,
                     )}
                   >
@@ -1791,7 +1812,12 @@ function App() {
                       />
                     )}
                     {needsDesktop && (
-                      <span className="text-[11px] text-slate-600">Desktop</span>
+                      <span
+                        className="rounded bg-white/6 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500"
+                        title="Requires ADE Desktop"
+                      >
+                        Desktop
+                      </span>
                     )}
                   </button>
                 );
@@ -1969,24 +1995,26 @@ function App() {
           />
           {activeTabId === null && (
             <div className="min-w-0 flex-1">
-              <h1 className="text-sm font-semibold leading-tight">
-                {activeView === "Environment"
-                  ? "Environment"
-                  : activeView === "Rules"
-                    ? "Guidance"
-                    : INSIGHT_IDS.has(activeView)
-                      ? "Insight"
-                      : activeView === "Verify"
-                        ? "Test project"
-                        : activeView === "Recipes"
-                          ? "Stack"
-                          : activeView}
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-sm font-semibold leading-tight">
+                  {activeView === "Environment"
+                    ? "Environment"
+                    : activeView === "Rules"
+                      ? "Guidance"
+                      : INSIGHT_IDS.has(activeView)
+                        ? "Insight"
+                        : activeView === "Verify"
+                          ? "Test project"
+                          : activeView === "Recipes"
+                            ? "Stack"
+                            : activeView}
+                </h1>
                 {debugChrome && (
-                  <span className="ml-2 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                  <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
                     Debug
                   </span>
                 )}
-              </h1>
+              </div>
               <p
                 className="mt-0.5 max-w-[36vw] truncate text-[10px] text-slate-500 sm:max-w-[52vw]"
                 title={dashboard?.workspace_root ?? undefined}
@@ -2000,47 +2028,49 @@ function App() {
           )}
           <div className="ml-auto flex shrink-0 items-center">
             <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
-              <button
-                type="button"
-                onClick={() => openAgentTab()}
-                aria-label="New Agent"
-                title="New Agent"
-                className="grid size-7 place-items-center rounded-md text-base font-medium leading-none text-slate-200 transition hover:bg-blue-500/20 hover:text-white"
-              >
-                <span aria-hidden className="relative -top-px">
-                  +
-                </span>
-              </button>
-              <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden />
-              <button
-                type="button"
-                onClick={() => openBrowserTab()}
-                aria-label="New Browser"
-                title="New Browser"
-                className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
-              >
-                ⬚
-              </button>
-              <button
-                type="button"
-                onClick={() => void openEditorTab()}
-                aria-label="Open File"
-                title="Open File"
-                disabled={!isTauri()}
-                className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100 disabled:opacity-40"
-              >
-                ✎
-              </button>
-              <button
-                type="button"
-                onClick={() => openTerminalTab()}
-                aria-label="Terminal"
-                title="Terminal"
-                disabled={!isTauri()}
-                className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100 disabled:opacity-40"
-              >
-                ▸
-              </button>
+              {isTauri() ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openAgentTab()}
+                    aria-label="New Agent"
+                    title="New Agent"
+                    className="grid size-7 place-items-center rounded-md text-base font-medium leading-none text-slate-200 transition hover:bg-blue-500/20 hover:text-white"
+                  >
+                    <span aria-hidden className="relative -top-px">
+                      +
+                    </span>
+                  </button>
+                  <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden />
+                  <button
+                    type="button"
+                    onClick={() => openBrowserTab()}
+                    aria-label="New Browser"
+                    title="New Browser"
+                    className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
+                  >
+                    ⬚
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void openEditorTab()}
+                    aria-label="Open File"
+                    title="Open File"
+                    className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openTerminalTab()}
+                    aria-label="Terminal"
+                    title="Terminal"
+                    className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
+                  >
+                    ▸
+                  </button>
+                </>
+              ) : null}
               <HeaderOverflowMenu
                 isDesktop={isTauri()}
                 actions={[
@@ -2088,7 +2118,7 @@ function App() {
           }
         >
           {!isTauri() && (
-            <div className="mb-5 space-y-3">
+            <div className="mb-4">
               <BrowserApiSetup
                 refreshKey={browserApiProbeKey}
                 onResolved={() => {
@@ -2097,7 +2127,6 @@ function App() {
                   }
                 }}
               />
-              <CapabilityMatrix shell="browser" />
             </div>
           )}
           {error && (
@@ -2116,17 +2145,39 @@ function App() {
             />
           )}
 
-          {loading && !dashboard ? (
-            <LoadingState />
-          ) : dashboard ? (
-            <>
-              {DESKTOP_REQUIRED_VIEWS.has(activeView) && !isTauri() ? (
-                <DesktopRequired
-                  view={activeView}
-                  simpleMode={false}
-                />
-              ) : (
-                <>
+          {/* Settings never needs the API — pure localStorage defaults. */}
+          {activeView === "Settings" && (
+            <SettingsView
+              onOpenKeys={() => setActiveView("Keys")}
+              onOpenIntegrations={() => openNavView("Integrations")}
+            />
+          )}
+
+          {/* Desktop-only funnels work offline in browser (honest CTA, no blank pane). */}
+          {activeView !== "Settings" &&
+            DESKTOP_REQUIRED_VIEWS.has(activeView) &&
+            !isTauri() && (
+              <DesktopRequired view={activeView} simpleMode={false} />
+            )}
+
+          {activeView !== "Settings" &&
+            !(DESKTOP_REQUIRED_VIEWS.has(activeView) && !isTauri()) &&
+            (loading && !dashboard ? (
+              <LoadingState />
+            ) : !dashboard ? (
+              activeView === "Home" || activeView === "Agent" ? (
+                <div className="mx-auto max-w-lg rounded-xl border border-white/8 bg-white/[0.02] px-5 py-8 text-center">
+                  <h2 className="text-xl font-semibold tracking-tight text-slate-50">
+                    ADE
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    Connect the local API above to load this workspace — or open
+                    the Desktop app for chat, keys, and MCP.
+                  </p>
+                </div>
+              ) : null
+            ) : (
+              <>
               {(activeView === "Home" || activeView === "Agent") &&
                 (isTauri() ? (
                   (() => {
@@ -2164,6 +2215,7 @@ function App() {
                                 (runningAgentTabId === null && active))
                             }
                             connectedTools={mcpTools.length}
+                            mcpServerNames={mcpServers}
                             initialPrompt={
                               tab.id === HOME_AGENT_TAB ? homePrompt : ""
                             }
@@ -2272,6 +2324,7 @@ function App() {
                   verifyResults={verifyResults}
                   verifying={verifying}
                   executing={executing}
+                  executeAvailable={isTauri()}
                   onExecute={() => void executePlan()}
                   onFixWithAde={(prompt) => {
                     window.localStorage.setItem(AUTONOMY_KEY, "act");
@@ -2292,6 +2345,8 @@ function App() {
                       ADE_EDITOR_INTENT_KEY,
                       JSON.stringify({ mode: "handoff" }),
                     );
+                    // Editor is under Debug nav — enable it so Continuity deep links stick.
+                    setSurfaceModePersisted("dev");
                     const id = newTabId("editor");
                     setShellTabs((tabs) => [
                       ...tabs,
@@ -2309,98 +2364,84 @@ function App() {
                   devMode={debugChrome}
                 />
               )}
-              {activeView === "Workspaces" &&
-                (DESKTOP_REQUIRED_VIEWS.has("Workspaces") && !isTauri() ? (
-                  <DesktopRequired view="Workspaces" />
-                ) : (
-                  <WorkspacesView
-                    startWithNew={workspacesStartNew}
-                    onStartWithNewConsumed={() => setWorkspacesStartNew(false)}
-                    onOpened={(intent?: WorkspaceOpenIntent) => {
-                      void refresh();
-                      setWorkspacesStartNew(false);
-                      openNavView(intent === "work" ? "Home" : "Environment");
-                    }}
-                    onOpenEnvironment={() => openNavView("Environment")}
-                  />
-                ))}
+              {activeView === "Workspaces" && (
+                <WorkspacesView
+                  startWithNew={workspacesStartNew}
+                  onStartWithNewConsumed={() => setWorkspacesStartNew(false)}
+                  onOpened={(intent?: WorkspaceOpenIntent) => {
+                    void refresh();
+                    setWorkspacesStartNew(false);
+                    openNavView(intent === "work" ? "Home" : "Environment");
+                  }}
+                  onOpenEnvironment={() => openNavView("Environment")}
+                />
+              )}
               {activeView === "Browser" &&
-                (DESKTOP_REQUIRED_VIEWS.has("Browser") && !isTauri() ? (
-                  <DesktopRequired view="Browser" />
-                ) : (
-                  shellTabs
-                    .filter((tab) => tab.kind === "browser")
-                    .map((tab) => (
-                      <div
-                        key={tab.id}
-                        className={
-                          tab.id === activeTabId
-                            ? "flex min-h-0 flex-1 flex-col"
-                            : "hidden"
+                shellTabs
+                  .filter((tab) => tab.kind === "browser")
+                  .map((tab) => (
+                    <div
+                      key={tab.id}
+                      className={
+                        tab.id === activeTabId
+                          ? "flex min-h-0 flex-1 flex-col"
+                          : "hidden"
+                      }
+                      aria-hidden={tab.id !== activeTabId}
+                    >
+                      <BrowserView
+                        instanceId={tab.id}
+                        initialUrl={tab.url ?? defaultBrowserUrl()}
+                        active={tab.id === activeTabId && activeView === "Browser"}
+                        onTitleChange={(title) =>
+                          updateTabTitle(tab.id, title)
                         }
-                        aria-hidden={tab.id !== activeTabId}
-                      >
-                        <BrowserView
-                          instanceId={tab.id}
-                          initialUrl={tab.url ?? defaultBrowserUrl()}
-                          active={tab.id === activeTabId && activeView === "Browser"}
-                          onTitleChange={(title) =>
-                            updateTabTitle(tab.id, title)
-                          }
-                        />
-                      </div>
-                    ))
-                ))}
+                      />
+                    </div>
+                  ))}
               {activeView === "Terminal" &&
-                (DESKTOP_REQUIRED_VIEWS.has("Terminal") && !isTauri() ? (
-                  <DesktopRequired view="Terminal" />
-                ) : (
-                  shellTabs
-                    .filter((tab) => tab.kind === "terminal")
-                    .map((tab) => (
-                      <div
-                        key={tab.id}
-                        className={
-                          tab.id === activeTabId
-                            ? "flex min-h-0 flex-1 flex-col"
-                            : "hidden"
-                        }
-                        aria-hidden={tab.id !== activeTabId}
-                      >
-                        <TerminalView />
-                      </div>
-                    ))
-                ))}
+                shellTabs
+                  .filter((tab) => tab.kind === "terminal")
+                  .map((tab) => (
+                    <div
+                      key={tab.id}
+                      className={
+                        tab.id === activeTabId
+                          ? "flex min-h-0 flex-1 flex-col"
+                          : "hidden"
+                      }
+                      aria-hidden={tab.id !== activeTabId}
+                    >
+                      <TerminalView />
+                    </div>
+                  ))}
               {activeView === "Editor" &&
-                (DESKTOP_REQUIRED_VIEWS.has("Editor") && !isTauri() ? (
-                  <DesktopRequired view="Editor" />
-                ) : (
-                  shellTabs
-                    .filter((tab) => tab.kind === "editor")
-                    .map((tab) => (
-                      <div
-                        key={tab.id}
-                        className={
-                          tab.id === activeTabId
-                            ? "flex min-h-0 flex-1 flex-col"
-                            : "hidden"
+                shellTabs
+                  .filter((tab) => tab.kind === "editor")
+                  .map((tab) => (
+                    <div
+                      key={tab.id}
+                      className={
+                        tab.id === activeTabId
+                          ? "flex min-h-0 flex-1 flex-col"
+                          : "hidden"
+                      }
+                      aria-hidden={tab.id !== activeTabId}
+                    >
+                      <EditorView
+                        initialPath={tab.path}
+                        autoPick={!tab.path}
+                        onTitleChange={(title) =>
+                          updateTabTitle(tab.id, title)
                         }
-                        aria-hidden={tab.id !== activeTabId}
-                      >
-                        <EditorView
-                          initialPath={tab.path}
-                          autoPick={!tab.path}
-                          onTitleChange={(title) =>
-                            updateTabTitle(tab.id, title)
-                          }
-                        />
-                      </div>
-                    ))
-                ))}
+                      />
+                    </div>
+                  ))}
               {activeView === "Keys" && (
                 <KeysView
                   simpleMode={false}
                   onContinueToAgent={() => openNavView("Home")}
+                  onOpenIntegrations={() => openNavView("Integrations")}
                 />
               )}
               {activeView === "Integrations" && (
@@ -2418,7 +2459,7 @@ function App() {
                     }
                     openNavView(view);
                   }}
-                  onConnectMcp={(input) => void connectMcp(input)}
+                  onConnectMcp={connectMcp}
                   onRefreshMcp={() => void refreshMcp()}
                 />
               )}
@@ -2455,6 +2496,7 @@ function App() {
                       scorePercent={scorePercent}
                       verifyResults={verifyResults}
                       executing={executing}
+                      executeAvailable={isTauri()}
                       focusPhaseId={planFocusPhaseId}
                       onExecute={() => void executePlan()}
                       onRunAudit={() => void runAudit()}
@@ -2499,12 +2541,6 @@ function App() {
                   onOpenPlan={() => openInsightSection("Plan")}
                 />
               )}
-              {activeView === "Settings" && (
-                <SettingsView
-                  onOpenKeys={() => setActiveView("Keys")}
-                  onOpenIntegrations={() => openNavView("Integrations")}
-                />
-              )}
               {activeView === "MCP" && (
                 <McpView
                   servers={mcpServers}
@@ -2525,14 +2561,13 @@ function App() {
                   planError={recipePlanError}
                   lastResult={recipeResult}
                   simpleMode={false}
+                  initializeAvailable={isTauri()}
                   onPreview={previewRecipe}
                   onInitialize={(input) => void initializeRecipe(input)}
                 />
               )}
-                </>
-              )}
-            </>
-          ) : null}
+              </>
+            ))}
         </div>
       </main>
     </div>
@@ -2833,7 +2868,7 @@ function HomeView({
             }
             className="shrink-0 rounded-xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50 sm:min-w-30"
           >
-            {agentBusy ? "…" : isTauri() ? "Go" : "Desktop"}
+            {agentBusy ? "…" : isTauri() ? "Go" : "Open Desktop"}
           </button>
         </div>
         {!keyReady && (
@@ -3027,6 +3062,7 @@ function Overview({
   verifyResults,
   verifying = false,
   executing,
+  executeAvailable = true,
   onExecute,
   onFixWithAde,
   onRunChecks,
@@ -3046,6 +3082,7 @@ function Overview({
   verifyResults: VerifyResult[];
   verifying?: boolean;
   executing: boolean;
+  executeAvailable?: boolean;
   onExecute: () => void;
   onFixWithAde: (prompt: string) => void;
   onRunChecks: () => void;
@@ -3595,10 +3632,19 @@ function Overview({
               ))}
               <button
                 onClick={onExecute}
-                disabled={executing}
-                className="w-full rounded-lg bg-violet-500/90 py-2 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
+                disabled={executing || !executeAvailable}
+                title={
+                  executeAvailable
+                    ? undefined
+                    : "Approve & execute requires ADE Desktop"
+                }
+                className="w-full rounded-lg bg-blue-500/90 py-2 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
               >
-                {executing ? "Executing…" : "Review and execute"}
+                {executing
+                  ? "Executing…"
+                  : executeAvailable
+                    ? "Review and execute"
+                    : "Execute · Desktop"}
               </button>
             </div>
           )}
@@ -3969,6 +4015,7 @@ function AgentView({
   events,
   busy,
   connectedTools,
+  mcpServerNames = [],
   onRun,
   initialPrompt = "",
   autoSubmit = false,
@@ -4002,6 +4049,7 @@ function AgentView({
   events: AgentEvent[];
   busy: boolean;
   connectedTools: number;
+  mcpServerNames?: string[];
   initialPrompt?: string;
   autoSubmit?: boolean;
   autoSubmitContext?: "normal" | "continuity";
@@ -4182,6 +4230,8 @@ function AgentView({
   };
   const [pastTurns, setPastTurns] = useState<TurnRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
+  /** Empty-canvas Home: hide saved transcript until resume / new turn. */
+  const [historyOpen, setHistoryOpen] = useState(false);
   /** Survives archival so Retry CTAs still have the failed prompt. */
   const lastPromptRef = useRef<string | null>(null);
   /** Image paths for multimodal retry after vision_required gate / switch model. */
@@ -4621,17 +4671,20 @@ function AgentView({
   useEffect(() => {
     if (!isTauri() || !workspaceRoot) {
       setPastTurns([]);
+      setHistoryOpen(false);
       setChatReady(true);
       return;
     }
     if (ephemeralChat) {
       setPastTurns([]);
+      setHistoryOpen(false);
       setChatReady(true);
       return;
     }
     let cancelled = false;
     setChatReady(false);
     setChatError(null);
+    setHistoryOpen(false);
     void invoke<{
       id: string;
       updatedAt: string;
@@ -4651,6 +4704,7 @@ function AgentView({
           events: turn.events ?? [],
         }));
         setPastTurns(loaded);
+        setHistoryOpen(false);
         const firstUser = loaded.find((turn) => turn.user?.trim())?.user;
         if (firstUser) {
           renameTabFromPrompt(firstUser);
@@ -4668,12 +4722,17 @@ function AgentView({
         if (cancelled) return;
         setChatError(String(reason));
         setPastTurns([]);
+        setHistoryOpen(false);
         setChatReady(true);
       });
     return () => {
       cancelled = true;
     };
   }, [workspaceRoot, ephemeralChat]);
+
+  useEffect(() => {
+    if (busy || currentUser) setHistoryOpen(true);
+  }, [busy, currentUser]);
 
   useEffect(() => {
     if (ephemeralChat || !chatReady || !isTauri() || !workspaceRoot) return;
@@ -4698,6 +4757,7 @@ function AgentView({
     }
     setPastTurns([]);
     setCurrentUser(null);
+    setHistoryOpen(false);
     setAttachments([]);
     setAttachNote(null);
     setPrompt("");
@@ -5690,6 +5750,25 @@ function AgentView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSubmit, busy]);
 
+  const showTranscript =
+    historyOpen || busy || Boolean(currentUser) || events.length > 0;
+  const lastTurn = pastTurns[pastTurns.length - 1];
+  const lastTurnFailed = Boolean(
+    lastTurn &&
+      [...lastTurn.events]
+        .reverse()
+        .some((event) => event.type === "failed"),
+  );
+  const lastTurnTitle = (lastTurn?.user ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  const canvasSubtitle = ephemeralChat
+    ? "New session — ask ADE anything."
+    : pastTurns.length > 0
+      ? "Start fresh below, or open the last run when you need it."
+      : "Ask ADE to plan or build — your turns will show up here.";
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       {rebuildLockWarnings.length > 0 && showDebugHarness && (
@@ -5705,7 +5784,7 @@ function AgentView({
         </div>
       )}
 
-      {activeGoal && (
+      {showTranscript && activeGoal && (
         <Disclosure
           title="Active goal"
           subtitle={`${activeGoal.shellScope === "home" ? "Home" : "Workspace"} · ${
@@ -5785,7 +5864,8 @@ function AgentView({
         </Disclosure>
       )}
 
-      {(planPhaseCount > 0 || openTasks.length > 0 || claimedTask || taskNote) && (
+      {showTranscript &&
+        (planPhaseCount > 0 || openTasks.length > 0 || claimedTask || taskNote) && (
         <Disclosure
           title="Tasks"
           subtitle="Suggest queues · Apply claims one"
@@ -5900,7 +5980,7 @@ function AgentView({
         </Disclosure>
       )}
 
-      {handoffAvailable && onContinueHandoff && (
+      {showTranscript && handoffAvailable && onContinueHandoff && (
         handoffLatestStatus === "budget_exhausted" ? (
         <Disclosure
           title="Continuity"
@@ -5950,6 +6030,7 @@ function AgentView({
         )
       )}
 
+      {showTranscript && (
       <AgentSessionStrip
         agentId={agentId}
         mutating={mutating}
@@ -5968,12 +6049,15 @@ function AgentView({
         onSwitchSuggest={() => setAutonomyPersisted("propose")}
         isolateEnabled={applyIsolate}
       />
+      )}
 
       <div
         ref={feedScrollRef}
         onScroll={onFeedScroll}
         className="thin-scrollbar min-h-0 flex-1 overflow-y-auto scroll-smooth"
       >
+        {showTranscript ? (
+          <>
         {(pastTurns.length > 0 || chatError) && (
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-0.5">
             <div className="text-[10px] text-slate-600">
@@ -5981,6 +6065,15 @@ function AgentView({
                 ? `Chat save: ${chatError}`
                 : `${pastTurns.length} saved turn${pastTurns.length === 1 ? "" : "s"} · .ade/chat`}
             </div>
+            {!busy && !currentUser && pastTurns.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300"
+              >
+                Hide history
+              </button>
+            )}
           </div>
         )}
         <AgentActivityFeed
@@ -6041,9 +6134,97 @@ function AgentView({
           <p className="mt-2 text-[11px] text-amber-100/90">{failureNote}</p>
         )}
         <div ref={feedBottomRef} className="h-px w-full shrink-0" aria-hidden />
+          </>
+        ) : (
+          <div
+            className="flex min-h-full flex-col items-center justify-center px-4 py-8"
+            data-testid="ade-home-canvas"
+          >
+            <div className="w-full max-w-lg text-center">
+              <h2 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">
+                ADE
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {canvasSubtitle}
+              </p>
+              {pastTurns.length > 0 && lastTurnTitle && (
+                <div className="mt-6 rounded-xl border border-white/8 bg-[#0d121a] px-4 py-3 text-left">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                        Last run
+                      </div>
+                      <div
+                        className="mt-1 truncate text-[13px] font-medium text-slate-200"
+                        title={lastTurn?.user}
+                      >
+                        {lastTurnTitle}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
+                            lastTurnFailed
+                              ? "bg-red-500/15 text-red-200"
+                              : "bg-emerald-400/10 text-emerald-300"
+                          }`}
+                        >
+                          <span
+                            className={`size-1.5 rounded-full ${
+                              lastTurnFailed ? "bg-red-400" : "bg-emerald-400"
+                            }`}
+                            aria-hidden
+                          />
+                          {lastTurnFailed ? "Failed" : "Done"}
+                        </span>
+                        <span className="text-[10px] text-slate-600">
+                          {pastTurns.length} turn
+                          {pastTurns.length === 1 ? "" : "s"} saved
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistoryOpen(true);
+                          stickToBottomRef.current = true;
+                        }}
+                        className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/8"
+                      >
+                        Show history
+                      </button>
+                      {handoffAvailable && onContinueHandoff && (
+                        <button
+                          type="button"
+                          disabled={continuityBusy || busy}
+                          onClick={() => {
+                            setHistoryOpen(true);
+                            onContinueHandoff();
+                          }}
+                          className="rounded-md bg-blue-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-40"
+                        >
+                          {continuityBusy ? "Working…" : "Continue"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={clearChat}
+                        title="Clear saved turns and start empty"
+                        className="rounded-md px-2 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300 disabled:opacity-40"
+                      >
+                        New chat
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {showDebugHarness && (
+      {showTranscript && showDebugHarness && (
         <Disclosure
           title="Harness"
           subtitle="Dogfood · Verify · Observe/Automate · rates"
@@ -6228,8 +6409,8 @@ function AgentView({
         title="Tools"
         subtitle="What this turn may call — host FS/shell/web plus connected MCP"
         summary={
-          connectedTools > 0
-            ? `${connectedTools} MCP · ${shellScope === "home" ? "Home" : "Workspace"} shell`
+          mcpServerNames.length > 0
+            ? `${mcpServerNames.length} MCP · ${connectedTools} tools · ${shellScope === "home" ? "Home" : "Workspace"} shell`
             : `Host tools · ${shellScope === "home" ? "Home" : "Workspace"} shell`
         }
         hint="Integrations are standing connectors (GitHub, Stripe, …). Tools are what the model can invoke this turn."
@@ -6243,11 +6424,21 @@ function AgentView({
           <span className="rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[10px] text-slate-300">
             Shell: {shellScope === "home" ? "Home" : "Workspace"}
           </span>
-          <span className="rounded-md border border-violet-400/25 bg-violet-500/10 px-2 py-1 text-[10px] text-violet-100">
-            {connectedTools > 0
-              ? `${connectedTools} MCP tool${connectedTools === 1 ? "" : "s"}`
-              : "No MCP connected"}
-          </span>
+          {mcpServerNames.length > 0 ? (
+            mcpServerNames.map((name) => (
+              <span
+                key={name}
+                className="rounded-md border border-violet-400/25 bg-violet-500/10 px-2 py-1 text-[10px] text-violet-100"
+                title={`${connectedTools} MCP tool${connectedTools === 1 ? "" : "s"} total`}
+              >
+                MCP · {name}
+              </span>
+            ))
+          ) : (
+            <span className="rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[10px] text-slate-400">
+              No MCP connected
+            </span>
+          )}
           {onOpenIntegrations && (
             <button
               type="button"

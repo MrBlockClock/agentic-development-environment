@@ -12,7 +12,7 @@ test.describe("ADE sidebar IA", () => {
     const sidebar = page.getByTestId("ade-sidebar");
     await expect(sidebar).toBeVisible();
 
-    await expect(sidebar.getByRole("button", { name: "Home" })).toBeVisible();
+    await expect(sidebar.getByTestId("ade-nav-home").getByRole("button").first()).toBeVisible();
     await expect(page.getByTestId("ade-rail-context")).toBeVisible();
     await expect(page.getByTestId("ade-session-list")).toBeVisible();
     await expect(page.getByTestId("ade-nav-fold-setup")).toBeVisible();

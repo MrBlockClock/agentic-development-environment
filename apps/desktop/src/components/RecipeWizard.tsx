@@ -58,6 +58,8 @@ type RecipeWizardProps = {
   planError: string | null;
   lastResult: ScaffoldResult | null;
   simpleMode?: boolean;
+  /** Browser can preview; initialize writes need Desktop. */
+  initializeAvailable?: boolean;
   onPreview: (input: {
     recipe: string;
     projectName: string;
@@ -208,6 +210,7 @@ export function RecipeWizard({
   planError,
   lastResult,
   simpleMode = false,
+  initializeAvailable = true,
   onPreview,
   onInitialize,
 }: RecipeWizardProps) {
@@ -325,7 +328,7 @@ export function RecipeWizard({
         {topMatches.length === 0 ? (
           <p className="text-[11px] text-slate-600">Ranking recipes…</p>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-1">
             {topMatches.map((item, index) => (
               <button
                 key={item.id}
@@ -334,38 +337,23 @@ export function RecipeWizard({
                   setAutoPicked(false);
                   setSelected(item.id);
                 }}
-                className={`w-full rounded-xl border p-3 text-left transition ${
+                className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition ${
                   selected === item.id
                     ? "border-blue-400/40 bg-blue-500/10"
                     : "border-white/7 bg-white/2 hover:border-white/15"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-slate-200">
-                    {index + 1}. {item.name}
+                <span className="w-5 shrink-0 text-[11px] font-semibold text-slate-500">
+                  #{index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-100">
+                  {item.name}
+                </span>
+                {!simpleMode && (
+                  <span className="shrink-0 text-[10px] text-slate-500">
+                    {Math.round(item.score)}% match
                   </span>
-                  {!simpleMode && (
-                    <span className="font-mono text-[10px] text-slate-500">
-                      {item.score}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {item.why.slice(0, 3).map((reason) => (
-                    <span
-                      key={reason}
-                      className={`rounded border px-1.5 py-0.5 text-[10px] ${
-                        reason.toLowerCase().includes("mismatch")
-                          || reason.toLowerCase().includes("weaker")
-                          || reason.toLowerCase().includes("not marked")
-                          ? "border-amber-400/20 bg-amber-400/5 text-amber-100/80"
-                          : "border-white/8 bg-white/4 text-slate-400"
-                      }`}
-                    >
-                      {reason}
-                    </span>
-                  ))}
-                </div>
+                )}
               </button>
             ))}
           </div>
@@ -373,23 +361,36 @@ export function RecipeWizard({
       </div>
 
       {recipe ? (
-        <div className="space-y-3 rounded-2xl border border-white/7 bg-[#0d121a]/85 p-5">
-          <div className="text-sm font-semibold text-slate-100">{recipe.name}</div>
-          <label className="block text-[11px] text-slate-500">
-            Project name (optional)
-            <input
-              value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
-              className="mt-1.5 w-full rounded-lg border border-white/10 bg-[#101620] px-3 py-2 text-xs text-slate-200"
-            />
-          </label>
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-[#0d121a] px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold text-slate-100">
+              {recipe.name}
+            </div>
+            <label className="mt-1.5 block text-[10px] text-slate-500">
+              Project name (optional)
+              <input
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                className="mt-1 w-full max-w-xs rounded-lg border border-white/10 bg-[#101620] px-2.5 py-1.5 text-[11px] text-slate-200"
+              />
+            </label>
+          </div>
           <button
             type="button"
             onClick={() => onInitialize({ recipe: recipe.id, projectName, force })}
-            disabled={busy || !!planError}
-            className="w-full rounded-lg bg-violet-500 px-4 py-2.5 text-xs font-semibold hover:bg-violet-400 disabled:opacity-50"
+            disabled={busy || !!planError || !initializeAvailable}
+            title={
+              initializeAvailable
+                ? undefined
+                : "Initialize writes files via ADE Desktop — Preview still works here"
+            }
+            className="shrink-0 rounded-lg bg-blue-500 px-4 py-2 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
           >
-            {busy ? "Initializing…" : `Initialize ${recipe.name}`}
+            {busy
+              ? "Initializing…"
+              : initializeAvailable
+                ? `Initialize`
+                : `Initialize · Desktop`}
           </button>
         </div>
       ) : (
@@ -397,8 +398,8 @@ export function RecipeWizard({
       )}
 
       <Disclosure
-        title="Adjust recommendations"
-        summary="fit questions"
+        title="Match your project"
+        summary="questions"
         defaultOpen={false}
         storageKey="ade_recipes_fit"
       >

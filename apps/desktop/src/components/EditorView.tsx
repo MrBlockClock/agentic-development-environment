@@ -62,9 +62,7 @@ export function EditorView({
   autoPick?: boolean;
   onTitleChange?: (title: string) => void;
 } = {}) {
-  const [pathInput, setPathInput] = useState(
-    initialPath?.trim() || ".ade/dogfood/editor-spike.md",
-  );
+  const [pathInput, setPathInput] = useState(initialPath?.trim() || "");
   const [relativePath, setRelativePath] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
@@ -385,8 +383,8 @@ export function EditorView({
           </div>
         )}
         <p className="mt-2 text-[10px] text-slate-600">
-          Diff uses git HEAD vs working tree. Secrets/always-ignore paths stay blocked. Prefer
-          Cursor/VS Code for extensions and large refactors.
+          Workspace text under the attached folder · Diff is git HEAD vs working tree ·
+          Secrets and always-ignore paths stay blocked.
         </p>
         {note && <p className="mt-2 text-[11px] text-emerald-200/90">{note}</p>}
         {error && <p className="mt-2 text-[11px] text-red-200">{error}</p>}

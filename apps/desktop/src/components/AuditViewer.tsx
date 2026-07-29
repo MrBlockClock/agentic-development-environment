@@ -53,10 +53,13 @@ export function AuditViewer({ handoffs }: AuditViewerProps): ReactNode {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isTauri()) return;
     void invoke<LedgerRow[]>("spend_ledger_recent", { limit: 40 })
       .then(setRows)
       .catch((reason) => setError(String(reason)));
+    if (!isTauri()) {
+      setActions([]);
+      return;
+    }
     void invoke<ActionRow[]>("continuity_actions_recent", { limit: 24 })
       .then(setActions)
       .catch(() => setActions([]));

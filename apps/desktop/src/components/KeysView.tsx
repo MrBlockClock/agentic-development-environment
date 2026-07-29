@@ -50,6 +50,7 @@ type ProviderVaultRow = {
 type KeysViewProps = {
   simpleMode?: boolean;
   onContinueToAgent?: () => void;
+  onOpenIntegrations?: () => void;
 };
 
 type EnvKeyCandidate = {
@@ -80,6 +81,7 @@ function maskLabel(configured: boolean): string {
 export function KeysView({
   simpleMode = false,
   onContinueToAgent,
+  onOpenIntegrations,
 }: KeysViewProps) {
   const profile = "local";
   const [provider, setProvider] = useState(() =>
@@ -500,6 +502,9 @@ export function KeysView({
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4">
+      <h1 className="text-lg font-semibold tracking-tight text-slate-50">
+        API keys
+      </h1>
       <p className="text-[12px] leading-5 text-slate-500">
         Pick a provider, paste a key, choose a model — then go Home.
       </p>
@@ -531,8 +536,8 @@ export function KeysView({
                 {busy && expandedId === provider
                   ? "…"
                   : activeConfigured
-                    ? "healthy"
-                    : "needs key"}
+                    ? "Connected"
+                    : "Needs key"}
               </span>
             </div>
           </div>
@@ -562,31 +567,37 @@ export function KeysView({
               maxLabelChars={40}
             />
           )}
-          <span
-            className="rounded-md border border-white/8 bg-white/3 px-2 py-1 text-[10px] font-medium text-slate-400"
-            title="Context window (tokens)"
-          >
-            {formatContextTokens(activeContext)} ctx
+          <span className="rounded-md border border-white/8 bg-white/3 px-2 py-1 text-[10px] font-medium text-slate-400">
+            {formatContextTokens(activeContext)} context
           </span>
           <button
             type="button"
             onClick={() => {
-              if (secret.trim()) {
-                void save(true);
-              } else if (activeConfigured) {
+              if (activeConfigured) {
                 onContinueToAgent?.();
               }
             }}
-            disabled={busy || !provider.trim() || !canGoHome}
+            disabled={busy || !provider.trim() || !canGoHome || !activeConfigured}
             className="rounded-lg bg-blue-500 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
           >
-            {secret.trim()
-              ? activeConfigured
-                ? "Replace & go Home"
-                : "Save & go Home"
-              : "Go Home"}
+            Go Home
           </button>
+          {onOpenIntegrations && (
+            <button
+              type="button"
+              onClick={onOpenIntegrations}
+              className="rounded-lg border border-white/12 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/8"
+              title="GitHub, Stripe, Azure tokens and MCP recipes"
+            >
+              Integrations
+            </button>
+          )}
         </div>
+        {secret.trim() && expandedId === provider && (
+          <p className="mt-2 text-[11px] text-amber-200/80">
+            Unsaved key in the editor below — use Save key there before Go Home.
+          </p>
+        )}
       </section>
 
       {/* Provider list */}
@@ -710,48 +721,41 @@ export function KeysView({
                       <span className="text-[12px] font-semibold text-slate-100">
                         {preset.label}
                       </span>
-                      {preset.recommended && (
-                        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-500">
-                          recommended
-                        </span>
-                      )}
-                      {preset.custom && (
-                        <span className="rounded bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-violet-200/90">
-                          custom
-                        </span>
-                      )}
-                      {preset.keyless && (
-                        <span className="rounded bg-emerald-400/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-emerald-300/90">
-                          keyless
-                        </span>
-                      )}
-                      {envVar && !configured && (
-                        <span className="rounded bg-sky-400/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300/90">
-                          env ready
-                        </span>
-                      )}
-                      {isActive && (
-                        <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-blue-200">
-                          active
-                        </span>
-                      )}
-                    </span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
-                      <span className="inline-flex items-center gap-1">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
+                          configured
+                            ? "bg-emerald-400/10 text-emerald-300"
+                            : envVar
+                              ? "bg-sky-400/10 text-sky-300"
+                              : "bg-amber-400/10 text-amber-200"
+                        }`}
+                      >
                         <span
                           className={`size-1.5 rounded-full ${
-                            configured ? "bg-emerald-400" : "bg-amber-400/80"
+                            configured
+                              ? "bg-emerald-400"
+                              : envVar
+                                ? "bg-sky-400"
+                                : "bg-amber-400/80"
                           }`}
                           aria-hidden
                         />
-                        {configured ? "healthy" : "needed"}
+                        {configured
+                          ? isActive
+                            ? "Active · connected"
+                            : "Connected"
+                          : envVar
+                            ? "Env ready"
+                            : "Needs key"}
                       </span>
-                      <span className="font-mono text-slate-600">
-                        {maskLabel(configured)}
-                      </span>
-                      <span className="text-slate-600">
-                        {configured ? "1 key" : "0 keys"}
-                      </span>
+                    </span>
+                    <span className="mt-0.5 block truncate text-[10px] text-slate-500">
+                      {preset.hint ??
+                        (preset.recommended
+                          ? "Recommended"
+                          : preset.keyless
+                            ? "No key required"
+                            : maskLabel(configured))}
                     </span>
                   </button>
 

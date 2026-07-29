@@ -123,7 +123,7 @@ pub(crate) struct ApiError {
 }
 
 impl ApiError {
-    fn internal(error: impl std::fmt::Display) -> Self {
+    pub(crate) fn internal(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error",
@@ -225,6 +225,7 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/state", get(state_snapshot))
         .route("/recipes", get(list_recipes))
         .route("/recipes/fit", post(rank_recipes))
+        .route("/recipes/preview", post(preview_recipe_scaffold))
         .route("/rules", get(list_rules))
         .route("/skills", get(list_skills))
         .route("/guidance/profiles", get(list_guidance_profiles))
@@ -245,6 +246,9 @@ pub fn build_router_with_state(state: ApiState) -> Router {
         .route("/events", get(events))
         .route("/verify", post(run_verify))
         .route("/leases/:id/renew", post(renew_lease))
+        .nest("/guided", crate::guided_routes::routes())
+        .nest("/spend", crate::analytics_routes::routes())
+        .nest("/workspaces", crate::workspace_routes::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -348,6 +352,35 @@ async fn rank_recipes(
     Json(answers): Json<ade_core::recipe_fit::FitAnswers>,
 ) -> Json<Vec<ade_core::recipe_fit::ScoredRecipe>> {
     Json(ade_core::recipe_fit::rank_builtin_recipes(&answers))
+}
+
+#[derive(Deserialize)]
+struct PreviewRecipeBody {
+    recipe: String,
+    project_name: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+async fn preview_recipe_scaffold(
+    State(state): State<ApiState>,
+    Json(body): Json<PreviewRecipeBody>,
+) -> ApiResult<Vec<ade_core::scaffold::ScaffoldFilePlan>> {
+    let recipe = ade_core::recipe::builtin_recipe(&body.recipe)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let name = body.project_name.unwrap_or_else(|| {
+        state
+            .workspace_root()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project")
+            .to_string()
+    });
+    let context = ade_core::agents_contract::AgentsContractContext::new(name)
+        .with_root(state.workspace_root().display().to_string());
+    ade_core::scaffold::RecipeScaffold::plan(state.workspace_root(), &recipe, &context, body.force)
+        .map(Json)
+        .map_err(map_ade_error)
 }
 
 async fn list_rules(
@@ -455,7 +488,7 @@ async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot>
             .join(".ade")
             .join("recipe.json")
             .is_file(),
-        has_provider_key: false,
+        has_provider_key: provider_key_configured(),
         audit,
         plan,
         handoff,
@@ -464,6 +497,15 @@ async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot>
         worktrees,
         worktree_error,
     }))
+}
+
+fn provider_key_configured() -> bool {
+    use ade_db::secrets::ProviderKeyVault;
+    let vault = ade_db::secrets::NativeProviderKeyVault;
+    let in_vault = ade_db::secrets::KNOWN_PROVIDERS
+        .iter()
+        .any(|provider| vault.contains("local", provider).unwrap_or(false));
+    in_vault || !ade_db::secrets::list_env_key_candidates().is_empty()
 }
 
 async fn events(

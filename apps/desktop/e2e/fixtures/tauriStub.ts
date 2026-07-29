@@ -110,6 +110,15 @@ export async function installTauriStub(page: Page): Promise<void> {
         list_skills: [],
         list_guidance_profiles: [],
         get_active_guidance_profile: null,
+        chat_load: { id: "stub", updatedAt: new Date().toISOString(), turns: [] },
+        chat_save: null,
+        chat_clear: null,
+        goal_active: null,
+        list_workspaces: {
+          current: (state as { workspace_root?: string }).workspace_root ?? "",
+          entries: [],
+          ade_source_root: null,
+        },
       };
       Object.defineProperty(window, "__TAURI_INTERNALS__", {
         value: {

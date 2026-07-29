@@ -1036,6 +1036,7 @@ async fn main() -> anyhow::Result<()> {
                     name: name.clone(),
                     command: command.clone(),
                     args: args.clone(),
+                    env: Default::default(),
                     approved: *approve,
                 })
                 .await?;
@@ -1069,6 +1070,7 @@ async fn main() -> anyhow::Result<()> {
                     name: name.clone(),
                     command: command.clone(),
                     args: args.clone(),
+                    env: Default::default(),
                     approved: *approve,
                 })
                 .await?;
@@ -1593,6 +1595,7 @@ async fn main() -> anyhow::Result<()> {
                         name: config.name.clone(),
                         command: config.command.clone(),
                         args: config.args.clone(),
+                        env: Default::default(),
                         approved: true,
                     })
                     .await?;

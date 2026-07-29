@@ -8,7 +8,7 @@ type ShellTabBarProps = {
 };
 
 const KIND_ICON: Record<ShellTab["kind"], string> = {
-  agent: "⌂",
+  agent: "◆",
   browser: "⬚",
   editor: "✎",
   terminal: "▸",
@@ -53,7 +53,7 @@ export function ShellTabBar({
               <span className="shrink-0 text-[10px] text-current/70" aria-hidden>
                 {KIND_ICON[tab.kind]}
               </span>
-              <span className="truncate text-[11px] font-medium leading-none">
+              <span className="truncate text-[12px] font-medium leading-none tracking-tight">
                 {tab.title}
               </span>
             </button>

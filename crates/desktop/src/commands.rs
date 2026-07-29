@@ -1127,13 +1127,40 @@ pub async fn mcp_connect(
     command: String,
     args: Vec<String>,
     approved: bool,
+    vault_provider: Option<String>,
+    vault_env_keys: Option<Vec<String>>,
 ) -> Result<(), String> {
+    let mut env = std::collections::BTreeMap::new();
+    if let Some(provider) = vault_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let keys = vault_env_keys.unwrap_or_default();
+        if !keys.is_empty() {
+            let profile = resolve_profile(None)?;
+            let secret = state
+                .key_vault
+                .get(&profile, provider)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| {
+                    format!("Save a {provider} token under Integrations before Connect MCP")
+                })?;
+            for key in keys {
+                let trimmed = key.trim();
+                if !trimmed.is_empty() {
+                    env.insert(trimmed.to_string(), secret.clone());
+                }
+            }
+        }
+    }
     state
         .mcp
         .connect_server(McpServerConfig {
             name,
             command,
             args,
+            env,
             approved,
         })
         .await

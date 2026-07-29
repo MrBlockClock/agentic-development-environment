@@ -23,8 +23,10 @@ export type McpRecipe = {
   commandWin: string;
   commandUnix: string;
   args: string[];
-  /** Env var the MCP server expects (user must export or we note it). */
+  /** Env var labels shown in UI (may include compound Azure-style hints). */
   envHint?: string;
+  /** Vault secret is injected into each of these env keys on Connect MCP. */
+  envKeys?: string[];
   docsUrl?: string;
 };
 
@@ -114,6 +116,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       commandUnix: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
       envHint: "GITHUB_PERSONAL_ACCESS_TOKEN",
+      envKeys: ["GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_TOKEN"],
       docsUrl: "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
     },
     fundamental: true,
@@ -133,6 +136,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       commandUnix: "npx",
       args: ["-y", "@modelcontextprotocol/server-gitlab"],
       envHint: "GITLAB_PERSONAL_ACCESS_TOKEN",
+      envKeys: ["GITLAB_PERSONAL_ACCESS_TOKEN", "GITLAB_TOKEN"],
       docsUrl: "https://gitlab.com/gitlab-org/modelops/applied-ml/code-suggestions/ai-assist/-/tree/main",
     },
     fundamental: true,
@@ -152,6 +156,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       commandUnix: "npx",
       args: ["-y", "@azure/mcp@latest", "server", "start"],
       envHint: "AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET",
+      envKeys: ["AZURE_CLIENT_SECRET"],
       docsUrl: "https://learn.microsoft.com/azure/developer/azure-mcp-server/",
     },
     fundamental: true,
@@ -193,6 +198,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       commandUnix: "npx",
       args: ["-y", "@stripe/mcp", "--tools=all"],
       envHint: "STRIPE_SECRET_KEY",
+      envKeys: ["STRIPE_SECRET_KEY", "STRIPE_API_KEY"],
       docsUrl: "https://docs.stripe.com/mcp",
     },
     fundamental: true,
@@ -212,6 +218,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       commandUnix: "npx",
       args: ["-y", "@modelcontextprotocol/server-slack"],
       envHint: "SLACK_BOT_TOKEN",
+      envKeys: ["SLACK_BOT_TOKEN", "SLACK_TOKEN"],
     },
     fundamental: true,
   },
@@ -230,6 +237,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       commandUnix: "npx",
       args: ["-y", "mcp-linear"],
       envHint: "LINEAR_API_KEY",
+      envKeys: ["LINEAR_API_KEY"],
     },
     fundamental: true,
   },

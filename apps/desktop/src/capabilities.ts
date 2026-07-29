@@ -53,21 +53,21 @@ export const ADE_CAPABILITY_MATRIX: CapabilityRow[] = [
     label: "Recipes / Stack Fit",
     desktop: true,
     browser: true,
-    note: "Browse + rank over HTTP; initialize may need Desktop",
+    note: "Browse + rank + preview over HTTP; initialize scaffold needs Desktop",
   },
   {
     id: "guidance_read",
     label: "Guidance / Atlas / Plan Map",
     desktop: true,
     browser: true,
-    note: "Reads + profile set over local API",
+    note: "Reads + profile set + guided wins over local API",
   },
   {
     id: "analytics",
     label: "Analytics (spend trend, attribution, reserve Δ)",
     desktop: true,
-    browser: false,
-    note: "Aggregates the local usage ledger over IPC; no loopback route by design",
+    browser: true,
+    note: "Local usage ledger via IPC or `ade serve` /api/spend/*",
   },
   {
     id: "local_api_token",
@@ -176,14 +176,14 @@ export function desktopRequiredCopy(view: string): {
   switch (view) {
     case "Keys":
       return {
-        title: "Keys need Desktop",
-        body: "Provider credentials are stored in the OS vault. Browser preview cannot save or smoke-test API keys.",
+        title: "Keys need the Desktop app",
+        body: "Provider credentials live in the OS vault. This browser preview cannot save or test API keys.",
         next: "Open ADE Desktop → Keys, then return here for status and checks.",
       };
     case "Integrations":
       return {
-        title: "Integrations need Desktop",
-        body: "Connector tokens and MCP recipes use the Desktop OS vault and process-hosted MCP.",
+        title: "Integrations need the Desktop app",
+        body: "Connector tokens and MCP recipes use the Desktop vault and process-hosted MCP.",
         next: "Open ADE Desktop → Setup → Integrations.",
       };
     case "MCP":

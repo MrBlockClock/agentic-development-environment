@@ -1,16 +1,12 @@
 import { useEffect, useState } from "react";
-import {
-  firstModelId,
-  formatContextTokens,
-  modelContextWindow,
-  PROVIDER_PRESETS,
-} from "../providers";
+import { CapabilityMatrix } from "./DesktopRequired";
+import { PROVIDER_PRESETS } from "../providers";
 import { Disclosure, Hint } from "./ui";
 import { GearIcon } from "./DarkSelect";
+import { isTauri } from "../ipc";
 
 const AUTONOMY_KEY = "ade_autonomy_level";
 const AGENT_PROVIDER_KEY = "ade_agent_provider";
-const AGENT_BASE_URL_KEY = "ade_agent_base_url";
 const AGENT_MODEL_KEY = "ade_agent_model";
 const AGENT_EFFORT_KEY = "ade_agent_effort";
 const SESSION_CAP_KEY = "ade_session_cap_usd";
@@ -50,10 +46,12 @@ export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewPro
   const [dailyCap, setDailyCap] = useState(
     () => window.localStorage.getItem(DAILY_CAP_KEY) || "5",
   );
-  const [providerId, setProviderId] = useState(
+  const [providerId] = useState(
     () => window.localStorage.getItem(AGENT_PROVIDER_KEY) || "opencode",
   );
-  const [note, setNote] = useState<string | null>(null);
+  const [modelId] = useState(
+    () => window.localStorage.getItem(AGENT_MODEL_KEY) || "",
+  );
 
   useEffect(() => {
     window.localStorage.setItem(AUTONOMY_KEY, autonomy);
@@ -67,30 +65,6 @@ export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewPro
   useEffect(() => {
     window.localStorage.setItem(DAILY_CAP_KEY, dailyCap);
   }, [dailyCap]);
-
-  const flash = (msg: string) => {
-    setNote(msg);
-    window.setTimeout(() => setNote(null), 1800);
-  };
-
-  const applyPreset = (id: string) => {
-    const preset = PROVIDER_PRESETS.find((item) => item.id === id);
-    if (!preset) return;
-    window.localStorage.setItem(AGENT_PROVIDER_KEY, preset.id);
-    window.localStorage.setItem(AGENT_BASE_URL_KEY, preset.baseUrl);
-    const modelId = firstModelId(preset);
-    window.localStorage.setItem(AGENT_MODEL_KEY, modelId);
-    window.localStorage.setItem(
-      "ade_agent_context_window",
-      String(modelContextWindow(preset.id, modelId)),
-    );
-    setProviderId(preset.id);
-    flash(
-      `Provider → ${preset.label} · ${formatContextTokens(
-        modelContextWindow(preset.id, modelId),
-      )} ctx`,
-    );
-  };
 
   const providerLabel =
     PROVIDER_PRESETS.find((p) => p.id === providerId)?.label ?? providerId;
@@ -106,7 +80,6 @@ export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewPro
           <p className="mt-0.5 text-[11px] leading-5 text-slate-500">
             Defaults for Home. API keys live under Keys.
           </p>
-          {note && <p className="mt-1.5 text-[11px] text-emerald-200/90">{note}</p>}
         </div>
       </div>
 
@@ -228,11 +201,10 @@ export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewPro
         >
           <div className="mb-3">
             <div className="mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">
-              Effort (turn gas tank)
+              How much ADE can do per turn
             </div>
             <div className="mb-1.5 text-[10px] text-slate-500">
-              How many tool steps this turn can take. Low = quick look · Med = normal work ·
-              High = long runs
+              Low: one step · Medium: usual · High: longer runs
             </div>
             <div className="flex flex-wrap gap-1.5">
               {(["low", "medium", "high"] as EffortLevel[]).map((level) => (
@@ -253,24 +225,22 @@ export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewPro
           </div>
           <div>
             <div className="mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">
-              Provider preset
+              Model & provider
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {PROVIDER_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => applyPreset(preset.id)}
-                  className={`rounded-md border px-2.5 py-1 text-[11px] ${
-                    providerId === preset.id
-                      ? "border-blue-400/40 bg-blue-500/15 text-blue-100"
-                      : "border-white/10 text-slate-500"
-                  }`}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
+            <p className="text-[12px] text-slate-300">
+              Active:{" "}
+              <span className="font-medium text-slate-100">{providerLabel}</span>
+              {modelId ? (
+                <span className="text-slate-500"> · {modelId}</span>
+              ) : null}
+            </p>
+            <button
+              type="button"
+              onClick={onOpenKeys}
+              className="mt-2 text-[11px] font-semibold text-blue-300 hover:underline"
+            >
+              Change in Keys →
+            </button>
           </div>
         </Disclosure>
 
@@ -302,6 +272,10 @@ export function SettingsView({ onOpenKeys, onOpenIntegrations }: SettingsViewPro
             </div>
             <span className="text-[11px] font-semibold text-blue-300">Open →</span>
           </button>
+        )}
+
+        {!isTauri() && (
+          <CapabilityMatrix shell="browser" />
         )}
       </section>
     </div>

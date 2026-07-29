@@ -82,5 +82,5 @@ Gold races cover spend honesty, slots, continuity, risk gates, and more (`AGENTS
 - [Architecture / repo layout](../architecture/REPO_LAYOUT.md)
 - [Surface gameplan](../platform/ADE_SURFACE_GAMEPLAN.md)
 - [Master gameplan](../research/ADE-Master-Gameplan.md)
+- [Docs site](https://mrblockclock.github.io/agentic-development-environment/) — guides, studies, ADRs
 - [AGENTS.md](../../AGENTS.md) — product DNA
-- [Wiki](https://github.com/MrBlockClock/agentic-development-environment/wiki)

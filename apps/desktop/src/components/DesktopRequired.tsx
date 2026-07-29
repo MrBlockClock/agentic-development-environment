@@ -1,4 +1,5 @@
-import { ADE_CAPABILITY_MATRIX, desktopRequiredCopy } from "../capabilities";
+import { desktopRequiredCopy } from "../capabilities";
+import { ADE_CAPABILITY_MATRIX } from "../capabilities";
 import { Disclosure } from "./ui";
 
 export function DesktopRequired({
@@ -10,61 +11,63 @@ export function DesktopRequired({
 }) {
   const copy = desktopRequiredCopy(view);
   return (
-    <div className="mx-auto max-w-xl space-y-4">
-      <section className="rounded-2xl border border-amber-400/25 bg-amber-400/8 px-5 py-6">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-200/80">
-          Browser preview
-        </p>
-        <h2 className="mt-2 text-xl font-semibold text-slate-50">{copy.title}</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-300">{copy.body}</p>
-        <p className="mt-3 text-[12px] leading-5 text-amber-100/85">{copy.next}</p>
-        <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-[12px] text-slate-400">
-          <li>
-            From the repo:{" "}
-            <span className="font-mono text-[11px] text-slate-300">
-              cargo run -p ade-cli --quiet -- desktop
-            </span>{" "}
-            (or your usual ADE Desktop launch)
-          </li>
-          <li>Same workspace root as this preview</li>
-          <li>
-            {view === "Keys"
-              ? "Add your provider key, then use Agent in Desktop"
-              : view === "Integrations"
-                ? "Connect GitHub / Stripe / MCP recipes in Desktop"
-                : view === "MCP"
-                  ? "Connect MCP servers in Desktop"
-                  : "Run Agent turns in Desktop; keep Verify here if you like"}
-          </li>
-        </ol>
+    <div className="mx-auto max-w-lg space-y-3">
+      <section className="rounded-xl border border-white/10 bg-white/[0.03] px-5 py-5">
+        <h2 className="text-lg font-semibold text-slate-50">{copy.title}</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-400">{copy.body}</p>
+        <p className="mt-3 text-[13px] leading-5 text-slate-300">{copy.next}</p>
         {!simpleMode && (
-          <p className="mt-4 text-[11px] text-slate-500">
-            Nav labels match Desktop — only capability differs by shell.
-          </p>
+          <Disclosure
+            title="How to open Desktop"
+            summary="steps"
+            defaultOpen={false}
+            storageKey={`ade_desktop_required_${view}`}
+            className="mt-4 border-white/8 bg-black/20"
+          >
+            <ol className="list-decimal space-y-1.5 pl-5 text-[12px] text-slate-400">
+              <li>
+                From the repo:{" "}
+                <span className="font-mono text-[11px] text-slate-300">
+                  cd apps/desktop && npm run tauri dev
+                </span>
+              </li>
+              <li>Use the same workspace folder as this preview</li>
+              <li>
+                {view === "Keys"
+                  ? "Add your provider key, then chat from Home"
+                  : view === "Integrations"
+                    ? "Connect GitHub / Stripe / MCP recipes"
+                    : view === "MCP"
+                      ? "Connect MCP servers"
+                      : "Run agent turns in Desktop; Verify still works here"}
+              </li>
+            </ol>
+          </Disclosure>
         )}
       </section>
     </div>
   );
 }
 
+/** Full matrix — keep off Home first paint; use under Settings or collapsed. */
 export function CapabilityMatrix({ shell }: { shell: "desktop" | "browser" }) {
   return (
     <Disclosure
-      title="What works here"
-      subtitle="Same labels · different capability by shell"
-      summary={shell === "browser" ? "browser preview" : "desktop"}
-      hint="Agent, Keys, and MCP need Desktop. Status, Verify, Recipes, Guidance work in browser when ade serve is authorized."
+      title="Desktop vs browser"
+      subtitle="What each shell can do"
+      summary={shell === "browser" ? "preview limits" : "full shell"}
+      hint="Agent, Keys, and MCP need Desktop. Status, Verify, Stack, and Guidance work here when the local API is connected."
+      defaultOpen={false}
       storageKey="ade_capability_matrix"
       className="border-white/10 bg-black/20"
     >
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[28rem] text-left text-[11px]">
+        <table className="w-full min-w-[22rem] text-left text-[11px]">
           <thead>
             <tr className="text-[10px] uppercase tracking-wider text-slate-500">
               <th className="py-1.5 pr-3 font-semibold">Capability</th>
               <th className="py-1.5 pr-3 font-semibold">Desktop</th>
-              <th className="py-1.5 pr-3 font-semibold">Browser</th>
-              <th className="py-1.5 font-semibold">Note</th>
+              <th className="py-1.5 font-semibold">Browser</th>
             </tr>
           </thead>
           <tbody>
@@ -74,11 +77,13 @@ export function CapabilityMatrix({ shell }: { shell: "desktop" | "browser" }) {
                 <tr
                   key={row.id}
                   className={`border-t border-white/6 ${here ? "text-slate-300" : "text-slate-500"}`}
+                  title={row.note}
                 >
-                  <td className="py-1.5 pr-3 font-medium text-slate-200">{row.label}</td>
-                  <td className="py-1.5 pr-3">{row.desktop ? "yes" : "—"}</td>
-                  <td className="py-1.5 pr-3">{row.browser ? "yes" : "—"}</td>
-                  <td className="py-1.5 text-slate-500">{row.note}</td>
+                  <td className="py-1.5 pr-3 font-medium text-slate-200">
+                    {row.label}
+                  </td>
+                  <td className="py-1.5 pr-3">{row.desktop ? "Yes" : "—"}</td>
+                  <td className="py-1.5">{row.browser ? "Yes" : "—"}</td>
                 </tr>
               );
             })}

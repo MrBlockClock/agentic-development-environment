@@ -8,6 +8,7 @@ import {
   type IntegrationDef,
 } from "../integrationsCatalog";
 import { DesktopRequired } from "./DesktopRequired";
+import { IntegrationIcon } from "./IntegrationIcons";
 import { Disclosure, EmptyState, Hint, Panel } from "./ui";
 
 type ProviderKeyStatus = {
@@ -27,17 +28,25 @@ type IntegrationsViewProps = {
     command: string;
     args: string[];
     approved: boolean;
-  }) => void;
+    vaultProvider?: string | null;
+    vaultEnvKeys?: string[];
+  }) => Promise<void>;
   onRefreshMcp: () => void;
 };
 
 const PROFILE = "local";
 
+/** Honest status: builtins/keys are informational; tokens need vault; MCP needs live server. */
 function statusTone(
+  item: IntegrationDef,
   configured: boolean,
-  mcpConnected: boolean,
+  mcpLive: boolean,
 ): "ready" | "todo" | "info" {
-  if (configured || mcpConnected) return "ready";
+  if (item.kind === "builtin" || item.kind === "keys" || item.kind === "surface") {
+    return "info";
+  }
+  if (item.mcpRecipe && mcpLive) return "ready";
+  if (item.kind === "token" && configured) return "ready";
   return "todo";
 }
 
@@ -56,8 +65,10 @@ export function IntegrationsView({
 }: IntegrationsViewProps) {
   const [vault, setVault] = useState<Record<string, boolean>>({});
   const [expandedId, setExpandedId] = useState<string | null>("github");
-  const [secret, setSecret] = useState("");
+  /** Per-row draft secrets so expanding GitHub doesn't leak Stripe paste state. */
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [connectingMcp, setConnectingMcp] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const tokenIds = useMemo(
@@ -102,7 +113,8 @@ export function IntegrationsView({
   const mcpConnected = mcpServers.length;
 
   const saveToken = async (vaultId: string) => {
-    if (!secret.trim()) {
+    const draft = (secrets[vaultId] ?? "").trim();
+    if (!draft) {
       setMessage("Paste a token first.");
       return;
     }
@@ -112,9 +124,9 @@ export function IntegrationsView({
       await invoke<ProviderKeyStatus>("key_set", {
         provider: vaultId,
         profile: PROFILE,
-        secret: secret.trim(),
+        secret: draft,
       });
-      setSecret("");
+      setSecrets((prev) => ({ ...prev, [vaultId]: "" }));
       setMessage(`Saved ${vaultId} to the OS vault.`);
       await refreshVault();
     } catch (reason) {
@@ -138,21 +150,39 @@ export function IntegrationsView({
     }
   };
 
-  const connectRecipe = (item: IntegrationDef) => {
+  const connectRecipe = async (item: IntegrationDef) => {
     const recipe = item.mcpRecipe;
     if (!recipe) return;
-    onConnectMcp({
-      name: recipe.name,
-      command: mcpCommandForPlatform(recipe),
-      args: recipe.args,
-      approved: true,
-    });
-    setMessage(
-      recipe.envHint
-        ? `Connecting ${recipe.name}… Ensure ${recipe.envHint} is set in the Desktop process env (token in vault alone may not inject yet).`
-        : `Connecting ${recipe.name}…`,
-    );
-    onRefreshMcp();
+
+    if (recipe.envKeys?.length && item.vaultId && !vault[item.vaultId]) {
+      setMessage(
+        `Save a ${item.label} token first, then Connect MCP — ADE injects it into ${recipe.envKeys.join(" / ")}.`,
+      );
+      return;
+    }
+
+    setConnectingMcp(recipe.name);
+    setMessage(`Connecting ${recipe.name}…`);
+    try {
+      await onConnectMcp({
+        name: recipe.name,
+        command: mcpCommandForPlatform(recipe),
+        args: recipe.args,
+        approved: true,
+        vaultProvider: item.vaultId ?? null,
+        vaultEnvKeys: recipe.envKeys ?? [],
+      });
+      const extra =
+        item.id === "azure"
+          ? " Also set AZURE_TENANT_ID and AZURE_CLIENT_ID in the Desktop process env."
+          : "";
+      setMessage(`Connected ${recipe.name}.${extra}`);
+      onRefreshMcp();
+    } catch (reason) {
+      setMessage(`Failed to connect ${recipe.name}: ${String(reason)}`);
+    } finally {
+      setConnectingMcp(null);
+    }
   };
 
   if (!isTauri()) {
@@ -224,8 +254,9 @@ export function IntegrationsView({
             <li key={tool.id}>
               <span
                 title={tool.note}
-                className="inline-flex items-center rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[11px] text-slate-300"
+                className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[11px] text-slate-300"
               >
+                <IntegrationIcon id={tool.id} className="size-3.5 text-slate-400" />
                 {tool.label}
               </span>
             </li>
@@ -234,8 +265,9 @@ export function IntegrationsView({
             <li key={`mcp-${name}`}>
               <span
                 title="Connected MCP server"
-                className="inline-flex items-center rounded-md border border-violet-400/25 bg-violet-500/10 px-2 py-1 text-[11px] text-violet-100"
+                className="inline-flex items-center gap-1.5 rounded-md border border-violet-400/25 bg-violet-500/10 px-2 py-1 text-[11px] text-violet-100"
               >
+                <IntegrationIcon id="mcp-host" className="size-3.5 text-violet-200" />
                 MCP · {name}
               </span>
             </li>
@@ -261,10 +293,14 @@ export function IntegrationsView({
                 ? mcpServers.includes(item.mcpRecipe.name)
                 : false;
               const open = expandedId === item.id;
-              const tone = statusTone(
-                configured || item.kind === "builtin" || item.kind === "keys",
-                mcpLive,
-              );
+              const tone = statusTone(item, configured, mcpLive);
+              const statusLabel = mcpLive
+                ? "MCP on"
+                : configured
+                  ? "Token"
+                  : item.kind === "builtin" || item.kind === "keys" || item.kind === "surface"
+                    ? "Built-in"
+                    : "Add";
               return (
                 <li
                   key={item.id}
@@ -278,31 +314,39 @@ export function IntegrationsView({
                     className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-white/[0.03]"
                   >
                     <span
-                      className={`size-1.5 shrink-0 rounded-full ${
+                      className={`grid size-8 shrink-0 place-items-center rounded-lg border ${
                         tone === "ready"
-                          ? "bg-emerald-400"
+                          ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
                           : tone === "info"
-                            ? "bg-sky-400"
-                            : "bg-amber-400/80"
+                            ? "border-sky-400/25 bg-sky-500/10 text-sky-200"
+                            : "border-white/10 bg-white/4 text-slate-300"
                       }`}
                       aria-hidden
-                    />
+                    >
+                      <IntegrationIcon id={item.id} className="size-4" />
+                    </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-semibold text-slate-100">
-                        {item.label}
+                      <span className="flex items-center gap-2">
+                        <span className="block text-[13px] font-semibold text-slate-100">
+                          {item.label}
+                        </span>
+                        <span
+                          className={`size-1.5 shrink-0 rounded-full ${
+                            tone === "ready"
+                              ? "bg-emerald-400"
+                              : tone === "info"
+                                ? "bg-sky-400"
+                                : "bg-amber-400/80"
+                          }`}
+                          aria-hidden
+                        />
                       </span>
                       <span className="block truncate text-[11px] text-slate-500">
                         {item.blurb}
                       </span>
                     </span>
                     <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                      {mcpLive
-                        ? "MCP on"
-                        : configured
-                          ? "Token"
-                          : item.kind === "builtin" || item.kind === "keys"
-                            ? "Built-in"
-                            : "Add"}
+                      {statusLabel}
                     </span>
                     <span className="text-[10px] text-slate-600" aria-hidden>
                       {open ? "▴" : "▾"}
@@ -310,10 +354,6 @@ export function IntegrationsView({
                   </button>
                   {open && (
                     <div className="space-y-3 border-t border-white/6 px-3 py-3">
-                      <p className="text-[11px] leading-5 text-slate-400">
-                        {item.blurb}
-                      </p>
-
                       {(item.kind === "keys" ||
                         item.kind === "surface" ||
                         item.kind === "builtin") &&
@@ -359,8 +399,13 @@ export function IntegrationsView({
                               placeholder={
                                 configured ? "Replace token…" : "Paste token…"
                               }
-                              value={secret}
-                              onChange={(event) => setSecret(event.target.value)}
+                              value={secrets[item.vaultId] ?? ""}
+                              onChange={(event) =>
+                                setSecrets((prev) => ({
+                                  ...prev,
+                                  [item.vaultId!]: event.target.value,
+                                }))
+                              }
                               className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#101620] px-3 py-2 font-mono text-[12px] text-slate-200"
                             />
                             <button
@@ -394,7 +439,7 @@ export function IntegrationsView({
                         <Disclosure
                           title="MCP recipe"
                           summary={mcpLive ? "Connected" : "One-click connect"}
-                          hint="Spawns a reviewed stdio server. Export the env hint in the Desktop process if the recipe needs it."
+                          hint="Spawns a reviewed stdio server. Vault tokens are injected into the process env on connect."
                           defaultOpen={!mcpLive}
                         >
                           <div className="space-y-2 pt-1">
@@ -404,17 +449,30 @@ export function IntegrationsView({
                             </p>
                             {item.mcpRecipe.envHint && (
                               <p className="text-[11px] text-amber-100/85">
-                                Needs env: {item.mcpRecipe.envHint}
+                                Env: {item.mcpRecipe.envHint}
+                                {item.vaultId && item.mcpRecipe.envKeys?.length
+                                  ? vault[item.vaultId]
+                                    ? " · vault token will be injected"
+                                    : " · save a vault token first"
+                                  : ""}
                               </p>
                             )}
                             <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
-                                disabled={busy || mcpLive}
-                                onClick={() => connectRecipe(item)}
+                                disabled={
+                                  busy ||
+                                  mcpLive ||
+                                  connectingMcp === item.mcpRecipe.name
+                                }
+                                onClick={() => void connectRecipe(item)}
                                 className="rounded-md border border-violet-400/35 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/25 disabled:opacity-40"
                               >
-                                {mcpLive ? "Already connected" : "Connect MCP"}
+                                {mcpLive
+                                  ? "Already connected"
+                                  : connectingMcp === item.mcpRecipe.name
+                                    ? "Connecting…"
+                                    : "Connect MCP"}
                               </button>
                               <button
                                 type="button"
@@ -449,7 +507,7 @@ export function IntegrationsView({
       {INTEGRATIONS.length === 0 && (
         <EmptyState
           title="No integrations"
-          body="Catalog is empty — check integrationsCatalog.ts."
+          body="Catalog is empty — no connectors available yet."
         />
       )}
     </div>
