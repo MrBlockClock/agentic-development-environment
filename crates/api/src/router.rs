@@ -123,15 +123,7 @@ pub(crate) struct ApiError {
 }
 
 impl ApiError {
-    pub(crate) fn internal(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal_error",
-            message: error.to_string(),
-        }
-    }
-
-    pub(crate) fn bad_request(message: impl Into<String>) -> Self {
+    pub fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             code: "bad_request",
@@ -139,7 +131,7 @@ impl ApiError {
         }
     }
 
-    pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
+    pub fn unauthorized(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
             code: "unauthorized",
@@ -147,12 +139,23 @@ impl ApiError {
         }
     }
 
-    pub(crate) fn forbidden(message: impl Into<String>) -> Self {
+    pub fn forbidden(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
             code: "forbidden",
             message: message.into(),
         }
+    }
+}
+
+/// Crate-visible constructor. Sibling route modules must use this instead of an
+/// associated `ApiError::internal` — rust-analyzer remaps this crate under
+/// dependent paths and floods Problems with false E0624 on that pattern.
+pub(crate) fn internal_error(error: impl std::fmt::Display) -> ApiError {
+    ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        code: "internal_error",
+        message: error.to_string(),
     }
 }
 
@@ -192,7 +195,7 @@ pub(crate) fn map_ade_error(error: AdeError) -> ApiError {
             message,
         },
         AdeError::Other(message) => ApiError::bad_request(message),
-        other => ApiError::internal(other),
+        other => internal_error(other),
     }
 }
 
@@ -438,21 +441,21 @@ async fn list_leases(State(state): State<ApiState>) -> ApiResult<Vec<PathLease>>
     LeaseManager::new(state.workspace_root())
         .list()
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(internal_error)
 }
 
 async fn list_tasks(State(state): State<ApiState>) -> ApiResult<Vec<AgentTask>> {
     TaskCoordinator::new(state.workspace_root())
         .list()
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(internal_error)
 }
 
 async fn list_worktrees(State(state): State<ApiState>) -> ApiResult<Vec<WorktreeInfo>> {
     WorktreeManager::new(state.workspace_root())
         .list()
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(internal_error)
 }
 
 async fn handoff_status(
@@ -461,7 +464,7 @@ async fn handoff_status(
     ade_agents::handoff::HandoffManager::new(state.workspace_root())
         .metrics()
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(internal_error)
 }
 
 async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot> {
@@ -469,13 +472,13 @@ async fn state_snapshot(State(state): State<ApiState>) -> ApiResult<ApiSnapshot>
     let plan = PlanBuilder::new().build(&audit);
     let handoff = ade_agents::handoff::HandoffManager::new(state.workspace_root())
         .metrics()
-        .map_err(ApiError::internal)?;
+        .map_err(internal_error)?;
     let leases = LeaseManager::new(state.workspace_root())
         .list()
-        .map_err(ApiError::internal)?;
+        .map_err(internal_error)?;
     let tasks = TaskCoordinator::new(state.workspace_root())
         .list()
-        .map_err(ApiError::internal)?;
+        .map_err(internal_error)?;
     let (worktrees, worktree_error) = match WorktreeManager::new(state.workspace_root()).list() {
         Ok(worktrees) => (worktrees, None),
         Err(error) => (Vec::new(), Some(error.to_string())),

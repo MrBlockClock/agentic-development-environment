@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::router::{ApiError, ApiResult, ApiState};
+use crate::router::{internal_error, ApiError, ApiResult, ApiState};
 
 pub fn routes() -> Router<ApiState> {
     Router::new()
@@ -54,5 +54,5 @@ fn parse_win(raw: &str) -> Result<GuidedWinId, ApiError> {
 }
 
 fn map_ade(error: AdeError) -> ApiError {
-    ApiError::internal(error)
+    internal_error(error)
 }

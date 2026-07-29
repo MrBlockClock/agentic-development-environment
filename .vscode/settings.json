@@ -8,7 +8,7 @@
     "apps/desktop/node_modules",
     "apps/desktop/dist"
   ],
-  "rust-analyzer.diagnostics.style.enable": true,
+  "rust-analyzer.diagnostics.style.enable": false,
   "rust-analyzer.procMacro.enable": true,
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",

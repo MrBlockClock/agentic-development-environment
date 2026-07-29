@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::router::{ApiError, ApiResult, ApiState};
+use crate::router::{internal_error, ApiError, ApiResult, ApiState};
 
 pub fn routes() -> Router<ApiState> {
     Router::new()
@@ -33,7 +33,7 @@ async fn spend_ledger(
         .recent_for_workspace(&workspace, query.limit.unwrap_or(40))
         .await
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(internal_error)
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +69,7 @@ async fn spend_summary(
     let breakdown = ledger
         .active_spend_breakdown("workspace", &period_key, &workspace)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(internal_error)?;
     let remaining = caps.daily.saturating_sub(breakdown.active);
     Ok(Json(SpendSummary {
         daily_usd: breakdown.active.to_usd_f64(),
@@ -83,10 +83,10 @@ async fn spend_summary(
 }
 
 async fn open_ledger() -> Result<UsageLedgerStore, ApiError> {
-    let config = AdeConfig::load().map_err(ApiError::internal)?;
+    let config = AdeConfig::load().map_err(internal_error)?;
     let db = AdeDatabase::open(&DbConfig::from_ade_config(&config))
         .await
-        .map_err(ApiError::internal)?;
-    let conn = db.connect().map_err(ApiError::internal)?;
+        .map_err(internal_error)?;
+    let conn = db.connect().map_err(internal_error)?;
     Ok(UsageLedgerStore::new(conn))
 }
