@@ -83,7 +83,7 @@ Ship discipline as product objects — not as prompt pleading.
 | Channel | C1–C5 mask / capsules / SelfCompact / fertility gold |
 | Desktop Ideal spine | Control plane · Wave 5 failure CTAs / dogfood chips · Verify (judge) |
 | ACP / Zed | Soft shell (`ade acp`) · DEC-A-015 stay L1 |
-| Gold | **73/73** · H5/C5/H2 · invoice · thrift · E1 · C4 |
+| Gold | **76/76** · H5/C5/H2 · invoice · thrift · E1 · C4 · D vision/PDF |
 
 **Stance:** Amplify spine. Don’t reboot as an editor project.
 

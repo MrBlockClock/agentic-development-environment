@@ -73,6 +73,9 @@
     { "id": "g70", "title": "C3 thrift resume forbids paste", "kind": "c3_thrift_resume_no_paste", "dogfood": true },
     { "id": "g71", "title": "C3 last-write Continuity sections", "kind": "c3_last_write_sections", "dogfood": true },
     { "id": "g72", "title": "E1 action envelope persists to Continuity", "kind": "e1_action_envelope_persist", "dogfood": true },
-    { "id": "g73", "title": "C4 compact_context rubric gate", "kind": "c4_compact_context_rubric", "dogfood": true }
+    { "id": "g73", "title": "C4 compact_context rubric gate", "kind": "c4_compact_context_rubric", "dogfood": true },
+    { "id": "g74", "title": "D vision refuse on text-only model", "kind": "d_vision_refuse_text_only", "dogfood": true },
+    { "id": "g75", "title": "D image reserve exceeds text-only estimate", "kind": "d_vision_image_reserve", "dogfood": true },
+    { "id": "g76", "title": "D PDF extract rejects non-PDF", "kind": "d_pdf_extract_rejects_non_pdf", "dogfood": false }
   ]
 }

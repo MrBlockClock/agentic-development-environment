@@ -50,7 +50,7 @@
             "type": "chrome",
             "request": "launch",
             "name": "Debug Tauri Frontend (WebView)",
-            "url": "http://localhost:1420",
+            "url": "http://127.0.0.1:1420",
             "webRoot": "${workspaceFolder}/apps/desktop/src",
             "sourceMaps": true,
             "skipFiles": [

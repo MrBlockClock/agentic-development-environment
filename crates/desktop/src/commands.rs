@@ -3173,6 +3173,72 @@ pub fn chat_open_path(state: State<'_, AppState>, path: String) -> Result<(), St
     Err("chat_open_path unsupported on this platform".into())
 }
 
+/// Extract first pages of a PDF into `.ade/inbox/*.extract.md` (explicit; never auto).
+#[tauri::command]
+pub fn chat_extract_pdf(
+    state: State<'_, AppState>,
+    source_path: String,
+    max_pages: Option<usize>,
+) -> Result<StagedAttachment, String> {
+    let trimmed = source_path.trim();
+    if trimmed.is_empty() {
+        return Err("sourcePath required".into());
+    }
+    let root = state.workspace_root();
+    let raw = PathBuf::from(trimmed);
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        root.join(&raw)
+    };
+    if !absolute.is_file() {
+        return Err(format!("pdf not found: {trimmed}"));
+    }
+    let ext = absolute
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "pdf" {
+        return Err(format!("not a .pdf file: {trimmed}"));
+    }
+    let pages = max_pages.unwrap_or(ade_agents::pdf::DEFAULT_PDF_EXTRACT_PAGES);
+    let result = ade_agents::pdf::extract_pdf_text(&absolute, pages).map_err(|e| e.to_string())?;
+    let name = absolute
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document.pdf");
+    let rel_or_abs = if let Ok(rel) = absolute.strip_prefix(&root) {
+        rel.to_string_lossy().replace('\\', "/")
+    } else {
+        absolute.display().to_string()
+    };
+    let markdown =
+        ade_agents::pdf::format_extract_markdown(name, &rel_or_abs, &result);
+    let inbox = chat_inbox_dir(&root)?;
+    let safe = sanitize_inbox_name(&format!(
+        "{}.extract.md",
+        Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("document")
+    ));
+    let dest_name = format!("{}-{}", chrono_lite_stamp(), safe);
+    let dest = inbox.join(&dest_name);
+    std::fs::write(&dest, markdown.as_bytes()).map_err(|error| format!("write inbox: {error}"))?;
+    let bytes = std::fs::metadata(&dest)
+        .map(|m| m.len())
+        .unwrap_or(markdown.len() as u64);
+    Ok(StagedAttachment {
+        name: dest_name.clone(),
+        path: format!(".ade/inbox/{dest_name}"),
+        absolute: dest.display().to_string(),
+        bytes,
+        staged: true,
+        is_dir: false,
+    })
+}
+
 /// Fetch an http(s) URL into `.ade/inbox/fetch-*.md` (explicit unfurl; never auto).
 #[tauri::command]
 pub async fn chat_fetch_url(

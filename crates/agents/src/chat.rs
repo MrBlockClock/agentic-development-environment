@@ -25,6 +25,8 @@ pub struct ChatAttachmentMeta {
     pub size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetched_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

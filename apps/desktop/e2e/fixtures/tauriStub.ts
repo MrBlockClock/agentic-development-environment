@@ -149,6 +149,14 @@ export async function installTauriStub(page: Page): Promise<void> {
           staged: true,
           isDir: false,
         },
+        chat_extract_pdf: {
+          name: "doc.extract.md",
+          path: ".ade/inbox/doc.extract.md",
+          absolute: "/tmp/doc.extract.md",
+          bytes: 24,
+          staged: true,
+          isDir: false,
+        },
         workspace_mention_candidates: ["AGENTS.md", "README.md"],
         goal_active: null,
         list_workspaces: {

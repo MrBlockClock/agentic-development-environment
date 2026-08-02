@@ -111,6 +111,7 @@ export function AttachmentChips({
   onClearAll,
   onOpen,
   onFetch,
+  onExtract,
   compact = false,
 }: {
   items: ChatAttachment[];
@@ -119,6 +120,8 @@ export function AttachmentChips({
   onOpen?: (item: ChatAttachment) => void;
   /** Optional unfurl for url/ticket chips (writes inbox markdown). */
   onFetch?: (item: ChatAttachment) => void;
+  /** Optional PDF text extract into inbox markdown. */
+  onExtract?: (item: ChatAttachment) => void;
   compact?: boolean;
 }) {
   if (items.length === 0) return null;
@@ -162,9 +165,25 @@ export function AttachmentChips({
                 Fetch
               </button>
             )}
+          {onExtract && item.kind === "pdf" && !item.extractedPath && (
+            <button
+              type="button"
+              aria-label={`Extract ${item.name}`}
+              title="Extract first pages to .ade/inbox/*.extract.md"
+              onClick={() => onExtract(item)}
+              className="shrink-0 rounded px-1 text-[10px] text-rose-200/80 hover:bg-white/10 hover:text-rose-100"
+            >
+              Extract
+            </button>
+          )}
           {item.fetchedPath ? (
             <span className="shrink-0 text-[9px] uppercase tracking-wide opacity-70">
               fetched
+            </span>
+          ) : null}
+          {item.extractedPath ? (
+            <span className="shrink-0 text-[9px] uppercase tracking-wide opacity-70">
+              extract
             </span>
           ) : null}
           {onRemove && (

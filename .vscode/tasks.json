@@ -51,7 +51,7 @@
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": ".",
-                    "endsPattern": "Local:\\s+http://localhost:1420"
+                    "endsPattern": "Local:\\s+http://127\\.0\\.0\\.1:1420"
                 }
             },
             "presentation": {
@@ -59,7 +59,7 @@
                 "reveal": "always",
                 "panel": "dedicated"
             },
-            "detail": "Start Vite on http://localhost:1420 for Tauri HMR."
+            "detail": "Start Vite on http://127.0.0.1:1420 for Tauri HMR."
         },
         {
             "label": "tauri: dev",
@@ -81,7 +81,7 @@
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": ".",
-                    "endsPattern": "(Local:\\s+http://localhost:1420|App\\.|Finished)"
+                    "endsPattern": "(Local:\\s+http://127\\.0\\.0\\.1:1420|App\\.|Finished)"
                 }
             },
             "detail": "Run Tauri in dev mode with Vite frontend hot-reload.",

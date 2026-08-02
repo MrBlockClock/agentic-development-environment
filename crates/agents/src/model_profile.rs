@@ -42,6 +42,9 @@ pub struct ModelProfile {
     pub require_verify: bool,
     #[serde(default)]
     pub prefer_worktree: bool,
+    /// When set, overrides model-id vision heuristic for multimodal turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     #[serde(default)]
     pub tags: Vec<String>,
 }
@@ -51,6 +54,25 @@ fn default_schema() -> String {
 }
 
 impl ModelProfile {
+    /// Explicit `vision` field, else `tags` containing `"vision"` / `"no-vision"`.
+    pub fn vision_capability(&self) -> Option<bool> {
+        if let Some(v) = self.vision {
+            return Some(v);
+        }
+        if self
+            .tags
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("vision") || t.eq_ignore_ascii_case("no-vision"))
+        {
+            let deny = self
+                .tags
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("no-vision"));
+            return Some(!deny);
+        }
+        None
+    }
+
     pub fn display_label(&self) -> &str {
         if self.label.trim().is_empty() {
             self.id.as_str()
@@ -329,6 +351,7 @@ fn builtin_profiles() -> Vec<ModelProfile> {
             slot_eligibility: vec!["planner".into()],
             require_verify: false,
             prefer_worktree: false,
+            vision: None,
             tags: vec!["fast".into(), "cheap".into()],
         },
         ModelProfile {
@@ -344,6 +367,7 @@ fn builtin_profiles() -> Vec<ModelProfile> {
             slot_eligibility: vec!["worker".into()],
             require_verify: false,
             prefer_worktree: true,
+            vision: None,
             tags: vec!["strong".into()],
         },
         ModelProfile {
@@ -363,6 +387,7 @@ fn builtin_profiles() -> Vec<ModelProfile> {
             slot_eligibility: vec!["verifier".into()],
             require_verify: true,
             prefer_worktree: false,
+            vision: None,
             tags: vec!["independent".into()],
         },
         ModelProfile {
@@ -378,6 +403,7 @@ fn builtin_profiles() -> Vec<ModelProfile> {
             slot_eligibility: vec!["planner".into()],
             require_verify: false,
             prefer_worktree: false,
+            vision: None,
             tags: vec!["cheap".into(), "scout".into()],
         },
     ]

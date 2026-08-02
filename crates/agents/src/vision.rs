@@ -7,9 +7,53 @@ use std::path::{Path, PathBuf};
 const MAX_VISION_IMAGES: usize = 4;
 const MAX_VISION_BYTES: u64 = 5 * 1024 * 1024;
 
+/// Dedicated image-token bands for SpendGuard (not base64 char÷4 inflation).
+/// Roughly mirrors OpenAI low/high detail tile weights.
+pub fn estimate_image_tokens_for_bytes(bytes: u64) -> u32 {
+    const BASE: u32 = 85;
+    if bytes == 0 {
+        return BASE;
+    }
+    if bytes < 50_000 {
+        BASE + 170
+    } else if bytes < 500_000 {
+        BASE + 765
+    } else {
+        BASE + 1_105
+    }
+}
+
+/// Sum dedicated vision tokens for workspace image paths (stat each file).
+pub fn estimate_vision_tokens(
+    image_paths: &[String],
+    workspace_root: &Path,
+) -> Result<u32, AdeError> {
+    if image_paths.is_empty() {
+        return Ok(0);
+    }
+    let mut total = 0u32;
+    for raw in image_paths.iter().take(MAX_VISION_IMAGES) {
+        let path = resolve_image_path(workspace_root, raw)?;
+        let meta = std::fs::metadata(&path).map_err(|error| {
+            AdeError::Config(format!("stat {}: {error}", path.display()))
+        })?;
+        total = total.saturating_add(estimate_image_tokens_for_bytes(meta.len()));
+    }
+    Ok(total)
+}
+
 /// Conservative allowlist: VL-named models + common multimodal families.
 /// Free text-only Zen presets (deepseek-*-free, big-pickle, …) return false.
+///
+/// When `profile_vision` is `Some`, it wins (model-profile `vision` flag).
 pub fn model_supports_vision(model: &str) -> bool {
+    model_supports_vision_ex(model, None)
+}
+
+pub fn model_supports_vision_ex(model: &str, profile_vision: Option<bool>) -> bool {
+    if let Some(forced) = profile_vision {
+        return forced;
+    }
     let m = model.trim().to_ascii_lowercase();
     if m.is_empty() {
         return false;
@@ -130,10 +174,20 @@ pub fn user_message_content(
     model: &str,
     workspace_root: &Path,
 ) -> Result<Value, AdeError> {
+    user_message_content_ex(prompt, image_paths, model, workspace_root, None)
+}
+
+pub fn user_message_content_ex(
+    prompt: &str,
+    image_paths: &[String],
+    model: &str,
+    workspace_root: &Path,
+    profile_vision: Option<bool>,
+) -> Result<Value, AdeError> {
     if image_paths.is_empty() {
         return Ok(Value::String(prompt.to_string()));
     }
-    if !model_supports_vision(model) {
+    if !model_supports_vision_ex(model, profile_vision) {
         return Err(AdeError::Config(format!(
             "vision_required: model `{model}` does not support images. Switch to a vision-capable model (e.g. Claude, GPT-4.1, or a *-vl* FreeLLM model)."
         )));
@@ -174,6 +228,18 @@ mod tests {
         assert!(model_supports_vision("gpt-4.1-mini"));
         assert!(model_supports_vision("qwen2.5-vl-72b"));
         assert!(model_supports_vision("command-a-vision"));
+    }
+
+    #[test]
+    fn profile_vision_flag_overrides_heuristic() {
+        assert!(!model_supports_vision_ex("claude-haiku-4-5", Some(false)));
+        assert!(model_supports_vision_ex("big-pickle", Some(true)));
+    }
+
+    #[test]
+    fn image_token_bands_are_stable() {
+        assert!(estimate_image_tokens_for_bytes(10_000) < estimate_image_tokens_for_bytes(200_000));
+        assert!(estimate_image_tokens_for_bytes(200_000) < estimate_image_tokens_for_bytes(2_000_000));
     }
 
     #[test]

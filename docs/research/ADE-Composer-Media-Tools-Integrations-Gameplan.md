@@ -120,15 +120,16 @@ flowchart TB
 - [x] Composer `@` mention palette (workspace paths + connected MCP tools)
 
 ### Phase M2 — Rich media understanding
-- [ ] PDF: first-N-pages text extract → `.ade/inbox/*.extract.md` + path to both  
-- [ ] Image: optional thumbnail strip in user bubble  
+- [x] PDF: first-N-pages text extract → `.ade/inbox/*.extract.md` + path to both  
+- [x] Image: optional thumbnail strip in user bubble  
 - [ ] Office: `.docx`/`.xlsx` via extract-to-markdown (opt-in)  
 - [ ] Audio: whisper-class **local or API** transcribe → text attach (Debug/Advanced)
 
 ### Phase M3 — Multimodal providers
 - [x] Provider message parts: `text` + `image_url` / base64 when model supports vision  
-- [ ] Honest spend: dedicated image token reservation (base64 already inflate estimate)  
-- [x] Gate: refuse image turns on text-only models with CTA “switch model” (Desktop + Rust)
+- [x] Honest spend: dedicated image token reservation (base64 already inflate estimate)  
+- [x] Gate: refuse image turns on text-only models with CTA “switch model” (Desktop + Rust)  
+- [x] Model profile `vision` flag (+ `tags: ["vision"|"no-vision"]`) overrides heuristic
 
 ---
 
@@ -219,9 +220,9 @@ Already in harness:
 3. Ticket URL parse (GitHub first) ✅
 
 ### Sprint D — Extracts & vision
-1. PDF text extract command  
-2. Model profile `vision` flag + multimodal message parts  
-3. Gold probes: refuse vision on text-only; spend honesty with image reserve  
+1. PDF text extract command ✅ (`chat_extract_pdf` · Extract chip)  
+2. Model profile `vision` flag + multimodal message parts ✅  
+3. Gold probes: refuse vision on text-only; spend honesty with image reserve ✅ (g74–g76)  
 
 ### Sprint E — Integration recipes
 1. Document MCP recipes for GitHub/Linear  

@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AttachmentChips } from "./AttachmentChips";
 import { parseAttachedBlock } from "./fileKind";
 import { openChatPath } from "./attachIngest";
+import { isTauri } from "../ipc";
 import type { TurnFailureAction, TurnFailureAdvice } from "./turnFailure";
 
 export type { TurnFailureAction, TurnFailureAdvice };
@@ -700,13 +702,49 @@ export function AgentActivityFeed({
                 </div>
                 {(() => {
                   const parsed = parseAttachedBlock(turn.user);
+                  const items = parsed.attachments.map((item) => {
+                    if (item.kind !== "image" || item.previewUrl || !isTauri()) {
+                      return item;
+                    }
+                    try {
+                      return {
+                        ...item,
+                        previewUrl: convertFileSrc(item.absolute ?? item.path),
+                      };
+                    } catch {
+                      return item;
+                    }
+                  });
                   return (
                     <>
                       {parsed.text ? (
                         <div className="whitespace-pre-wrap">{parsed.text}</div>
                       ) : null}
+                      {items.some((item) => item.kind === "image" && item.previewUrl) ? (
+                        <div className="mb-1.5 flex flex-wrap gap-1.5">
+                          {items
+                            .filter((item) => item.kind === "image" && item.previewUrl)
+                            .map((item) => (
+                              <button
+                                key={`thumb-${item.id}`}
+                                type="button"
+                                title={item.path}
+                                onClick={() =>
+                                  void openChatPath(item.absolute ?? item.path)
+                                }
+                                className="overflow-hidden rounded-md border border-cyan-400/25"
+                              >
+                                <img
+                                  src={item.previewUrl}
+                                  alt=""
+                                  className="h-14 w-14 object-cover"
+                                />
+                              </button>
+                            ))}
+                        </div>
+                      ) : null}
                       <AttachmentChips
-                        items={parsed.attachments}
+                        items={items}
                         compact
                         onOpen={(item) => void openChatPath(item.absolute ?? item.path)}
                       />

@@ -62,6 +62,35 @@ pub fn estimate_messages_tokens(messages: &[Value]) -> u64 {
     crate::context::estimate_tokens(&encoded) as u64
 }
 
+/// Same as [`estimate_messages_tokens`] but redacts `data:image…;base64,…` payloads so
+/// SpendGuard can add a dedicated vision-token band instead of base64 char inflation.
+pub fn estimate_messages_tokens_excluding_image_data(messages: &[Value]) -> u64 {
+    let encoded = serde_json::to_string(messages).unwrap_or_default();
+    let redacted = redact_image_data_urls(&encoded);
+    crate::context::estimate_tokens(&redacted) as u64
+}
+
+fn redact_image_data_urls(input: &str) -> String {
+    // Match full `data:image/...;base64,...` payloads. Do not stop at the
+    // comma after `base64` — that would leave the blob and defeat honesty.
+    let marker = "data:image";
+    let mut out = String::with_capacity(input.len().min(64_000));
+    let mut rest = input;
+    while let Some(start) = rest.find(marker) {
+        out.push_str(&rest[..start]);
+        out.push_str("data:image/*;base64,[redacted-for-reserve]");
+        let after = &rest[start..];
+        // Prefer closing quote (JSON string); else brace/bracket.
+        let end = after[marker.len()..]
+            .find(['"', '}', ']'])
+            .map(|i| marker.len() + i)
+            .unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn occupancy_ratio(messages: &[Value], context_limit: u64) -> f64 {
     let limit = context_limit.max(1) as f64;
     estimate_messages_tokens(messages) as f64 / limit

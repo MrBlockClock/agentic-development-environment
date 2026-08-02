@@ -220,6 +220,33 @@ export async function fetchUrlAttachment(
   }
 }
 
+/** Extract first pages of a PDF into `.ade/inbox/*.extract.md`. */
+export async function extractPdfAttachment(
+  item: ChatAttachment,
+): Promise<
+  { ok: true; attachment: ChatAttachment } | { ok: false; error: string }
+> {
+  if (item.kind !== "pdf") {
+    return { ok: false, error: "Only PDF chips can be extracted" };
+  }
+  if (!isTauri()) return { ok: false, error: "Desktop only" };
+  try {
+    const staged = await invoke<StagedAttachment>("chat_extract_pdf", {
+      sourcePath: item.absolute ?? item.path,
+      maxPages: 8,
+    });
+    return {
+      ok: true,
+      attachment: {
+        ...item,
+        extractedPath: staged.path,
+      },
+    };
+  } catch (reason) {
+    return { ok: false, error: String(reason) };
+  }
+}
+
 async function stageSelectedPaths(paths: string[]): Promise<{
   attachments: ChatAttachment[];
   errors: string[];

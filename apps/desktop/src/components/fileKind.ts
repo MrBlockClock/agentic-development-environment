@@ -25,6 +25,8 @@ export type ChatAttachment = {
   previewUrl?: string;
   /** Optional fetched inbox path for URL chips after unfurl. */
   fetchedPath?: string;
+  /** Optional PDF extract markdown path after Extract. */
+  extractedPath?: string;
 };
 
 /** Persistable attachment fields for `chat_save` (no preview blobs). */
@@ -37,6 +39,7 @@ export type ChatAttachmentMeta = {
   mime?: string;
   size?: number;
   fetchedPath?: string;
+  extractedPath?: string;
 };
 
 export function toAttachmentMeta(item: ChatAttachment): ChatAttachmentMeta {
@@ -49,6 +52,7 @@ export function toAttachmentMeta(item: ChatAttachment): ChatAttachmentMeta {
     mime: item.mime,
     size: item.size,
     fetchedPath: item.fetchedPath,
+    extractedPath: item.extractedPath,
   };
 }
 
@@ -182,6 +186,7 @@ export function fromAttachmentMeta(meta: ChatAttachmentMeta): ChatAttachment {
     mime: meta.mime,
     size: meta.size,
     fetchedPath: meta.fetchedPath,
+    extractedPath: meta.extractedPath,
   };
 }
 
@@ -194,6 +199,7 @@ export function makeAttachment(input: {
   previewUrl?: string;
   kind?: AttachmentKind;
   fetchedPath?: string;
+  extractedPath?: string;
 }): ChatAttachment {
   const name = input.name?.trim() || baseName(input.path);
   return {
@@ -206,6 +212,7 @@ export function makeAttachment(input: {
     size: input.size,
     previewUrl: input.previewUrl,
     fetchedPath: input.fetchedPath,
+    extractedPath: input.extractedPath,
   };
 }
 
@@ -226,7 +233,10 @@ export function packagePromptWithAttachments(
         : `- ${item.path} (image/${extensionOf(item.name) || "bin"}; binary — vision unavailable on this model; switch to a vision-capable model)`;
     }
     if (kind === "pdf") {
-      return `- ${item.path} (pdf; prefer extract/summary tools if available, else note path only)`;
+      const extracted = item.extractedPath
+        ? `; extract → ${item.extractedPath}`
+        : "; prefer Extract to inbox markdown if you need text";
+      return `- ${item.path} (pdf${extracted})`;
     }
     if (kind === "archive") {
       return `- ${item.path} (archive; do not unpack into context)`;

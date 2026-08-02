@@ -377,11 +377,17 @@ impl AgentSession {
             .await;
 
         let (provider_tools, tool_routes) = self.provider_tools().await?;
-        let user_content = crate::vision::user_message_content(
+        let profile_vision = self.route_profile_id.as_deref().and_then(|id| {
+            crate::model_profile::ModelProfileCatalog::load(&self.workspace_root)
+                .get(id)
+                .and_then(|profile| profile.vision_capability())
+        });
+        let user_content = crate::vision::user_message_content_ex(
             &prompt,
             &image_paths,
             &self.model.id,
             &self.workspace_root,
+            profile_vision,
         )?;
         let mut messages = vec![
             json!({ "role": "system", "content": self.system_prompt }),
@@ -412,7 +418,16 @@ impl AgentSession {
                     return Err(AdeError::Budget(detail));
                 }
             }
-            let input_est = crate::context_edit::estimate_messages_tokens(&messages);
+            // Text estimate excluding base64 blobs; add dedicated vision band (Sprint D).
+            let text_est =
+                crate::context_edit::estimate_messages_tokens_excluding_image_data(&messages);
+            let vision_est = if round == 0 && !image_paths.is_empty() {
+                crate::vision::estimate_vision_tokens(&image_paths, &self.workspace_root)
+                    .unwrap_or(0) as u64
+            } else {
+                0
+            };
+            let input_est = text_est.saturating_add(vision_est);
             let out_budget = self
                 .max_tokens
                 .map(|cap| cap.saturating_sub(total_usage.output_tokens))
