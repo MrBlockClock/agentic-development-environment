@@ -1121,6 +1121,7 @@ fn load_last_verify(workspace: &std::path::Path) -> Vec<VerifyResult> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn mcp_connect(
     state: State<'_, AppState>,
     name: String,
