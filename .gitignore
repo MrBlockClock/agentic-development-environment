@@ -40,6 +40,7 @@ Thumbs.db
 .ade/artifacts/
 .ade/continuity/
 .ade/dogfood/
+.ade/inbox/
 .ade/plan/
 .ade/verify/
 .ade/verify-*.json
