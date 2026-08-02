@@ -99,6 +99,7 @@ pub fn run() {
             ade_desktop_crate::commands::chat_fetch_url,
             ade_desktop_crate::commands::chat_extract_pdf,
             ade_desktop_crate::commands::chat_extract_office,
+            ade_desktop_crate::commands::chat_transcribe_audio,
             ade_desktop_crate::commands::workspace_mention_candidates,
         ])
         .run(tauri::generate_context!())

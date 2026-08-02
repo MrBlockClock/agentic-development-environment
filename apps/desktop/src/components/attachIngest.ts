@@ -284,6 +284,36 @@ export async function extractDocumentAttachment(
   return { ok: false, error: "Only PDF and Office chips can be extracted" };
 }
 
+/** Whisper-class audio → `.ade/inbox/*.transcript.md` (Debug/Advanced). */
+export async function transcribeAudioAttachment(
+  item: ChatAttachment,
+  opts?: { provider?: string },
+): Promise<
+  { ok: true; attachment: ChatAttachment } | { ok: false; error: string }
+> {
+  if (item.kind !== "audio") {
+    return { ok: false, error: "Only audio chips can be transcribed" };
+  }
+  if (!isTauri()) return { ok: false, error: "Desktop only" };
+  try {
+    const staged = await invoke<StagedAttachment>("chat_transcribe_audio", {
+      sourcePath: item.absolute ?? item.path,
+      provider: opts?.provider ?? null,
+      baseUrl: null,
+      model: null,
+    });
+    return {
+      ok: true,
+      attachment: {
+        ...item,
+        transcriptPath: staged.path,
+      },
+    };
+  } catch (reason) {
+    return { ok: false, error: String(reason) };
+  }
+}
+
 async function stageSelectedPaths(paths: string[]): Promise<{
   attachments: ChatAttachment[];
   errors: string[];

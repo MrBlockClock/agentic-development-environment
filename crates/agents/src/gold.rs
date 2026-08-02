@@ -181,6 +181,8 @@ impl GoldRunner {
                 probe_m2_office_extract_rejects_non_office()
             }
             "m2_office_extract_docx" => probe_m2_office_extract_docx(),
+            "m2_audio_rejects_non_audio" => probe_m2_audio_rejects_non_audio(),
+            "m2_audio_local_whisper_cmd" => probe_m2_audio_local_whisper_cmd(),
             other => Err(format!("unknown gold task kind '{other}'")),
         };
         match outcome {
@@ -597,6 +599,18 @@ fn builtin_tasks() -> Vec<GoldTask> {
             "g78",
             "M2 Office extract docx paragraph",
             "m2_office_extract_docx",
+            true,
+        ),
+        task(
+            "g79",
+            "M2 audio rejects non-audio",
+            "m2_audio_rejects_non_audio",
+            false,
+        ),
+        task(
+            "g80",
+            "M2 audio local ADE_WHISPER_CMD",
+            "m2_audio_local_whisper_cmd",
             true,
         ),
     ]
@@ -1761,6 +1775,48 @@ fn probe_m2_office_extract_docx() -> Result<String, String> {
         return Err(format!("missing paragraph text: {}", result.text));
     }
     Ok("office extract docx paragraph".into())
+}
+
+fn probe_m2_audio_rejects_non_audio() -> Result<String, String> {
+    let root = std::env::temp_dir().join(format!("ade-gold-audio-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let path = root.join("note.txt");
+    std::fs::write(&path, b"not audio").map_err(|e| e.to_string())?;
+    let err = crate::audio::validate_audio_file(&path)
+        .err()
+        .ok_or_else(|| "non-audio unexpectedly validated".to_string())?
+        .to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    if !err.contains("not an audio transcribe target") {
+        return Err(format!("expected audio reject, got {err}"));
+    }
+    Ok("audio rejects non-audio".into())
+}
+
+fn probe_m2_audio_local_whisper_cmd() -> Result<String, String> {
+    let root = std::env::temp_dir().join(format!("ade-gold-whisper-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let path = root.join("clip.mp3");
+    std::fs::write(&path, b"ID3fake").map_err(|e| e.to_string())?;
+    let prev = std::env::var("ADE_WHISPER_CMD").ok();
+    std::env::set_var(
+        "ADE_WHISPER_CMD",
+        r#"powershell -NoProfile -Command "Write-Output 'ADE audio gold transcript'""#,
+    );
+    let result = crate::audio::transcribe_local(&path);
+    match prev {
+        Some(value) => std::env::set_var("ADE_WHISPER_CMD", value),
+        None => std::env::remove_var("ADE_WHISPER_CMD"),
+    }
+    let result = result.map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&root);
+    if !result.text.contains("ADE audio gold transcript") {
+        return Err(format!("missing transcript text: {}", result.text));
+    }
+    if !result.backend.starts_with("local:") {
+        return Err(format!("expected local backend, got {}", result.backend));
+    }
+    Ok("audio local ADE_WHISPER_CMD".into())
 }
 
 fn probe_c5_mask() -> Result<String, String> {

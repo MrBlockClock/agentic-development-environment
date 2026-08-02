@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod authority;
 pub mod autonomy;
 pub mod chat;

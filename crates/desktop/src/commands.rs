@@ -3239,6 +3239,143 @@ pub fn chat_extract_pdf(
     })
 }
 
+/// Transcribe audio into `.ade/inbox/*.transcript.md` (Debug/Advanced; never auto).
+/// Prefers `ADE_WHISPER_CMD` when set; else Groq/OpenAI vault key + `/audio/transcriptions`.
+#[tauri::command]
+pub async fn chat_transcribe_audio(
+    state: State<'_, AppState>,
+    source_path: String,
+    provider: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+) -> Result<StagedAttachment, String> {
+    let trimmed = source_path.trim();
+    if trimmed.is_empty() {
+        return Err("sourcePath required".into());
+    }
+    let root = state.workspace_root();
+    let raw = PathBuf::from(trimmed);
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        root.join(&raw)
+    };
+    if !absolute.is_file() {
+        return Err(format!("audio file not found: {trimmed}"));
+    }
+    ade_agents::audio::validate_audio_file(&absolute).map_err(|e| e.to_string())?;
+
+    let result = if ade_agents::audio::local_whisper_cmd_configured() {
+        ade_agents::audio::transcribe_local(&absolute).map_err(|e| e.to_string())?
+    } else {
+        let profile = "local".to_string();
+        let provider_id = resolve_whisper_provider(
+            state.key_vault.as_ref(),
+            &profile,
+            provider.as_deref(),
+        )?;
+        let api_key = state
+            .key_vault
+            .get(&profile, &provider_id)
+            .map_err(|e| e.to_string())?
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "No vault key for '{provider_id}'. Save a Groq or OpenAI key under Keys, or set ADE_WHISPER_CMD for local whisper."
+                )
+            })?;
+        let base = base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                ade_agents::audio::default_whisper_base_url(&provider_id).map(|s| s.to_string())
+            })
+            .ok_or_else(|| {
+                format!("No Whisper base URL for provider '{provider_id}'")
+            })?;
+        let model_id = model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                ade_agents::audio::default_whisper_model(&provider_id).to_string()
+            });
+        ade_agents::audio::transcribe_api(
+            &absolute,
+            &ade_agents::audio::TranscribeApiOpts {
+                api_key,
+                base_url: base,
+                model: model_id,
+                provider_label: provider_id,
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let name = absolute
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio.bin");
+    let rel_or_abs = if let Ok(rel) = absolute.strip_prefix(&root) {
+        rel.to_string_lossy().replace('\\', "/")
+    } else {
+        absolute.display().to_string()
+    };
+    let markdown =
+        ade_agents::audio::format_transcript_markdown(name, &rel_or_abs, &result);
+    let inbox = chat_inbox_dir(&root)?;
+    let safe = sanitize_inbox_name(&format!(
+        "{}.transcript.md",
+        Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("audio")
+    ));
+    let dest_name = format!("{}-{}", chrono_lite_stamp(), safe);
+    let dest = inbox.join(&dest_name);
+    std::fs::write(&dest, markdown.as_bytes()).map_err(|error| format!("write inbox: {error}"))?;
+    let bytes = std::fs::metadata(&dest)
+        .map(|m| m.len())
+        .unwrap_or(markdown.len() as u64);
+    Ok(StagedAttachment {
+        name: dest_name.clone(),
+        path: format!(".ade/inbox/{dest_name}"),
+        absolute: dest.display().to_string(),
+        bytes,
+        staged: true,
+        is_dir: false,
+    })
+}
+
+fn resolve_whisper_provider(
+    vault: &dyn ade_db::secrets::ProviderKeyVault,
+    profile: &str,
+    requested: Option<&str>,
+) -> Result<String, String> {
+    if let Some(raw) = requested.map(str::trim).filter(|s| !s.is_empty()) {
+        let id = raw.to_ascii_lowercase();
+        if ade_agents::audio::default_whisper_base_url(&id).is_none() {
+            return Err(format!(
+                "Unsupported Whisper provider '{id}' (use groq or openai, or ADE_WHISPER_CMD)"
+            ));
+        }
+        return Ok(id);
+    }
+    for id in ade_agents::audio::WHISPER_PROVIDER_PREFERENCE {
+        if vault.contains(profile, id).unwrap_or(false) {
+            return Ok((*id).to_string());
+        }
+    }
+    Err(
+        "No Groq/OpenAI key in the vault for Whisper. Save one under Keys, pick provider, or set ADE_WHISPER_CMD."
+            .into(),
+    )
+}
+
 /// Extract `.docx` / `.xlsx` text into `.ade/inbox/*.extract.md` (explicit; never auto).
 #[tauri::command]
 pub fn chat_extract_office(

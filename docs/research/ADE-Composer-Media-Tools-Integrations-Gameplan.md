@@ -88,7 +88,7 @@ flowchart TB
 | `folder` | directory | Path string + “list only” hint |
 | `url` | https… | URL + optional fetch-to-`.ade/inbox/fetch-*.md` |
 | `ticket` | `GH#123`, Linear | Deep link + id in Attached |
-| `audio` / `video` | mp3/mp4 | Path only v1; transcribe later |
+| `audio` / `video` | mp3/wav/m4a/… | Path + Debug **Transcribe** → `.ade/inbox/*.transcript.md` |
 | `tool` | MCP tool / shell | Not a file — scopes turn tools |
 | `integration` | connected GitHub | Auth’d connector, not per-message bytes |
 
@@ -123,7 +123,7 @@ flowchart TB
 - [x] PDF: first-N-pages text extract → `.ade/inbox/*.extract.md` + path to both  
 - [x] Image: optional thumbnail strip in user bubble  
 - [x] Office: `.docx`/`.xlsx` via extract-to-markdown (opt-in) — `chat_extract_office` · Extract chip · g77–g78  
-- [ ] Audio: whisper-class **local or API** transcribe → text attach (Debug/Advanced)
+- [x] Audio: whisper-class **local or API** transcribe → text attach (Debug/Advanced) — `chat_transcribe_audio` · Transcribe chip · `ADE_WHISPER_CMD` or Groq/OpenAI · g79–g80
 
 ### Phase M3 — Multimodal providers
 - [x] Provider message parts: `text` + `image_url` / base64 when model supports vision  

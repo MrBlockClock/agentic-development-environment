@@ -62,6 +62,7 @@ npm run tauri dev
 | Home | Ask ADE · Suggest / Apply / Automate |
 | Setup → Keys | BYOK OS vault |
 | Setup → Integrations | GitHub, Stripe, Azure, MCP recipes ([recipe guide](mcp-recipes.html)) |
+| Home (Debug on) | Audio **Transcribe** → `.ade/inbox/*.transcript.md` (Groq/OpenAI Whisper, or `ADE_WHISPER_CMD`) |
 | Insight → Trust | Audit, risk, envelopes |
 | Insight → Analytics | Spend trend & attribution (Desktop) |
 

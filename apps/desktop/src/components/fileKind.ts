@@ -4,6 +4,7 @@ export type AttachmentKind =
   | "image"
   | "pdf"
   | "office"
+  | "audio"
   | "code"
   | "text"
   | "archive"
@@ -28,6 +29,8 @@ export type ChatAttachment = {
   fetchedPath?: string;
   /** Optional PDF/Office extract markdown path after Extract. */
   extractedPath?: string;
+  /** Optional audio transcript markdown path after Transcribe. */
+  transcriptPath?: string;
 };
 
 /** Persistable attachment fields for `chat_save` (no preview blobs). */
@@ -41,6 +44,7 @@ export type ChatAttachmentMeta = {
   size?: number;
   fetchedPath?: string;
   extractedPath?: string;
+  transcriptPath?: string;
 };
 
 export function toAttachmentMeta(item: ChatAttachment): ChatAttachmentMeta {
@@ -54,6 +58,7 @@ export function toAttachmentMeta(item: ChatAttachment): ChatAttachmentMeta {
     size: item.size,
     fetchedPath: item.fetchedPath,
     extractedPath: item.extractedPath,
+    transcriptPath: item.transcriptPath,
   };
 }
 
@@ -116,6 +121,16 @@ const TEXT_EXT = new Set([
   "adoc",
 ]);
 const ARCHIVE_EXT = new Set(["zip", "tar", "gz", "tgz", "7z", "rar"]);
+const AUDIO_EXT = new Set([
+  "mp3",
+  "wav",
+  "m4a",
+  "ogg",
+  "flac",
+  "webm",
+  "mpga",
+  "mpeg",
+]);
 
 const BLOCKED_NAMES = new Set([
   ".env",
@@ -147,6 +162,7 @@ export function fileKindFromName(pathOrName: string): AttachmentKind {
   const ext = extensionOf(pathOrName);
   if (ext === "pdf") return "pdf";
   if (ext === "docx" || ext === "xlsx") return "office";
+  if (AUDIO_EXT.has(ext) || ext === "mp4") return "audio";
   if (IMAGE_EXT.has(ext)) return "image";
   if (CODE_EXT.has(ext)) return "code";
   if (TEXT_EXT.has(ext)) return "text";
@@ -194,6 +210,7 @@ export function fromAttachmentMeta(meta: ChatAttachmentMeta): ChatAttachment {
     size: meta.size,
     fetchedPath: meta.fetchedPath,
     extractedPath: meta.extractedPath,
+    transcriptPath: meta.transcriptPath,
   };
 }
 
@@ -207,6 +224,7 @@ export function makeAttachment(input: {
   kind?: AttachmentKind;
   fetchedPath?: string;
   extractedPath?: string;
+  transcriptPath?: string;
 }): ChatAttachment {
   const name = input.name?.trim() || baseName(input.path);
   return {
@@ -220,6 +238,7 @@ export function makeAttachment(input: {
     previewUrl: input.previewUrl,
     fetchedPath: input.fetchedPath,
     extractedPath: input.extractedPath,
+    transcriptPath: input.transcriptPath,
   };
 }
 
@@ -251,6 +270,12 @@ export function packagePromptWithAttachments(
         : "; prefer Extract to inbox markdown if you need text";
       const ext = extensionOf(item.name) || "office";
       return `- ${item.path} (${ext}${extracted})`;
+    }
+    if (kind === "audio") {
+      const transcript = item.transcriptPath
+        ? `; transcript → ${item.transcriptPath}`
+        : "; binary audio — Transcribe (Debug) to inbox markdown if you need text";
+      return `- ${item.path} (audio${transcript})`;
     }
     if (kind === "archive") {
       return `- ${item.path} (archive; do not unpack into context)`;
@@ -339,7 +364,9 @@ export function isFileLikeHref(href: string): boolean {
     ARCHIVE_EXT.has(ext) ||
     ext === "pdf" ||
     ext === "docx" ||
-    ext === "xlsx"
+    ext === "xlsx" ||
+    AUDIO_EXT.has(ext) ||
+    ext === "mp4"
   );
 }
 

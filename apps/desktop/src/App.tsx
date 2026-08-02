@@ -78,6 +78,7 @@ import {
 } from "./components/fileKind";
 import {
   extractDocumentAttachment,
+  transcribeAudioAttachment,
   fetchUrlAttachment,
   ingestFiles,
   ingestPathText,
@@ -5524,6 +5525,23 @@ function AgentView({
     }
   };
 
+  const transcribeAttachment = async (item: ChatAttachment) => {
+    setAttachBusy(true);
+    try {
+      const result = await transcribeAudioAttachment(item);
+      if (result.ok) {
+        setAttachments((current) =>
+          current.map((row) => (row.id === item.id ? result.attachment : row)),
+        );
+        setAttachNote(null);
+      } else {
+        setAttachNote(result.error);
+      }
+    } finally {
+      setAttachBusy(false);
+    }
+  };
+
   const mentionItems = useMemo((): MentionItem[] => {
     const q = mentionQuery.trim().toLowerCase();
     const pathItems: MentionItem[] = mentionPaths
@@ -6748,6 +6766,11 @@ function AgentView({
               onOpen={(item) => void openChatPath(item.absolute ?? item.path)}
               onFetch={(item) => void fetchAttachment(item)}
               onExtract={(item) => void extractAttachment(item)}
+              onTranscribe={
+                showDebugHarness
+                  ? (item) => void transcribeAttachment(item)
+                  : undefined
+              }
             />
             {attachNote && (
               <p className="mb-2 text-[10px] leading-4 text-amber-200/90">{attachNote}</p>

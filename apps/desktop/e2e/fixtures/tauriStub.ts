@@ -165,6 +165,14 @@ export async function installTauriStub(page: Page): Promise<void> {
           staged: true,
           isDir: false,
         },
+        chat_transcribe_audio: {
+          name: "clip.transcript.md",
+          path: ".ade/inbox/clip.transcript.md",
+          absolute: "/tmp/clip.transcript.md",
+          bytes: 40,
+          staged: true,
+          isDir: false,
+        },
         workspace_mention_candidates: ["AGENTS.md", "README.md"],
         goal_active: null,
         list_workspaces: {

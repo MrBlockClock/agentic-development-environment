@@ -78,6 +78,8 @@
     { "id": "g75", "title": "D image reserve exceeds text-only estimate", "kind": "d_vision_image_reserve", "dogfood": true },
     { "id": "g76", "title": "D PDF extract rejects non-PDF", "kind": "d_pdf_extract_rejects_non_pdf", "dogfood": false },
     { "id": "g77", "title": "M2 Office extract rejects non-Office", "kind": "m2_office_extract_rejects_non_office", "dogfood": false },
-    { "id": "g78", "title": "M2 Office extract docx paragraph", "kind": "m2_office_extract_docx", "dogfood": true }
+    { "id": "g78", "title": "M2 Office extract docx paragraph", "kind": "m2_office_extract_docx", "dogfood": true },
+    { "id": "g79", "title": "M2 audio rejects non-audio", "kind": "m2_audio_rejects_non_audio", "dogfood": false },
+    { "id": "g80", "title": "M2 audio local ADE_WHISPER_CMD", "kind": "m2_audio_local_whisper_cmd", "dogfood": true }
   ]
 }

@@ -43,6 +43,16 @@ function KindIcon({ kind }: { kind: AttachmentKind }) {
           <path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke={stroke} strokeWidth="1.25" />
         </svg>
       );
+    case "audio":
+      return (
+        <svg {...common}>
+          <path
+            d="M8 2.5v7.2a2.2 2.2 0 1 1-1.5-2.1V5.2L12 3.8v5.2a2.2 2.2 0 1 1-1.5-2.1V2.8L8 2.5Z"
+            stroke={stroke}
+            strokeWidth="1.25"
+          />
+        </svg>
+      );
     case "code":
       return (
         <svg {...common}>
@@ -109,6 +119,7 @@ const kindTone: Record<AttachmentKind, string> = {
   image: "text-cyan-300/90 border-cyan-400/25 bg-cyan-500/10",
   pdf: "text-rose-300/90 border-rose-400/25 bg-rose-500/10",
   office: "text-blue-200/90 border-blue-400/25 bg-blue-500/10",
+  audio: "text-fuchsia-200/90 border-fuchsia-400/25 bg-fuchsia-500/10",
   code: "text-violet-300/90 border-violet-400/25 bg-violet-500/10",
   text: "text-slate-300 border-white/12 bg-white/5",
   archive: "text-amber-300/90 border-amber-400/25 bg-amber-500/10",
@@ -125,6 +136,7 @@ export function AttachmentChips({
   onOpen,
   onFetch,
   onExtract,
+  onTranscribe,
   compact = false,
 }: {
   items: ChatAttachment[];
@@ -135,6 +147,8 @@ export function AttachmentChips({
   onFetch?: (item: ChatAttachment) => void;
   /** Optional PDF/Office text extract into inbox markdown. */
   onExtract?: (item: ChatAttachment) => void;
+  /** Debug/Advanced: Whisper-class audio → inbox transcript markdown. */
+  onTranscribe?: (item: ChatAttachment) => void;
   compact?: boolean;
 }) {
   if (items.length === 0) return null;
@@ -205,6 +219,22 @@ export function AttachmentChips({
           {item.extractedPath ? (
             <span className="shrink-0 text-[9px] uppercase tracking-wide opacity-70">
               extract
+            </span>
+          ) : null}
+          {onTranscribe && item.kind === "audio" && !item.transcriptPath && (
+            <button
+              type="button"
+              aria-label={`Transcribe ${item.name}`}
+              title="Transcribe via Whisper (Groq/OpenAI key or ADE_WHISPER_CMD) → .ade/inbox/*.transcript.md"
+              onClick={() => onTranscribe(item)}
+              className="shrink-0 rounded px-1 text-[10px] text-fuchsia-200/80 hover:bg-white/10 hover:text-fuchsia-100"
+            >
+              Transcribe
+            </button>
+          )}
+          {item.transcriptPath ? (
+            <span className="shrink-0 text-[9px] uppercase tracking-wide opacity-70">
+              transcript
             </span>
           ) : null}
           {onRemove && (
