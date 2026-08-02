@@ -311,8 +311,13 @@ impl UsageLedgerStore {
             let _ = tx.rollback().await;
             return Err(error);
         }
-        let active = match Self::active_spend_breakdown_on(&tx, &scope, &period_key, &workspace_root)
-            .await
+        let active = match Self::active_spend_breakdown_on(
+            &tx,
+            &scope,
+            &period_key,
+            &workspace_root,
+        )
+        .await
         {
             Ok(breakdown) => breakdown.active,
             Err(error) => {
@@ -321,11 +326,8 @@ impl UsageLedgerStore {
             }
         };
         // Active still includes this reservation's reserved amount.
-        let without_this = Money::from_micros(
-            active
-                .micros()
-                .saturating_sub(reserved_micros.max(0)),
-        );
+        let without_this =
+            Money::from_micros(active.micros().saturating_sub(reserved_micros.max(0)));
         let next = without_this.saturating_add(commit.actual);
         if let Some(cap_micros) = hard_cap_micros.filter(|value| *value >= 0) {
             let hard_cap = Money::from_micros(cap_micros);
@@ -694,17 +696,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("hard spend cap exceeded at commit"),
+            err.to_string()
+                .contains("hard spend cap exceeded at commit"),
             "unexpected error: {err}"
         );
     }
 
     #[tokio::test]
     async fn concurrent_reserves_respect_hard_cap() {
-        let db_path = std::env::temp_dir().join(format!(
-            "ade-ledger-race-{}.db",
-            Uuid::new_v4()
-        ));
+        let db_path = std::env::temp_dir().join(format!("ade-ledger-race-{}.db", Uuid::new_v4()));
         let database = AdeDatabase::open_path(&db_path).await.unwrap();
         let store_a = UsageLedgerStore::new(database.connect().unwrap());
         let store_b = UsageLedgerStore::new(database.connect().unwrap());

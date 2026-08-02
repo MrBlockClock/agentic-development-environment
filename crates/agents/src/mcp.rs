@@ -320,7 +320,11 @@ fn recipe_matches(recipe: &McpRecipeAllow, name: &str, command: &str, args: &[St
         .all(|(got, want)| got == *want)
 }
 
-fn find_matching_recipe(name: &str, command: &str, args: &[String]) -> Option<&'static McpRecipeAllow> {
+fn find_matching_recipe(
+    name: &str,
+    command: &str,
+    args: &[String],
+) -> Option<&'static McpRecipeAllow> {
     MCP_RECIPE_ALLOWLIST
         .iter()
         .find(|recipe| recipe_matches(recipe, name, command, args))
@@ -354,9 +358,7 @@ pub fn authorize_mcp_connect(
         let recipe = MCP_RECIPE_ALLOWLIST
             .iter()
             .find(|recipe| recipe.id == id)
-            .ok_or_else(|| {
-                AdeError::Authorization(format!("unknown MCP recipe '{id}'"))
-            })?;
+            .ok_or_else(|| AdeError::Authorization(format!("unknown MCP recipe '{id}'")))?;
         if !recipe_matches(recipe, name, command, args) {
             return Err(AdeError::Authorization(format!(
                 "MCP spawn rejected: command/args do not match recipe '{id}'"
@@ -376,8 +378,7 @@ pub fn authorize_mcp_connect(
     }
     if !custom_mcp_allowed() {
         return Err(AdeError::Authorization(
-            "Custom MCP servers require a catalog recipe_id, or ADE_ALLOW_CUSTOM_MCP=1"
-                .into(),
+            "Custom MCP servers require a catalog recipe_id, or ADE_ALLOW_CUSTOM_MCP=1".into(),
         ));
     }
     Ok(())
@@ -525,36 +526,22 @@ mod tests {
 
     #[test]
     fn recipe_id_authorizes_without_client_approved_bool() {
-        let args = vec![
-            "-y".into(),
-            "@modelcontextprotocol/server-github".into(),
-        ];
-        assert!(authorize_mcp_connect(
-            Some("github"),
-            "github",
-            "npx.cmd",
-            &args,
-            false,
-        )
-        .is_ok());
+        let args = vec!["-y".into(), "@modelcontextprotocol/server-github".into()];
+        assert!(authorize_mcp_connect(Some("github"), "github", "npx.cmd", &args, false,).is_ok());
     }
 
     #[test]
     fn rejects_mismatched_recipe_payload() {
         let args = vec!["-y".into(), "evil-package".into()];
-        let err = authorize_mcp_connect(Some("github"), "github", "npx", &args, true)
-            .unwrap_err();
+        let err = authorize_mcp_connect(Some("github"), "github", "npx", &args, true).unwrap_err();
         assert!(err.to_string().contains("do not match recipe"));
     }
 
     #[test]
     fn rejects_unknown_recipe_id() {
-        let args = vec![
-            "-y".into(),
-            "@modelcontextprotocol/server-github".into(),
-        ];
-        let err = authorize_mcp_connect(Some("not-a-recipe"), "github", "npx", &args, true)
-            .unwrap_err();
+        let args = vec!["-y".into(), "@modelcontextprotocol/server-github".into()];
+        let err =
+            authorize_mcp_connect(Some("not-a-recipe"), "github", "npx", &args, true).unwrap_err();
         assert!(err.to_string().contains("unknown MCP recipe"));
     }
 

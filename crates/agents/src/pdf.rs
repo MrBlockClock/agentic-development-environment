@@ -19,14 +19,10 @@ pub struct PdfExtractResult {
 }
 
 /// Extract text from the first `max_pages` of a PDF (path on disk).
-pub fn extract_pdf_text(
-    path: &Path,
-    max_pages: usize,
-) -> Result<PdfExtractResult, AdeError> {
+pub fn extract_pdf_text(path: &Path, max_pages: usize) -> Result<PdfExtractResult, AdeError> {
     let max_pages = max_pages.clamp(1, 40);
-    let meta = std::fs::metadata(path).map_err(|error| {
-        AdeError::Config(format!("stat pdf {}: {error}", path.display()))
-    })?;
+    let meta = std::fs::metadata(path)
+        .map_err(|error| AdeError::Config(format!("stat pdf {}: {error}", path.display())))?;
     let len = meta.len();
     if len > MAX_PDF_BYTES {
         return Err(AdeError::Config(format!(
@@ -34,18 +30,16 @@ pub fn extract_pdf_text(
             path.display()
         )));
     }
-    let bytes = std::fs::read(path).map_err(|error| {
-        AdeError::Config(format!("read pdf {}: {error}", path.display()))
-    })?;
+    let bytes = std::fs::read(path)
+        .map_err(|error| AdeError::Config(format!("read pdf {}: {error}", path.display())))?;
     if bytes.len() < 5 || &bytes[0..4] != b"%PDF" {
         return Err(AdeError::Config(format!(
             "not a PDF (missing %PDF header): {}",
             path.display()
         )));
     }
-    let pages = pdf_extract::extract_text_from_mem_by_pages(&bytes).map_err(|error| {
-        AdeError::Config(format!("pdf extract {}: {error}", path.display()))
-    })?;
+    let pages = pdf_extract::extract_text_from_mem_by_pages(&bytes)
+        .map_err(|error| AdeError::Config(format!("pdf extract {}: {error}", path.display())))?;
     let pages_total = pages.len();
     let take = pages_total.min(max_pages);
     let mut body = String::new();

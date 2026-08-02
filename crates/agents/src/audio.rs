@@ -112,9 +112,8 @@ pub fn validate_audio_file(path: &Path) -> Result<AudioKind, AdeError> {
             path.display()
         )));
     }
-    let meta = std::fs::metadata(path).map_err(|error| {
-        AdeError::Config(format!("stat audio {}: {error}", path.display()))
-    })?;
+    let meta = std::fs::metadata(path)
+        .map_err(|error| AdeError::Config(format!("stat audio {}: {error}", path.display())))?;
     if meta.len() > MAX_AUDIO_BYTES {
         return Err(AdeError::Config(format!(
             "audio too large ({} bytes; max {}): {}",
@@ -137,15 +136,15 @@ pub fn validate_audio_file(path: &Path) -> Result<AudioKind, AdeError> {
 pub fn transcribe_local(path: &Path) -> Result<TranscribeResult, AdeError> {
     let kind = validate_audio_file(path)?;
     let template = std::env::var("ADE_WHISPER_CMD").map_err(|_| {
-        AdeError::Config("ADE_WHISPER_CMD not set — use API transcribe or set a local whisper command".into())
+        AdeError::Config(
+            "ADE_WHISPER_CMD not set — use API transcribe or set a local whisper command".into(),
+        )
     })?;
     let template = template.trim();
     if template.is_empty() {
         return Err(AdeError::Config("ADE_WHISPER_CMD is empty".into()));
     }
-    let abs = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let abs_str = abs.to_string_lossy();
     let (program, args) = if template.contains("{path}") {
         let rendered = template.replace("{path}", &abs_str);
@@ -158,11 +157,7 @@ pub fn transcribe_local(path: &Path) -> Result<TranscribeResult, AdeError> {
     let output = Command::new(&program)
         .args(&args)
         .output()
-        .map_err(|error| {
-            AdeError::Config(format!(
-                "spawn ADE_WHISPER_CMD ({program}): {error}"
-            ))
-        })?;
+        .map_err(|error| AdeError::Config(format!("spawn ADE_WHISPER_CMD ({program}): {error}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AdeError::Config(format!(
@@ -192,9 +187,8 @@ pub async fn transcribe_api(
     opts: &TranscribeApiOpts,
 ) -> Result<TranscribeResult, AdeError> {
     let kind = validate_audio_file(path)?;
-    let bytes = std::fs::read(path).map_err(|error| {
-        AdeError::Config(format!("read audio {}: {error}", path.display()))
-    })?;
+    let bytes = std::fs::read(path)
+        .map_err(|error| AdeError::Config(format!("read audio {}: {error}", path.display())))?;
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -221,10 +215,7 @@ pub async fn transcribe_api(
         .await
         .map_err(|error| AdeError::Provider(format!("transcribe request: {error}")))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| String::new());
+    let body = response.text().await.unwrap_or_else(|_| String::new());
     if !status.is_success() {
         return Err(AdeError::Provider(format!(
             "transcribe {} → {url} HTTP {status}: {}",
@@ -233,13 +224,14 @@ pub async fn transcribe_api(
         )));
     }
     let parsed: WhisperJson = serde_json::from_str(&body).map_err(|error| {
-        AdeError::Provider(format!("transcribe JSON parse: {error}; body={}", body.chars().take(200).collect::<String>()))
+        AdeError::Provider(format!(
+            "transcribe JSON parse: {error}; body={}",
+            body.chars().take(200).collect::<String>()
+        ))
     })?;
     let raw = parsed.text.trim().to_string();
     if raw.is_empty() {
-        return Err(AdeError::Provider(
-            "transcribe returned empty text".into(),
-        ));
+        return Err(AdeError::Provider("transcribe returned empty text".into()));
     }
     let (text, truncated) = truncate_body(raw);
     Ok(TranscribeResult {

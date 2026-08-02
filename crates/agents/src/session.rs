@@ -718,7 +718,7 @@ impl AgentSession {
                     .send(AgentEvent::ToolCall {
                         server: route.server.clone(),
                         tool: route.tool.clone(),
-                        arguments: arguments.clone(),
+                        arguments: crate::context_edit::scrub_secrets_in_json(&arguments),
                         effect,
                         envelope: Some(envelope),
                     })
@@ -747,10 +747,11 @@ impl AgentSession {
                         None,
                     )
                 };
+                let scrubbed_text = crate::context_edit::scrub_secrets(&text);
                 let raw_for_model = if text.is_empty() {
-                    serde_json::to_string(&content)?
+                    crate::context_edit::scrub_secrets(&serde_json::to_string(&content)?)
                 } else {
-                    text.clone()
+                    scrubbed_text.clone()
                 };
                 let (model_content, _truncated) =
                     crate::context_edit::compact_tool_result_for_context(
@@ -762,7 +763,7 @@ impl AgentSession {
                         server: route.server.clone(),
                         tool: route.tool.clone(),
                         is_error,
-                        text: text.clone(),
+                        text: scrubbed_text,
                     })
                     .await;
                 if let Some((action, path, url)) = host_intent {
@@ -903,6 +904,7 @@ impl AgentSession {
                 self.check_cancelled()?;
                 match event {
                     ProviderStreamEvent::TextDelta { text } => {
+                        let text = crate::context_edit::scrub_secrets(&text);
                         let _ = events.send(AgentEvent::TextDelta { text }).await;
                     }
                     ProviderStreamEvent::Usage { usage } => {

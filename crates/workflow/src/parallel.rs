@@ -693,12 +693,7 @@ mod tests {
             .map(|_| {
                 let manager = LeaseManager::new(&root);
                 std::thread::spawn(move || {
-                    manager.acquire(
-                        Uuid::new_v4(),
-                        path,
-                        LeaseMode::Strong,
-                        Duration::hours(1),
-                    )
+                    manager.acquire(Uuid::new_v4(), path, LeaseMode::Strong, Duration::hours(1))
                 })
             })
             .collect();

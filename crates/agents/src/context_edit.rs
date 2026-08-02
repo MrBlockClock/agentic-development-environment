@@ -91,6 +91,102 @@ fn redact_image_data_urls(input: &str) -> String {
     out
 }
 
+/// Scrub common secret-shaped tokens from event/persist text (MVP, not crypto).
+///
+/// Targets Bearer headers, OpenAI/`sk-` keys, GitHub PATs, AWS access key ids,
+/// and Slack bot tokens. Safe to apply to UI feed + chat JSON; model path also
+/// benefits when the same string is reused.
+pub fn scrub_secrets(input: &str) -> String {
+    let mut out = scrub_bearer_tokens(input);
+    for prefix in [
+        "sk-",
+        "sk-ant-",
+        "ghp_",
+        "github_pat_",
+        "gho_",
+        "AKIA",
+        "xoxb-",
+        "xoxp-",
+        "xoxa-",
+        "xoxr-",
+    ] {
+        out = scrub_prefixed_token(&out, prefix);
+    }
+    out
+}
+
+/// Scrub string leaves inside a JSON value (tool arguments).
+pub fn scrub_secrets_in_json(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(scrub_secrets(text)),
+        Value::Array(items) => Value::Array(items.iter().map(scrub_secrets_in_json).collect()),
+        Value::Object(map) => {
+            let mut next = serde_json::Map::new();
+            for (key, child) in map {
+                next.insert(key.clone(), scrub_secrets_in_json(child));
+            }
+            Value::Object(next)
+        }
+        other => other.clone(),
+    }
+}
+
+fn scrub_bearer_tokens(input: &str) -> String {
+    let pass = |input: &str, marker: &str, replacement: &str| -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut rest = input;
+        while let Some(idx) = rest.find(marker) {
+            out.push_str(&rest[..idx]);
+            out.push_str(replacement);
+            let after = &rest[idx + marker.len()..];
+            let end = token_end(after);
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        out
+    };
+    let mixed = pass(input, "Bearer ", "Bearer [REDACTED]");
+    pass(&mixed, "bearer ", "bearer [REDACTED]")
+}
+
+fn scrub_prefixed_token(input: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(idx) = rest.find(prefix) {
+        // Avoid mid-word matches (e.g. "ask-").
+        let boundary_ok = idx == 0
+            || rest[..idx]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_ascii_alphanumeric() && c != '_');
+        if !boundary_ok {
+            out.push_str(&rest[..idx + 1]);
+            rest = &rest[idx + 1..];
+            continue;
+        }
+        out.push_str(&rest[..idx]);
+        out.push_str(prefix);
+        out.push_str("[REDACTED]");
+        let after = &rest[idx + prefix.len()..];
+        let end = token_end(after);
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn token_end(after: &str) -> usize {
+    after
+        .find(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '"' | '\'' | ',' | '}' | ']' | '\\' | ')' | '(' | '<' | '>'
+                )
+        })
+        .unwrap_or(after.len())
+}
+
 pub fn occupancy_ratio(messages: &[Value], context_limit: u64) -> f64 {
     let limit = context_limit.max(1) as f64;
     estimate_messages_tokens(messages) as f64 / limit
@@ -456,5 +552,28 @@ mod tests {
             .unwrap()
             .contains("ade.boundary-capsule/v1"));
         assert!(next.len() < messages.len());
+    }
+
+    #[test]
+    fn scrub_secrets_redacts_common_tokens() {
+        let raw = "Authorization: Bearer ghp_abcdefghijklmnopqrstuv key=sk-abcdefghijklmnopqrstuvwxyz AKIAIOSFODNN7EXAMPLE";
+        let scrubbed = scrub_secrets(raw);
+        assert!(scrubbed.contains("Bearer [REDACTED]"));
+        assert!(scrubbed.contains("sk-[REDACTED]"));
+        assert!(scrubbed.contains("AKIA[REDACTED]"));
+        assert!(!scrubbed.contains("ghp_abcdefghijklmnopqrstuv"));
+        assert!(!scrubbed.contains("sk-abcdefghijklmnopqrstuvwxyz"));
+        assert!(!scrubbed.contains("IOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn scrub_secrets_in_json_walks_strings() {
+        let value = json!({
+            "token": "ghp_abcdefghijklmnopqrstuv",
+            "nested": { "auth": "Bearer supersecrettokenvalue" }
+        });
+        let scrubbed = scrub_secrets_in_json(&value);
+        assert_eq!(scrubbed["token"], "ghp_[REDACTED]");
+        assert_eq!(scrubbed["nested"]["auth"], "Bearer [REDACTED]");
     }
 }

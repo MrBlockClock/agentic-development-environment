@@ -206,11 +206,34 @@ enum Commands {
         /// Allow this turn when session/daily caps are set but $/MTok rates are $0
         #[arg(long)]
         allow_unpriced: bool,
+        /// Local image path for a vision turn (repeatable)
+        #[arg(long = "image")]
+        images: Vec<String>,
+    },
+    /// Stage attach artifacts into `.ade/inbox` (explicit extract; never auto)
+    Attach {
+        #[command(subcommand)]
+        action: AttachAction,
     },
     /// Continuity handoff capsules (thrift resume / last-write)
     Handoff {
         #[command(subcommand)]
         action: HandoffAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttachAction {
+    /// Extract first pages of a PDF into `.ade/inbox/*.extract.md`
+    Extract {
+        /// Path to a local `.pdf` (absolute or workspace-relative)
+        #[arg(long)]
+        pdf: String,
+        /// Max pages to extract (default 8, clamp 1..=40)
+        #[arg(long)]
+        max_pages: Option<usize>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1260,11 +1283,7 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     println!(
                         "Spend {} — used {} · reserved {} · remaining {} / daily {}",
-                        period_key,
-                        breakdown.used,
-                        breakdown.reserved,
-                        remaining,
-                        caps.daily
+                        period_key, breakdown.used, breakdown.reserved, remaining, caps.daily
                     );
                 }
             }
@@ -1281,10 +1300,7 @@ async fn main() -> anyhow::Result<()> {
                         println!("No eng-goals — create one with `ade goal create \"…\"`");
                     } else {
                         for goal in goals {
-                            println!(
-                                "{:<36}  {:<10}  {}",
-                                goal.id, goal.status, goal.statement
-                            );
+                            println!("{:<36}  {:<10}  {}", goal.id, goal.status, goal.statement);
                         }
                     }
                 }
@@ -1293,10 +1309,7 @@ async fn main() -> anyhow::Result<()> {
                         if *json {
                             println!("{}", serde_json::to_string_pretty(&goal)?);
                         } else {
-                            println!(
-                                "active {} ({}) — {}",
-                                goal.id, goal.status, goal.statement
-                            );
+                            println!("active {} ({}) — {}", goal.id, goal.status, goal.statement);
                         }
                     }
                     None => {
@@ -2114,6 +2127,80 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Commands::Attach { action } => match action {
+            AttachAction::Extract {
+                pdf,
+                max_pages,
+                json,
+            } => {
+                let root = std::env::current_dir()?;
+                let absolute = {
+                    let candidate = std::path::PathBuf::from(pdf);
+                    if candidate.is_absolute() {
+                        candidate
+                    } else {
+                        root.join(candidate)
+                    }
+                };
+                if !absolute.is_file() {
+                    anyhow::bail!("pdf not found: {}", absolute.display());
+                }
+                let ext = absolute
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if ext != "pdf" {
+                    anyhow::bail!("not a .pdf file: {}", absolute.display());
+                }
+                let pages = max_pages.unwrap_or(ade_agents::pdf::DEFAULT_PDF_EXTRACT_PAGES);
+                let result = ade_agents::pdf::extract_pdf_text(&absolute, pages)?;
+                let name = absolute
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("document.pdf");
+                let rel = absolute
+                    .strip_prefix(&root)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| absolute.display().to_string());
+                let markdown = ade_agents::pdf::format_extract_markdown(name, &rel, &result);
+                let inbox = root.join(".ade").join("inbox");
+                std::fs::create_dir_all(&inbox)?;
+                let stem = std::path::Path::new(name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("document");
+                let safe: String = stem
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                let dest_name = format!("{stamp}-{safe}.extract.md");
+                let dest = inbox.join(&dest_name);
+                std::fs::write(&dest, markdown.as_bytes())?;
+                let rel_out = format!(".ade/inbox/{dest_name}");
+                if *json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "path": rel_out,
+                            "absolute": dest.display().to_string(),
+                            "pagesTotal": result.pages_total,
+                            "pagesExtracted": result.pages_extracted,
+                            "truncated": result.truncated,
+                        })
+                    );
+                } else {
+                    println!("{rel_out}");
+                }
+            }
+        },
         Commands::Agent {
             prompt,
             provider,
@@ -2132,6 +2219,7 @@ async fn main() -> anyhow::Result<()> {
             verify_on_complete,
             verify_gate,
             allow_unpriced,
+            images,
         } => {
             use std::io::Write;
 
@@ -2181,7 +2269,7 @@ async fn main() -> anyhow::Result<()> {
                     workspace_root: root.clone(),
                     owned_paths: write_paths,
                     handoff_chars: 1_500,
-                    image_paths: vec![],
+                    image_paths: images.clone(),
                 })
                 .ledger(ledger)
                 .autonomy(autonomy_level)

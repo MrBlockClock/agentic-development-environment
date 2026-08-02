@@ -110,6 +110,7 @@ impl ChatStore {
                 if turn.created_at.trim().is_empty() {
                     turn.created_at = Utc::now().to_rfc3339();
                 }
+                turn.user = crate::context_edit::scrub_secrets(&turn.user);
                 turn.events = compact_events(turn.events);
                 turn
             })
@@ -152,7 +153,7 @@ fn compact_events(events: Vec<Value>) -> Vec<Value> {
         if buf.is_empty() {
             return;
         }
-        let mut text = std::mem::take(buf);
+        let mut text = crate::context_edit::scrub_secrets(&std::mem::take(buf));
         if text.len() > MAX_TEXT_DELTA_CHARS {
             text.truncate(MAX_TEXT_DELTA_CHARS);
             text.push('…');
@@ -186,12 +187,16 @@ fn truncate_event(mut event: Value) -> Value {
             .get_mut("text")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
         {
-            if text.len() > MAX_TOOL_RESULT_CHARS {
-                let mut clipped = text;
-                clipped.truncate(MAX_TOOL_RESULT_CHARS);
-                clipped.push('…');
-                event["text"] = Value::String(clipped);
+            let mut scrubbed = crate::context_edit::scrub_secrets(&text);
+            if scrubbed.len() > MAX_TOOL_RESULT_CHARS {
+                scrubbed.truncate(MAX_TOOL_RESULT_CHARS);
+                scrubbed.push('…');
             }
+            event["text"] = Value::String(scrubbed);
+        }
+    } else if kind == "tool_call" {
+        if let Some(args) = event.get("arguments") {
+            event["arguments"] = crate::context_edit::scrub_secrets_in_json(args);
         }
     }
     event

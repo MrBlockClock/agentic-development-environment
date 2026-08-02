@@ -1131,14 +1131,8 @@ pub async fn mcp_connect(
     vault_provider: Option<String>,
     vault_env_keys: Option<Vec<String>>,
 ) -> Result<(), String> {
-    ade_agents::mcp::authorize_mcp_connect(
-        recipe_id.as_deref(),
-        &name,
-        &command,
-        &args,
-        approved,
-    )
-    .map_err(|error| error.to_string())?;
+    ade_agents::mcp::authorize_mcp_connect(recipe_id.as_deref(), &name, &command, &args, approved)
+        .map_err(|error| error.to_string())?;
 
     let mut env = std::collections::BTreeMap::new();
     if let Some(provider) = vault_provider
@@ -2927,9 +2921,7 @@ fn resolve_chat_media_source(root: &Path, source_path: &str) -> Result<(PathBuf,
         .canonicalize()
         .map_err(|error| format!("resolve path: {error}"))?;
     if !canonical.starts_with(&root) {
-        return Err(
-            "path escapes workspace — Attach/stage the file into .ade/inbox first".into(),
-        );
+        return Err("path escapes workspace — Attach/stage the file into .ade/inbox first".into());
     }
     let rel = canonical
         .strip_prefix(&root)
@@ -3235,11 +3227,8 @@ pub async fn chat_transcribe_audio(
         ade_agents::audio::transcribe_local(&absolute).map_err(|e| e.to_string())?
     } else {
         let profile = "local".to_string();
-        let provider_id = resolve_whisper_provider(
-            state.key_vault.as_ref(),
-            &profile,
-            provider.as_deref(),
-        )?;
+        let provider_id =
+            resolve_whisper_provider(state.key_vault.as_ref(), &profile, provider.as_deref())?;
         let api_key = state
             .key_vault
             .get(&profile, &provider_id)
@@ -3258,17 +3247,13 @@ pub async fn chat_transcribe_audio(
             .or_else(|| {
                 ade_agents::audio::default_whisper_base_url(&provider_id).map(|s| s.to_string())
             })
-            .ok_or_else(|| {
-                format!("No Whisper base URL for provider '{provider_id}'")
-            })?;
+            .ok_or_else(|| format!("No Whisper base URL for provider '{provider_id}'"))?;
         let model_id = model
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                ade_agents::audio::default_whisper_model(&provider_id).to_string()
-            });
+            .unwrap_or_else(|| ade_agents::audio::default_whisper_model(&provider_id).to_string());
         ade_agents::audio::transcribe_api(
             &absolute,
             &ade_agents::audio::TranscribeApiOpts {
@@ -3286,8 +3271,7 @@ pub async fn chat_transcribe_audio(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("audio.bin");
-    let markdown =
-        ade_agents::audio::format_transcript_markdown(name, &rel_str, &result);
+    let markdown = ade_agents::audio::format_transcript_markdown(name, &rel_str, &result);
     let inbox = chat_inbox_dir(&root)?;
     let safe = sanitize_inbox_name(&format!(
         "{}.transcript.md",
@@ -3345,11 +3329,9 @@ pub fn chat_extract_office(
 ) -> Result<StagedAttachment, String> {
     let root = state.workspace_root();
     let (absolute, rel_str) = resolve_chat_media_source(&root, &source_path)?;
-    let kind = ade_agents::office::OfficeKind::from_path(&absolute).ok_or_else(|| {
-        format!("not a .docx/.xlsx file: {source_path}")
-    })?;
-    let result =
-        ade_agents::office::extract_office(&absolute).map_err(|e| e.to_string())?;
+    let kind = ade_agents::office::OfficeKind::from_path(&absolute)
+        .ok_or_else(|| format!("not a .docx/.xlsx file: {source_path}"))?;
+    let result = ade_agents::office::extract_office(&absolute).map_err(|e| e.to_string())?;
     let name = absolute
         .file_name()
         .and_then(|n| n.to_str())
@@ -3357,8 +3339,7 @@ pub fn chat_extract_office(
             ade_agents::office::OfficeKind::Docx => "document.docx",
             ade_agents::office::OfficeKind::Xlsx => "workbook.xlsx",
         });
-    let markdown =
-        ade_agents::office::format_office_extract_markdown(name, &rel_str, &result);
+    let markdown = ade_agents::office::format_office_extract_markdown(name, &rel_str, &result);
     let inbox = chat_inbox_dir(&root)?;
     let safe = sanitize_inbox_name(&format!(
         "{}.extract.md",
@@ -3408,7 +3389,13 @@ pub async fn chat_fetch_url(
         .next()
         .unwrap_or("page")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let safe = sanitize_inbox_name(&format!("{host}.md"));
     let dest_name = format!("fetch-{}-{}", chrono_lite_stamp(), safe);
@@ -3487,7 +3474,10 @@ pub fn workspace_mention_candidates(
                 }
             }
             if path.is_dir() {
-                if MENTION_SKIP_DIRS.iter().any(|s| name.eq_ignore_ascii_case(s)) {
+                if MENTION_SKIP_DIRS
+                    .iter()
+                    .any(|s| name.eq_ignore_ascii_case(s))
+                {
                     continue;
                 }
                 walk(&path, root, depth + 1, needle, out, max);

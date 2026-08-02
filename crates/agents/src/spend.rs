@@ -376,13 +376,9 @@ mod tests {
         };
         let err = require_priced_for_caps(&caps, Money::ZERO, Money::ZERO).unwrap_err();
         assert!(err.to_string().contains("spend_honesty"));
-        assert!(require_priced_for_caps_with_override(
-            &caps,
-            Money::ZERO,
-            Money::ZERO,
-            true
-        )
-        .is_ok());
+        assert!(
+            require_priced_for_caps_with_override(&caps, Money::ZERO, Money::ZERO, true).is_ok()
+        );
         match prev {
             Some(value) => std::env::set_var("ADE_ALLOW_UNPRICED", value),
             None => std::env::remove_var("ADE_ALLOW_UNPRICED"),

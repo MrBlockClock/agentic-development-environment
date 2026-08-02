@@ -62,9 +62,8 @@ pub fn extract_office(path: &Path) -> Result<OfficeExtractResult, AdeError> {
             path.display()
         ))
     })?;
-    let meta = std::fs::metadata(path).map_err(|error| {
-        AdeError::Config(format!("stat office {}: {error}", path.display()))
-    })?;
+    let meta = std::fs::metadata(path)
+        .map_err(|error| AdeError::Config(format!("stat office {}: {error}", path.display())))?;
     let len = meta.len();
     if len > MAX_OFFICE_BYTES {
         return Err(AdeError::Config(format!(
@@ -72,9 +71,8 @@ pub fn extract_office(path: &Path) -> Result<OfficeExtractResult, AdeError> {
             path.display()
         )));
     }
-    let bytes = std::fs::read(path).map_err(|error| {
-        AdeError::Config(format!("read office {}: {error}", path.display()))
-    })?;
+    let bytes = std::fs::read(path)
+        .map_err(|error| AdeError::Config(format!("read office {}: {error}", path.display())))?;
     if bytes.len() < 4 || &bytes[0..2] != b"PK" {
         return Err(AdeError::Config(format!(
             "not a ZIP Office package (missing PK header): {}",
@@ -89,9 +87,8 @@ pub fn extract_office(path: &Path) -> Result<OfficeExtractResult, AdeError> {
 
 fn extract_docx_bytes(bytes: &[u8], path: &Path) -> Result<OfficeExtractResult, AdeError> {
     let cursor = Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor).map_err(|error| {
-        AdeError::Config(format!("docx zip {}: {error}", path.display()))
-    })?;
+    let mut archive = ZipArchive::new(cursor)
+        .map_err(|error| AdeError::Config(format!("docx zip {}: {error}", path.display())))?;
     let mut entry = archive.by_name("word/document.xml").map_err(|error| {
         AdeError::Config(format!(
             "docx missing word/document.xml {}: {error}",
@@ -107,7 +104,10 @@ fn extract_docx_bytes(bytes: &[u8], path: &Path) -> Result<OfficeExtractResult, 
     }
     let mut xml = String::new();
     entry.read_to_string(&mut xml).map_err(|error| {
-        AdeError::Config(format!("docx read document.xml {}: {error}", path.display()))
+        AdeError::Config(format!(
+            "docx read document.xml {}: {error}",
+            path.display()
+        ))
     })?;
     let paragraphs = docx_paragraphs(&xml);
     let para_count = paragraphs.len();
@@ -120,14 +120,16 @@ fn extract_docx_bytes(bytes: &[u8], path: &Path) -> Result<OfficeExtractResult, 
         kind: OfficeKind::Docx,
         text,
         truncated,
-        scope: format!("{para_count} paragraph{}", if para_count == 1 { "" } else { "s" }),
+        scope: format!(
+            "{para_count} paragraph{}",
+            if para_count == 1 { "" } else { "s" }
+        ),
     })
 }
 
 fn extract_xlsx_path(path: &Path) -> Result<OfficeExtractResult, AdeError> {
-    let mut workbook: Xlsx<_> = calamine::open_workbook(path).map_err(|error| {
-        AdeError::Config(format!("xlsx open {}: {error}", path.display()))
-    })?;
+    let mut workbook: Xlsx<_> = calamine::open_workbook(path)
+        .map_err(|error| AdeError::Config(format!("xlsx open {}: {error}", path.display())))?;
     let names = workbook.sheet_names().to_vec();
     if names.is_empty() {
         return Ok(OfficeExtractResult {
@@ -179,7 +181,10 @@ fn extract_xlsx_path(path: &Path) -> Result<OfficeExtractResult, AdeError> {
         kind: OfficeKind::Xlsx,
         text,
         truncated,
-        scope: format!("{sheets_used} sheet{s}{more} · {total_rows} rows", s = if sheets_used == 1 { "" } else { "s" }),
+        scope: format!(
+            "{sheets_used} sheet{s}{more} · {total_rows} rows",
+            s = if sheets_used == 1 { "" } else { "s" }
+        ),
     })
 }
 
@@ -211,7 +216,9 @@ fn docx_paragraphs(xml: &str) -> Vec<String> {
             rest = &rest[start..];
             let Some(gt) = rest.find('>') else { break };
             let after = &rest[gt + 1..];
-            let Some(end) = after.find("</w:t>") else { break };
+            let Some(end) = after.find("</w:t>") else {
+                break;
+            };
             para.push_str(&decode_xml_entities(&after[..end]));
             rest = &after[end + 6..];
         }
@@ -270,8 +277,8 @@ Scope: {}{}\n\n\
 pub fn write_minimal_docx(path: &Path, paragraph: &str) -> Result<(), AdeError> {
     let file = std::fs::File::create(path).map_err(|e| AdeError::Config(e.to_string()))?;
     let mut zip = zip::ZipWriter::new(file);
-    let opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file("[Content_Types].xml", opts)
         .map_err(|e| AdeError::Config(e.to_string()))?;
     zip.write_all(
@@ -308,8 +315,7 @@ pub fn write_minimal_docx(path: &Path, paragraph: &str) -> Result<(), AdeError> 
         .map_err(|e| AdeError::Config(e.to_string()))?;
     zip.write_all(document.as_bytes())
         .map_err(|e| AdeError::Config(e.to_string()))?;
-    zip.finish()
-        .map_err(|e| AdeError::Config(e.to_string()))?;
+    zip.finish().map_err(|e| AdeError::Config(e.to_string()))?;
     Ok(())
 }
 

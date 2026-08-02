@@ -177,9 +177,7 @@ impl GoldRunner {
             "d_vision_refuse_text_only" => probe_d_vision_refuse_text_only(),
             "d_vision_image_reserve" => probe_d_vision_image_reserve(),
             "d_pdf_extract_rejects_non_pdf" => probe_d_pdf_extract_rejects_non_pdf(),
-            "m2_office_extract_rejects_non_office" => {
-                probe_m2_office_extract_rejects_non_office()
-            }
+            "m2_office_extract_rejects_non_office" => probe_m2_office_extract_rejects_non_office(),
             "m2_office_extract_docx" => probe_m2_office_extract_docx(),
             "m2_audio_rejects_non_audio" => probe_m2_audio_rejects_non_audio(),
             "m2_audio_local_whisper_cmd" => probe_m2_audio_local_whisper_cmd(),
@@ -1661,10 +1659,10 @@ fn probe_d_vision_refuse_text_only() -> Result<String, String> {
         return Err(format!("expected vision_required, got {err}"));
     }
     // Profile flag can force-allow even a text-only id (and force-deny a VL id).
-    if crate::vision::model_supports_vision_ex("big-pickle", Some(true)) != true {
+    if !crate::vision::model_supports_vision_ex("big-pickle", Some(true)) {
         return Err("profile vision=true should allow".into());
     }
-    if crate::vision::model_supports_vision_ex("claude-haiku-4-5", Some(false)) != false {
+    if crate::vision::model_supports_vision_ex("claude-haiku-4-5", Some(false)) {
         return Err("profile vision=false should deny".into());
     }
     Ok("vision_required on text-only".into())
@@ -1677,7 +1675,7 @@ fn probe_d_vision_image_reserve() -> Result<String, String> {
     let path = root.join("shot.png");
     // Large enough that base64 char÷4 >> dedicated vision band placeholder.
     let mut bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-    bytes.extend(std::iter::repeat(0u8).take(120_000));
+    bytes.extend(std::iter::repeat_n(0u8, 120_000));
     std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
 
     let text_only = vec![
@@ -1698,8 +1696,7 @@ fn probe_d_vision_image_reserve() -> Result<String, String> {
         json!({ "role": "user", "content": content }),
     ];
     let naive = crate::context_edit::estimate_messages_tokens(&messages);
-    let text_band =
-        crate::context_edit::estimate_messages_tokens_excluding_image_data(&messages);
+    let text_band = crate::context_edit::estimate_messages_tokens_excluding_image_data(&messages);
     let vision_band = crate::vision::estimate_vision_tokens(&["shot.png".into()], &root)
         .map_err(|e| e.to_string())? as u64;
     let honest = text_band.saturating_add(vision_band);

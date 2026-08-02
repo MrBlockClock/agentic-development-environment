@@ -34,9 +34,8 @@ pub fn estimate_vision_tokens(
     let mut total = 0u32;
     for raw in image_paths.iter().take(MAX_VISION_IMAGES) {
         let path = resolve_image_path(workspace_root, raw)?;
-        let meta = std::fs::metadata(&path).map_err(|error| {
-            AdeError::Config(format!("stat {}: {error}", path.display()))
-        })?;
+        let meta = std::fs::metadata(&path)
+            .map_err(|error| AdeError::Config(format!("stat {}: {error}", path.display())))?;
         total = total.saturating_add(estimate_image_tokens_for_bytes(meta.len()));
     }
     Ok(total)
@@ -239,7 +238,9 @@ mod tests {
     #[test]
     fn image_token_bands_are_stable() {
         assert!(estimate_image_tokens_for_bytes(10_000) < estimate_image_tokens_for_bytes(200_000));
-        assert!(estimate_image_tokens_for_bytes(200_000) < estimate_image_tokens_for_bytes(2_000_000));
+        assert!(
+            estimate_image_tokens_for_bytes(200_000) < estimate_image_tokens_for_bytes(2_000_000)
+        );
     }
 
     #[test]

@@ -325,10 +325,7 @@ impl AgentTurnBuilder {
         model.validate_spend_limits()?;
 
         // Central spend-honesty choke for Desktop, CLI, and worker.
-        let caps_for_honesty = self
-            .spend_caps
-            .clone()
-            .unwrap_or_else(SpendCaps::from_env);
+        let caps_for_honesty = self.spend_caps.clone().unwrap_or_else(SpendCaps::from_env);
         crate::spend::require_priced_for_caps_with_override(
             &caps_for_honesty,
             self.spec.input_cost_per_mtok,
