@@ -3,6 +3,8 @@ import {
   HOST_TOOLS,
   INTEGRATIONS,
   INTEGRATION_CATEGORY_LABEL,
+  featuredMcpIntegrations,
+  formatMcpRecipeCommand,
   integrationsByCategory,
   mcpCommandForPlatform,
   type IntegrationCategory,
@@ -213,6 +215,15 @@ export function IntegrationsView({
     return rows;
   }, [itemMeta, mcpServers]);
 
+  const recipeQuickAdd = useMemo(() => {
+    return featuredMcpIntegrations().filter((item) => {
+      const live = item.mcpRecipe
+        ? mcpServers.includes(item.mcpRecipe.name)
+        : false;
+      return !live;
+    });
+  }, [mcpServers]);
+
   const connectorGroups = useMemo(() => {
     return integrationsByCategory()
       .map((group) => ({
@@ -282,11 +293,15 @@ export function IntegrationsView({
     }
   };
 
-  const connectRecipe = async (item: IntegrationDef) => {
+  const connectRecipe = async (
+    item: IntegrationDef,
+    opts?: { approvedOverride?: boolean },
+  ) => {
     const recipe = item.mcpRecipe;
     if (!recipe) return;
 
-    if (!mcpApproved[recipe.name]) {
+    const approved = opts?.approvedOverride ?? mcpApproved[recipe.name];
+    if (!approved) {
       setExpandedId(item.id);
       setMessage(
         `Approve the ${recipe.name} MCP command below before connecting.`,
@@ -329,6 +344,34 @@ export function IntegrationsView({
     }
   };
 
+  /** One-click: confirm spawn line → approve + connect (no expand/checkbox). */
+  const addMcpFromRecipe = async (item: IntegrationDef) => {
+    const recipe = item.mcpRecipe;
+    if (!recipe) return;
+
+    if (mcpServers.includes(recipe.name)) {
+      setMessage(`${recipe.name} is already connected this session.`);
+      return;
+    }
+
+    if (recipe.envKeys?.length && item.vaultId && !vault[item.vaultId]) {
+      setExpandedId(item.id);
+      setMessage(
+        `Save a ${item.label} token first, then Add MCP — ADE injects it into ${recipe.envKeys.join(" / ")}.`,
+      );
+      return;
+    }
+
+    const line = formatMcpRecipeCommand(recipe);
+    const ok = window.confirm(
+      `Add MCP from recipe "${recipe.name}"?\n\n${line}\n\nVault tokens (if saved) are injected into the process env for this session.`,
+    );
+    if (!ok) return;
+
+    setMcpApproved((prev) => ({ ...prev, [recipe.name]: true }));
+    await connectRecipe(item, { approvedOverride: true });
+  };
+
   const focusItem = (id: string) => {
     const bare = id.startsWith("mcp:") ? id.slice(4) : id;
     const match =
@@ -351,8 +394,8 @@ export function IntegrationsView({
     if (item.mcpRecipe && !mcpLive) {
       return {
         label: "+",
-        title: "Review & connect MCP",
-        onClick: () => setExpandedId(item.id),
+        title: "Add MCP from recipe",
+        onClick: () => void addMcpFromRecipe(item),
         primary: true,
       };
     }
@@ -440,6 +483,59 @@ export function IntegrationsView({
         <p className="rounded-lg border border-line bg-surface-2 px-3.5 py-2.5 text-[12px] text-ink-dim">
           {message}
         </p>
+      )}
+
+      {tab === "connectors" && recipeQuickAdd.length > 0 && (
+        <section
+          className="space-y-3"
+          data-testid="ade-mcp-recipe-quick-add"
+          aria-labelledby="ade-mcp-recipe-heading"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2
+                id="ade-mcp-recipe-heading"
+                className="text-[13px] font-semibold text-ink"
+              >
+                Add from recipe
+              </h2>
+              <p className="mt-0.5 text-[12px] text-ink-faint">
+                One confirm spawns the reviewed stdio server. Save a vault token
+                first when the recipe needs env injection.
+              </p>
+            </div>
+            <a
+              href="https://github.com/MrBlockClock/agentic-development-environment/blob/main/docs/guides/mcp-recipes.md"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[12px] text-accent hover:underline"
+            >
+              Recipe docs
+            </a>
+          </div>
+          <ul className="flex flex-wrap gap-2">
+            {recipeQuickAdd.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  disabled={busy || connectingMcp === item.mcpRecipe?.name}
+                  title={
+                    item.mcpRecipe
+                      ? formatMcpRecipeCommand(item.mcpRecipe)
+                      : item.label
+                  }
+                  onClick={() => void addMcpFromRecipe(item)}
+                  className="inline-flex items-center gap-2 rounded-xl border border-authority/35 bg-authority/10 px-3 py-2 text-[12px] font-semibold text-violet-100 hover:bg-authority/20 disabled:opacity-40"
+                >
+                  <BrandWell id={item.id} size="sm" status="todo" />
+                  {connectingMcp === item.mcpRecipe?.name
+                    ? `Adding ${item.label}…`
+                    : `Add ${item.label} MCP`}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {connected.length > 0 ? (

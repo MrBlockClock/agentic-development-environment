@@ -246,6 +246,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       args: ["-y", "mcp-linear"],
       envHint: "LINEAR_API_KEY",
       envKeys: ["LINEAR_API_KEY"],
+      docsUrl: "https://linear.app/docs/mcp",
     },
     fundamental: true,
   },
@@ -309,4 +310,21 @@ export function mcpCommandForPlatform(recipe: McpRecipe): string {
     return recipe.commandWin;
   }
   return recipe.commandUnix;
+}
+
+/** Full spawn line shown in confirm dialogs and docs. */
+export function formatMcpRecipeCommand(recipe: McpRecipe): string {
+  return `${mcpCommandForPlatform(recipe)} ${recipe.args.join(" ")}`;
+}
+
+/**
+ * Featured one-click recipes on Integrations (GitHub + Linear are the Sprint E
+ * dogfood pair). Other catalog entries still expose Connect MCP when expanded.
+ */
+export const FEATURED_MCP_RECIPE_IDS = ["github", "linear"] as const;
+
+export function featuredMcpIntegrations(): IntegrationDef[] {
+  return FEATURED_MCP_RECIPE_IDS.map((id) =>
+    INTEGRATIONS.find((item) => item.id === id),
+  ).filter((item): item is IntegrationDef => Boolean(item?.mcpRecipe));
 }

@@ -225,9 +225,9 @@ Already in harness:
 3. Gold probes: refuse vision on text-only; spend honesty with image reserve ✅ (g74–g76)  
 
 ### Sprint E — Integration recipes
-1. Document MCP recipes for GitHub/Linear  
-2. One-click “Add MCP from recipe” in Connections  
-3. Dogfood Continuity with attached PDF + MCP search  
+1. Document MCP recipes for GitHub/Linear ✅ (`docs/guides/mcp-recipes.md`)  
+2. One-click “Add MCP from recipe” in Connections ✅ (Integrations strip + row Add)  
+3. Dogfood Continuity with attached PDF + MCP search ✅ (`scripts/dogfood-continuity-pdf-mcp.ps1`)  
 
 ---
 

@@ -61,13 +61,15 @@ npm run tauri dev
 |-----|---------|
 | Home | Ask ADE · Suggest / Apply / Automate |
 | Setup → Keys | BYOK OS vault |
-| Setup → Integrations | GitHub, Stripe, Azure, MCP recipes |
+| Setup → Integrations | GitHub, Stripe, Azure, MCP recipes ([recipe guide](mcp-recipes.html)) |
 | Insight → Trust | Audit, risk, envelopes |
 | Insight → Analytics | Spend trend & attribution (Desktop) |
 
 ## Dogfood scripts (optional)
 
 See `docs/platform/N3_DOGFOOD_AUTOMATE.md` and `docs/platform/G4_DOGFOOD_ISOLATE_APPLY.md` for Automate / Isolate Apply acceptance paths under `.ade/dogfood/`.
+
+Continuity thrift: `scripts/dogfood-continuity.ps1`. Continuity + PDF extract + MCP search intent: `scripts/dogfood-continuity-pdf-mcp.ps1` (see [MCP recipes](mcp-recipes.html)).
 
 ## Gold evals
 

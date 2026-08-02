@@ -20,6 +20,8 @@ ADE Desktop is the **control plane**: autonomy dial, Keys, Integrations, Trust, 
 
 Standing connectors (GitHub, GitLab, Stripe, Azure, Slack, …) plus host tools and MCP recipes live under **Setup → Integrations**. Model API keys stay under **Keys**.
 
+**Add from recipe:** GitHub and Linear offer one-click Add MCP (confirm spawn command → vault env inject). Full recipe table: [MCP recipes](../guides/mcp-recipes.html).
+
 Composer **Tools** disclosure shows what the turn may call (FS / shell / web / MCP count).
 
 ## Insight

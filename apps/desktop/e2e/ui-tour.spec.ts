@@ -46,6 +46,8 @@ test.describe("ADE UI tour (stubbed Desktop path)", () => {
       page.getByRole("heading", { name: "Integrations", exact: true }).nth(1),
     ).toBeVisible();
     await expect(page.getByRole("tab", { name: "Connectors" })).toBeVisible();
+    await expect(page.getByTestId("ade-mcp-recipe-quick-add")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Add from recipe" })).toBeVisible();
     await page.getByRole("tab", { name: /Host tools/ }).click();
     await expect(page.getByText("Tools this turn")).toBeVisible();
     await page.screenshot({
