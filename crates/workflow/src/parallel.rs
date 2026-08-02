@@ -1,6 +1,8 @@
 use ade_core::error::AdeError;
 use chrono::{DateTime, Duration, Utc};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use uuid::Uuid;
@@ -88,12 +90,10 @@ impl LeaseManager {
     }
 
     pub fn list(&self) -> Result<Vec<PathLease>, AdeError> {
-        let mut registry = self.load()?;
-        let removed = purge_expired(&mut registry);
-        if removed {
-            self.save(&registry)?;
-        }
-        Ok(registry.leases)
+        self.with_registry_mut(|registry| {
+            purge_expired(registry);
+            Ok(registry.leases.clone())
+        })
     }
 
     /// Resolve the write scope for one agent from active leases.
@@ -154,64 +154,61 @@ impl LeaseManager {
             )));
         }
 
-        let mut registry = self.load()?;
-        purge_expired(&mut registry);
+        self.with_registry_mut(|registry| {
+            purge_expired(registry);
 
-        for existing in &registry.leases {
-            if !paths_overlap(&path, &existing.path) {
-                continue;
+            for existing in &registry.leases {
+                if !paths_overlap(&path, &existing.path) {
+                    continue;
+                }
+                if existing.agent_id == agent_id && existing.path == path {
+                    return Err(AdeError::Other(format!(
+                        "agent {agent_id} already holds a lease on '{path}'"
+                    )));
+                }
+                if !mode.compatible_with(existing.mode) {
+                    return Err(AdeError::Authorization(format!(
+                        "lease conflict on '{}': requested {} incompatible with existing {} held by {}",
+                        existing.path,
+                        mode.as_str(),
+                        existing.mode.as_str(),
+                        existing.agent_id
+                    )));
+                }
+                if (protected || existing.protected)
+                    && !matches!(mode, LeaseMode::Observe)
+                    && !matches!(existing.mode, LeaseMode::Observe)
+                {
+                    return Err(AdeError::Authorization(format!(
+                        "protected path '{}' is already leased and must be serialized",
+                        existing.path
+                    )));
+                }
             }
-            if existing.agent_id == agent_id && existing.path == path {
-                return Err(AdeError::Other(format!(
-                    "agent {agent_id} already holds a lease on '{path}'"
-                )));
-            }
-            if !mode.compatible_with(existing.mode) {
-                return Err(AdeError::Authorization(format!(
-                    "lease conflict on '{}': requested {} incompatible with existing {} held by {}",
-                    existing.path,
-                    mode.as_str(),
-                    existing.mode.as_str(),
-                    existing.agent_id
-                )));
-            }
-            if (protected || existing.protected)
-                && !matches!(mode, LeaseMode::Observe)
-                && !matches!(existing.mode, LeaseMode::Observe)
-            {
-                return Err(AdeError::Authorization(format!(
-                    "protected path '{}' is already leased and must be serialized",
-                    existing.path
-                )));
-            }
-        }
 
-        let now = Utc::now();
-        let lease = PathLease {
-            id: Uuid::new_v4().to_string(),
-            agent_id,
-            path,
-            mode,
-            created_at: now,
-            expires_at: now + ttl,
-            protected,
-        };
-        registry.leases.push(lease.clone());
-        self.save(&registry)?;
-        Ok(lease)
+            let now = Utc::now();
+            let lease = PathLease {
+                id: Uuid::new_v4().to_string(),
+                agent_id,
+                path,
+                mode,
+                created_at: now,
+                expires_at: now + ttl,
+                protected,
+            };
+            registry.leases.push(lease.clone());
+            Ok(lease)
+        })
     }
 
     pub fn release(&self, lease_id: &str) -> Result<bool, AdeError> {
         validate_lease_id(lease_id)?;
-        let mut registry = self.load()?;
-        purge_expired(&mut registry);
-        let before = registry.leases.len();
-        registry.leases.retain(|lease| lease.id != lease_id);
-        let removed = registry.leases.len() != before;
-        if removed {
-            self.save(&registry)?;
-        }
-        Ok(removed)
+        self.with_registry_mut(|registry| {
+            purge_expired(registry);
+            let before = registry.leases.len();
+            registry.leases.retain(|lease| lease.id != lease_id);
+            Ok(registry.leases.len() != before)
+        })
     }
 
     /// Extend an active lease's expiry (heartbeat). Only the holding agent may
@@ -227,41 +224,60 @@ impl LeaseManager {
         if ttl <= Duration::zero() {
             return Err(AdeError::Other("lease ttl must be positive".into()));
         }
-        let mut registry = self.load()?;
-        purge_expired(&mut registry);
-        let lease = registry
-            .leases
-            .iter_mut()
-            .find(|lease| lease.id == lease_id)
-            .ok_or_else(|| {
-                AdeError::Other(format!(
-                    "lease '{lease_id}' is not active (expired or released)"
-                ))
-            })?;
-        if lease.agent_id != agent_id {
-            return Err(AdeError::Authorization(format!(
-                "lease '{lease_id}' is held by {}, not {agent_id}",
-                lease.agent_id
-            )));
-        }
-        lease.expires_at = Utc::now() + ttl;
-        let renewed = lease.clone();
-        self.save(&registry)?;
-        Ok(renewed)
+        self.with_registry_mut(|registry| {
+            purge_expired(registry);
+            let lease = registry
+                .leases
+                .iter_mut()
+                .find(|lease| lease.id == lease_id)
+                .ok_or_else(|| {
+                    AdeError::Other(format!(
+                        "lease '{lease_id}' is not active (expired or released)"
+                    ))
+                })?;
+            if lease.agent_id != agent_id {
+                return Err(AdeError::Authorization(format!(
+                    "lease '{lease_id}' is held by {}, not {agent_id}",
+                    lease.agent_id
+                )));
+            }
+            lease.expires_at = Utc::now() + ttl;
+            Ok(lease.clone())
+        })
     }
 
     pub fn release_stale(&self) -> Result<usize, AdeError> {
-        let mut registry = self.load()?;
-        let before = registry.leases.len();
-        purge_expired(&mut registry);
-        let removed = before.saturating_sub(registry.leases.len());
-        if removed > 0 {
-            self.save(&registry)?;
-        }
-        Ok(removed)
+        self.with_registry_mut(|registry| {
+            let before = registry.leases.len();
+            purge_expired(registry);
+            Ok(before.saturating_sub(registry.leases.len()))
+        })
     }
 
-    fn load(&self) -> Result<LeaseRegistry, AdeError> {
+    fn with_registry_mut<T>(
+        &self,
+        operation: impl FnOnce(&mut LeaseRegistry) -> Result<T, AdeError>,
+    ) -> Result<T, AdeError> {
+        let lock = self.open_lock()?;
+        lock.lock_exclusive()?;
+        let mut registry = self.load_unlocked()?;
+        let result = operation(&mut registry)?;
+        self.save_unlocked(&registry)?;
+        Ok(result)
+    }
+
+    fn open_lock(&self) -> Result<File, AdeError> {
+        let directory = self.root.join(".ade").join("leases");
+        std::fs::create_dir_all(&directory)?;
+        Ok(OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(directory.join("registry.lock"))?)
+    }
+
+    fn load_unlocked(&self) -> Result<LeaseRegistry, AdeError> {
         let path = self.registry_path();
         if !path.is_file() {
             return Ok(LeaseRegistry {
@@ -277,7 +293,7 @@ impl LeaseManager {
         Ok(registry)
     }
 
-    fn save(&self, registry: &LeaseRegistry) -> Result<(), AdeError> {
+    fn save_unlocked(&self, registry: &LeaseRegistry) -> Result<(), AdeError> {
         let directory = self.root.join(".ade").join("leases");
         std::fs::create_dir_all(&directory)?;
         let payload = serde_json::to_vec_pretty(registry)?;
@@ -293,6 +309,13 @@ impl LeaseManager {
 
     fn registry_path(&self) -> PathBuf {
         self.root.join(".ade").join("leases").join("registry.json")
+    }
+
+    #[cfg(test)]
+    fn save_for_tests(&self, registry: &LeaseRegistry) -> Result<(), AdeError> {
+        let lock = self.open_lock()?;
+        lock.lock_exclusive()?;
+        self.save_unlocked(registry)
     }
 }
 
@@ -663,6 +686,33 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_strong_leases_only_one_wins() {
+        let root = fixture_repo();
+        let path = "src/api";
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let manager = LeaseManager::new(&root);
+                std::thread::spawn(move || {
+                    manager.acquire(
+                        Uuid::new_v4(),
+                        path,
+                        LeaseMode::Strong,
+                        Duration::hours(1),
+                    )
+                })
+            })
+            .collect();
+        let mut ok = 0usize;
+        for handle in handles {
+            if handle.join().unwrap().is_ok() {
+                ok += 1;
+            }
+        }
+        assert_eq!(ok, 1, "exactly one racing Strong lease should succeed");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn protected_paths_require_strong_and_serialize_writers() {
         let root = fixture_repo();
         let manager = LeaseManager::new(&root);
@@ -731,7 +781,7 @@ mod tests {
                 protected: false,
             }],
         };
-        manager.save(&registry).unwrap();
+        manager.save_for_tests(&registry).unwrap();
         assert!(manager
             .renew(holder, &lease.id, Duration::minutes(30))
             .is_err());
@@ -792,7 +842,7 @@ mod tests {
                 protected: false,
             }],
         };
-        manager.save(&registry).unwrap();
+        manager.save_for_tests(&registry).unwrap();
         assert_eq!(manager.release_stale().unwrap(), 1);
         assert!(manager.list().unwrap().is_empty());
         let _ = fs::remove_dir_all(root);

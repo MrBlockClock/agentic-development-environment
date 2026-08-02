@@ -27,6 +27,8 @@ pub struct ChatAttachmentMeta {
     pub fetched_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extracted_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -241,6 +243,49 @@ mod tests {
         let cleared = store.clear().unwrap();
         assert!(cleared.turns.is_empty());
         assert!(store.load().unwrap().turns.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn attachment_meta_round_trips_extract_and_transcript() {
+        let root = std::env::temp_dir().join(format!("ade-chat-att-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = ChatStore::new(&root);
+        let saved = store
+            .save(vec![ChatTurn {
+                id: "t1".into(),
+                created_at: "2026-07-22T00:00:00Z".into(),
+                user: "hello".into(),
+                events: vec![],
+                attachments: Some(vec![ChatAttachmentMeta {
+                    id: "a1".into(),
+                    name: "clip.mp3".into(),
+                    path: ".ade/inbox/clip.mp3".into(),
+                    absolute: None,
+                    kind: "audio".into(),
+                    mime: Some("audio/mpeg".into()),
+                    size: Some(12),
+                    fetched_path: None,
+                    extracted_path: Some(".ade/inbox/extract.md".into()),
+                    transcript_path: Some(".ade/inbox/transcript.md".into()),
+                }]),
+            }])
+            .unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.turns[0].attachments, saved.turns[0].attachments);
+        let meta = loaded.turns[0]
+            .attachments
+            .as_ref()
+            .and_then(|items| items.first())
+            .unwrap();
+        assert_eq!(
+            meta.extracted_path.as_deref(),
+            Some(".ade/inbox/extract.md")
+        );
+        assert_eq!(
+            meta.transcript_path.as_deref(),
+            Some(".ade/inbox/transcript.md")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

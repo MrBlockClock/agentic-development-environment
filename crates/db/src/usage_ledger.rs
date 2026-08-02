@@ -150,11 +150,13 @@ impl UsageLedgerStore {
                 "INSERT INTO usage_ledger_entries (
                     id, session_id, workspace_root, actor, scope, period_key,
                     provider, model, status, reserved_micros, actual_micros,
-                    input_tokens, output_tokens, created_at, expires_at, reconciled_at
+                    input_tokens, output_tokens, created_at, expires_at, reconciled_at,
+                    hard_cap_micros
                  ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, 0,
-                    0, 0, ?11, ?12, NULL
+                    0, 0, ?11, ?12, NULL,
+                    ?13
                  )",
                 (
                     id.to_string(),
@@ -169,6 +171,7 @@ impl UsageLedgerStore {
                     request.estimate.micros(),
                     created_at.to_rfc3339(),
                     expires_at.to_rfc3339(),
+                    request.hard_cap.micros(),
                 ),
             )
             .await
@@ -255,8 +258,87 @@ impl UsageLedgerStore {
     }
 
     pub async fn commit(&self, commit: UsageCommit) -> Result<(), AdeError> {
-        let updated = self
-            .connection
+        let _guard = self.write_lock.lock().await;
+        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+
+        let mut rows = match tx
+            .query(
+                "SELECT scope, period_key, workspace_root, reserved_micros, hard_cap_micros
+                 FROM usage_ledger_entries
+                 WHERE id = ?1 AND status = 'reserved'",
+                [commit.reservation_id.to_string()],
+            )
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return Err(AdeError::Database(error.to_string()));
+            }
+        };
+        let row = match rows.next().await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                let _ = tx.rollback().await;
+                return Err(AdeError::NotFound(format!(
+                    "usage reservation '{}' not found or already reconciled",
+                    commit.reservation_id
+                )));
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return Err(AdeError::Database(error.to_string()));
+            }
+        };
+
+        let scope: String = row
+            .get(0)
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        let period_key: String = row
+            .get(1)
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        let workspace_root: String = row
+            .get(2)
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        let reserved_micros: i64 = row
+            .get(3)
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        let hard_cap_micros: Option<i64> = row.get(4).ok();
+
+        if let Err(error) = Self::expire_stale_on(&tx).await {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
+        let active = match Self::active_spend_breakdown_on(&tx, &scope, &period_key, &workspace_root)
+            .await
+        {
+            Ok(breakdown) => breakdown.active,
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return Err(error);
+            }
+        };
+        // Active still includes this reservation's reserved amount.
+        let without_this = Money::from_micros(
+            active
+                .micros()
+                .saturating_sub(reserved_micros.max(0)),
+        );
+        let next = without_this.saturating_add(commit.actual);
+        if let Some(cap_micros) = hard_cap_micros.filter(|value| *value >= 0) {
+            let hard_cap = Money::from_micros(cap_micros);
+            if next > hard_cap {
+                let _ = tx.rollback().await;
+                return Err(AdeError::Spend(format!(
+                    "hard spend cap exceeded at commit for {scope}/{period_key}: {} + {} > {}",
+                    without_this, commit.actual, hard_cap
+                )));
+            }
+        }
+
+        let updated = match tx
             .execute(
                 "UPDATE usage_ledger_entries
                  SET status = ?1,
@@ -275,13 +357,23 @@ impl UsageLedgerStore {
                 ),
             )
             .await
-            .map_err(|error| AdeError::Database(error.to_string()))?;
+        {
+            Ok(updated) => updated,
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return Err(AdeError::Database(error.to_string()));
+            }
+        };
         if updated == 0 {
+            let _ = tx.rollback().await;
             return Err(AdeError::NotFound(format!(
                 "usage reservation '{}' not found or already reconciled",
                 commit.reservation_id
             )));
         }
+        tx.commit()
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?;
         Ok(())
     }
 
@@ -572,6 +664,39 @@ mod tests {
             .has_committed_entry(session_id, "missing", &workspace)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_when_actual_exceeds_hard_cap() {
+        let store = store().await;
+        let reserved = store
+            .reserve(request(
+                Money::from_usd_str("0.40").unwrap(),
+                Money::from_usd_str("1.00").unwrap(),
+            ))
+            .await
+            .unwrap();
+        // Fill remaining headroom with another reservation so commit of 0.70 would exceed.
+        store
+            .reserve(request(
+                Money::from_usd_str("0.50").unwrap(),
+                Money::from_usd_str("1.00").unwrap(),
+            ))
+            .await
+            .unwrap();
+        let err = store
+            .commit(UsageCommit {
+                reservation_id: reserved.id,
+                actual: Money::from_usd_str("0.70").unwrap(),
+                input_tokens: 1,
+                output_tokens: 1,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("hard spend cap exceeded at commit"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]

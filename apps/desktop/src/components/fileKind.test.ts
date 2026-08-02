@@ -64,6 +64,31 @@ test("parseAttachedBlock round-trips", () => {
   assert.equal(parsed.attachments[0]?.path, "/tmp/x.png");
 });
 
+test("parseAttachedBlock restores extract and transcript paths", () => {
+  const packed = packagePromptWithAttachments("Hi", [
+    makeAttachment({
+      path: ".ade/inbox/a.pdf",
+      name: "a.pdf",
+      extractedPath: ".ade/inbox/extract-a.md",
+    }),
+    makeAttachment({
+      path: ".ade/inbox/clip.mp3",
+      name: "clip.mp3",
+      transcriptPath: ".ade/inbox/transcript-clip.md",
+    }),
+  ]);
+  const parsed = parseAttachedBlock(packed);
+  assert.equal(parsed.attachments.length, 2);
+  assert.equal(
+    parsed.attachments[0]?.extractedPath,
+    ".ade/inbox/extract-a.md",
+  );
+  assert.equal(
+    parsed.attachments[1]?.transcriptPath,
+    ".ade/inbox/transcript-clip.md",
+  );
+});
+
 test("isFileLikeHref and workspace prefix", () => {
   assert.equal(isFileLikeHref("https://x.com/a.pdf"), true);
   assert.equal(isFileLikeHref("https://x.com/page"), false);

@@ -94,6 +94,17 @@ VALUES (3, CURRENT_TIMESTAMP);
 COMMIT;
 "#;
 
+const MIGRATION_V4: &str = r#"
+BEGIN;
+
+ALTER TABLE usage_ledger_entries ADD COLUMN hard_cap_micros INTEGER;
+
+INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+VALUES (4, CURRENT_TIMESTAMP);
+
+COMMIT;
+"#;
+
 pub async fn migrate(connection: &Connection) -> Result<(), AdeError> {
     info!("Running database migrations...");
     for migration in [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3] {
@@ -102,5 +113,31 @@ pub async fn migrate(connection: &Connection) -> Result<(), AdeError> {
             .await
             .map_err(|error| AdeError::Database(error.to_string()))?;
     }
+    let version = current_schema_version(connection).await?;
+    if version < 4 {
+        connection
+            .execute_batch(MIGRATION_V4)
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+    }
     Ok(())
+}
+
+async fn current_schema_version(connection: &Connection) -> Result<i64, AdeError> {
+    let mut rows = connection
+        .query(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            (),
+        )
+        .await
+        .map_err(|error| AdeError::Database(error.to_string()))?;
+    let Some(row) = rows
+        .next()
+        .await
+        .map_err(|error| AdeError::Database(error.to_string()))?
+    else {
+        return Ok(0);
+    };
+    row.get::<i64>(0)
+        .map_err(|error| AdeError::Database(error.to_string()))
 }

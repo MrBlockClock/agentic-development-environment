@@ -40,6 +40,10 @@ jobs:
       - name: Show pinned Rust toolchain
         run: rustc --version --verbose
 
+      - name: Cursor guidance mirror check
+        shell: pwsh
+        run: ./scripts/sync-cursor-guidance.ps1 -Check
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:

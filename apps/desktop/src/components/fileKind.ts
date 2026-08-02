@@ -323,6 +323,10 @@ function attachmentFromAttachedLine(line: string): ChatAttachment | null {
   }
   const fetched = raw.match(/fetched → ([^\s)]+)/i)?.[1]?.trim();
   if (fetched) att.fetchedPath = fetched;
+  const extracted = raw.match(/extract → ([^\s)]+)/i)?.[1]?.trim();
+  if (extracted) att.extractedPath = extracted;
+  const transcript = raw.match(/transcript → ([^\s)]+)/i)?.[1]?.trim();
+  if (transcript) att.transcriptPath = transcript;
   return att;
 }
 

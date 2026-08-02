@@ -29,10 +29,46 @@ fn validate_http_url(raw: &str) -> Result<reqwest::Url, AdeError> {
             "only http and https urls are allowed".into(),
         ));
     }
-    if url.host_str().is_none() {
+    let Some(host) = url.host_str() else {
         return Err(AdeError::Config("url must include a host".into()));
+    };
+    if host_is_blocked_ssrf(host) {
+        return Err(AdeError::Config(format!(
+            "url host '{host}' is blocked (loopback/private/link-local/metadata)"
+        )));
     }
     Ok(url)
+}
+
+/// Deny agent `web_fetch` targets that commonly enable SSRF. In-app Browser may
+/// still allow localhost via its own URL gate.
+fn host_is_blocked_ssrf(host: &str) -> bool {
+    let host = host.trim().trim_matches(|c| c == '[' || c == ']');
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") || lower == "0.0.0.0" {
+        return true;
+    }
+    if lower == "metadata.google.internal"
+        || lower.ends_with(".metadata.google.internal")
+        || lower == "metadata"
+    {
+        return true;
+    }
+    if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.octets() == [169, 254, 169, 254]
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+    }
+    false
 }
 
 fn truncate_chars(input: &str, max: usize) -> String {
@@ -203,6 +239,24 @@ mod tests {
     #[test]
     fn accepts_https() {
         assert!(validate_http_url("https://example.com/docs").is_ok());
+    }
+
+    #[test]
+    fn rejects_ssrf_targets() {
+        for url in [
+            "http://127.0.0.1/secret",
+            "http://localhost/admin",
+            "http://[::1]/",
+            "http://10.0.0.5/",
+            "http://192.168.1.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://metadata.google.internal/",
+        ] {
+            assert!(
+                validate_http_url(url).is_err(),
+                "expected SSRF block for {url}"
+            );
+        }
     }
 
     #[test]

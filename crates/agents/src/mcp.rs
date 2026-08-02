@@ -54,6 +54,7 @@ struct ConnectedServer {
 pub struct McpHost {
     servers: Arc<Mutex<BTreeMap<String, ConnectedServer>>>,
     connect_timeout: Duration,
+    call_timeout: Duration,
 }
 
 impl Default for McpHost {
@@ -67,6 +68,7 @@ impl McpHost {
         Self {
             servers: Arc::new(Mutex::new(BTreeMap::new())),
             connect_timeout: Duration::from_secs(15),
+            call_timeout: Duration::from_secs(60),
         }
     }
 
@@ -74,7 +76,13 @@ impl McpHost {
         Self {
             servers: Arc::new(Mutex::new(BTreeMap::new())),
             connect_timeout,
+            call_timeout: Duration::from_secs(60),
         }
+    }
+
+    pub fn with_call_timeout(mut self, call_timeout: Duration) -> Self {
+        self.call_timeout = call_timeout;
+        self
     }
 
     pub async fn connect_server(&self, config: McpServerConfig) -> Result<(), AdeError> {
@@ -130,9 +138,17 @@ impl McpHost {
             .collect();
         let mut result = Vec::new();
         for (server, peer) in peers {
-            let tools = peer.list_all_tools().await.map_err(|error| {
-                AdeError::Mcp(format!("failed to list tools from '{server}': {error}"))
-            })?;
+            let tools = tokio::time::timeout(self.call_timeout, peer.list_all_tools())
+                .await
+                .map_err(|_| {
+                    AdeError::Mcp(format!(
+                        "listing tools from '{server}' timed out after {}s",
+                        self.call_timeout.as_secs()
+                    ))
+                })?
+                .map_err(|error| {
+                    AdeError::Mcp(format!("failed to list tools from '{server}': {error}"))
+                })?;
             result.extend(tools.into_iter().map(|tool| {
                 let input_schema = tool.schema_as_json_value();
                 let annotations = annotations_from_schema(&input_schema);
@@ -174,17 +190,25 @@ impl McpHost {
             connected.service.peer().clone()
         };
 
-        let result = peer
-            .call_tool(CallToolRequestParam {
+        let result = tokio::time::timeout(
+            self.call_timeout,
+            peer.call_tool(CallToolRequestParam {
                 name: tool.to_string().into(),
                 arguments,
-            })
-            .await
-            .map_err(|error| {
-                AdeError::Mcp(format!(
-                    "tool '{tool}' on server '{server}' failed: {error}"
-                ))
-            })?;
+            }),
+        )
+        .await
+        .map_err(|_| {
+            AdeError::Mcp(format!(
+                "tool '{tool}' on server '{server}' timed out after {}s",
+                self.call_timeout.as_secs()
+            ))
+        })?
+        .map_err(|error| {
+            AdeError::Mcp(format!(
+                "tool '{tool}' on server '{server}' failed: {error}"
+            ))
+        })?;
 
         let is_error = result.is_error.unwrap_or(false);
         let text = result

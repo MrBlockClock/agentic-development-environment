@@ -1793,16 +1793,22 @@ fn probe_m2_audio_rejects_non_audio() -> Result<String, String> {
     Ok("audio rejects non-audio".into())
 }
 
+fn gold_local_whisper_cmd() -> &'static str {
+    // Cross-platform stub: print a fixed transcript (no network / no whisper binary).
+    if cfg!(windows) {
+        r#"powershell -NoProfile -Command "Write-Output 'ADE audio gold transcript'""#
+    } else {
+        r#"sh -c "echo ADE audio gold transcript""#
+    }
+}
+
 fn probe_m2_audio_local_whisper_cmd() -> Result<String, String> {
     let root = std::env::temp_dir().join(format!("ade-gold-whisper-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let path = root.join("clip.mp3");
     std::fs::write(&path, b"ID3fake").map_err(|e| e.to_string())?;
     let prev = std::env::var("ADE_WHISPER_CMD").ok();
-    std::env::set_var(
-        "ADE_WHISPER_CMD",
-        r#"powershell -NoProfile -Command "Write-Output 'ADE audio gold transcript'""#,
-    );
+    std::env::set_var("ADE_WHISPER_CMD", gold_local_whisper_cmd());
     let result = crate::audio::transcribe_local(&path);
     match prev {
         Some(value) => std::env::set_var("ADE_WHISPER_CMD", value),

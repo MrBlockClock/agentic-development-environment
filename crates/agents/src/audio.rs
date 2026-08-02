@@ -380,11 +380,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("clip.mp3");
         std::fs::write(&path, b"ID3fakeaudio").unwrap();
-        // PowerShell prints a fixed transcript (no network).
-        std::env::set_var(
-            "ADE_WHISPER_CMD",
-            r#"powershell -NoProfile -Command "Write-Output 'ADE audio gold transcript'""#,
-        );
+        let cmd = if cfg!(windows) {
+            r#"powershell -NoProfile -Command "Write-Output 'ADE audio gold transcript'""#
+        } else {
+            r#"sh -c "echo ADE audio gold transcript""#
+        };
+        std::env::set_var("ADE_WHISPER_CMD", cmd);
         let result = transcribe_local(&path).unwrap();
         std::env::remove_var("ADE_WHISPER_CMD");
         assert!(result.text.contains("ADE audio gold transcript"));
