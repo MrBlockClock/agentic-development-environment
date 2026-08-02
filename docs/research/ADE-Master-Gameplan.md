@@ -18,7 +18,7 @@ pdf_options:
 **Canvas:** `ADE-master-gameplan.canvas.tsx`  
 **Locked by:** DEC-A-010 / 013 / 014 / 015 · AGENTS.md DNA  
 **Inputs:** Ideal ADE · What ADE Could Do · Tokenomics · Compaction/Fertility · Market study · Harness brief  
-**Status:** Waves **0–5** + post-wave deepen (**H2 depth · invoice Δ · Continuity thrift · E1 · C4**) **shipped**. Zed stays L1 (DEC-A-015). Mission Control chrome **deferred**.
+**Status:** Waves **0–5** + post-wave deepen (**H2 depth · invoice Δ · Continuity thrift · E1 · C4**) **shipped**. Zed/ACP host path **retired** (DEC-A-017). Mission Control chrome **deferred**.
 
 </div>
 
@@ -26,7 +26,7 @@ pdf_options:
 
 ## 0. One sentence
 
-Build ADE as a **local harness OS** that makes the research wins unavoidable — contracts before Apply, envelopes for side effects, leases for writers, verify outside the generator, honest spend, Continuity + compaction for the token channel — with Desktop as control plane and Zed as **optional eyes**, never identity.
+Build ADE as a **local harness OS** that makes the research wins unavoidable — contracts before Apply, envelopes for side effects, leases for writers, verify outside the generator, honest spend, Continuity + compaction for the token channel — with Desktop + CLI as the control plane (editor hosts are non-goals).
 
 ---
 
@@ -82,7 +82,7 @@ Ship discipline as product objects — not as prompt pleading.
 | Slots / profiles | H2 role gates + heartbeats + claim_gate + Verifier session · H3 router |
 | Channel | C1–C5 mask / capsules / SelfCompact / fertility gold |
 | Desktop Ideal spine | Control plane · Wave 5 failure CTAs / dogfood chips · Verify (judge) |
-| ACP / Zed | Soft shell (`ade acp`) · DEC-A-015 stay L1 |
+| Editor hosts | **Retired** — DEC-A-017 (non-goal) |
 | Gold | **76/76** · H5/C5/H2 · invoice · thrift · E1 · C4 · D vision/PDF |
 
 **Stance:** Amplify spine. Don’t reboot as an editor project.
@@ -107,7 +107,7 @@ Ship discipline as product objects — not as prompt pleading.
 **Critical path (DEC-A-014 + research ROI) — executed:**  
 **G1** ‖ **H1** ‖ **C1** → **H2/H3/G2/C2/C3** → **H4/H5/C4/C5/E1** → **Z1/Z2 (L1)** → **W5** → **H2 depth** → **invoice Δ** → **Continuity thrift** → **E1/C4 depth**
 
-**Now:** Critical harness tracks **closed** (Zed eyes stay L1; Mission Control chrome deferred). Dogfood + gold keep green.
+**Now:** Critical harness tracks **closed** (editor hosts retired; Mission Control chrome deferred). Dogfood + gold keep green.
 
 Pick **one** primary eng focus per sprint; keep thin parallel slices if staffing allows.
 
@@ -161,7 +161,7 @@ Kill the highest-cost failure modes from human/market studies.
 
 | ID | Ship | Done when |
 |----|------|-----------|
-| **Z1** | ACP soft shell | **Shipped** — `ade acp` JSON-RPC stdio; Suggest/Apply/Automate; Desktop **Zed** open |
+| **Z1** | ACP soft shell | **Retired** — DEC-A-017 (removed `ade acp` / Open-in-Zed) |
 | **Z2** | Fork ladder review | **Shipped** — DEC-A-015: stay L1; promote L3/L4 only with written chrome-gap gate |
 
 ### Wave 5 — Dogfood polish (done · 2026-07-23)
@@ -180,7 +180,7 @@ Close the friction that blocks daily harness dogfood after Waves 1–4.
 
 **Dogfood story:** “Blocked Apply tells me what to do next; Continuity and Isolate are one chip away; gold marks what we live on.”
 
-**Non-goal still:** Mission Control chrome, SSO/SCIM, VSCodium revival, private ADE cipher language, premature Zed fork.
+**Non-goal still:** Mission Control chrome, SSO/SCIM, VSCodium/Zed/editor hosts, private ADE cipher language.
 
 ---
 
@@ -325,7 +325,7 @@ Solo next: dogfood + gold green — Mission Control / Zed fork stay deferred.
 Waves **0–5** plus post-wave deepen (**H2 depth · invoice Δ · Continuity thrift · E1 envelopes · C4 SelfCompact**) closed the non-Zed research seats that matter.
 
 **Executed order:** contracts · honest $ · clear the window · slot truth · profiles · compact well · eyes (L1) · dogfood polish · H2 depth · invoice Δ · Continuity thrift · envelopes · SelfCompact.  
-**Deferred:** Mission Control chrome · Zed L3/L4 fork (needs ADR).
+**Deferred:** Mission Control chrome. Editor hosts remain non-goals (DEC-A-017).
 
 ---
 

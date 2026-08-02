@@ -13,22 +13,21 @@ title: IDEAL ADE DEVELOPMENT PLAN
 
 ## North star
 
-**Cursor-shaped job · Rust agent OS · multi-host eyes.** ADE is the harness control plane
-(Suggest/Apply, leases, verify, Continuity, spend, Orchestrator). Coding surfaces are hosts:
+**Cursor-shaped job · Rust harness.** ADE is the harness control plane
+(Suggest/Apply, leases, verify, Continuity, spend, Orchestrator) with **Desktop + CLI** as product surface.
 
-| Host | Role |
-|------|------|
-| ADE Desktop (Tauri) | Harness UI |
-| Zed | Primary editor via `ade acp` (ACP) |
-| VSCodium | Open VSX companion (“Open in…”) |
+| Surface | Role |
+|---------|------|
+| ADE Desktop (Tauri) | Control plane UI |
+| `ade` CLI | Same harness, headless |
 
-Do **not** fork Electron/VS Code/Zed as ADE core. Coexist with Cursor — do not become another IDE fork (see **E1** + DEC-A-010).
+External editor hosts (Zed, VSCodium, ACP soft shell) are **non-goals** (DEC-A-017). Do **not** fork Electron/VS Code/Zed as ADE core.
 
 **Audit is a Trust feature, not the brand.**
 
-## Multi-host phases (forward)
+## Forward phases
 
-See canvas **ADE-master-gameplan** (live) · archive **ADE-multihost-gameplan** — M0 identity · M1 harness · M2 `ade acp` · M3 Open-in · M4 Orchestrator · M5 cohesion.
+See canvas **ADE-master-gameplan** (live) — harness depth over editor wrapping.
 
 ## Early goal: ADE builds itself + Dev/Debug
 

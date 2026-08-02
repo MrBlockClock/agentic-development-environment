@@ -8,7 +8,7 @@
 
 ADE runs coding agents with **budget caps**, **test gates before “done”**, and **isolated git worktrees** for parallel changes. Think *agent orchestration + guardrails*, not a Cursor clone.
 
-**Desktop** (Tauri) is the full shell (chat, Keys, MCP). **CLI** and optional **Zed via ACP** share the same Rust harness. A **browser preview** can talk to `ade serve` for status, verify, and analytics — agent turns stay on Desktop.
+**Desktop** (Tauri) is the full shell (chat, Keys, MCP). **CLI** shares the same Rust harness. A **browser preview** can talk to `ade serve` for status, verify, and analytics — agent turns stay on Desktop. External editor hosts (Zed, etc.) are **non-goals**.
 
 [![CI](https://github.com/MrBlockClock/agentic-development-environment/actions/workflows/ci.yml/badge.svg)](https://github.com/MrBlockClock/agentic-development-environment/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -29,7 +29,7 @@ Most agent tools optimize chat UI. ADE optimizes what happens *between* prompts:
 - **Verify-as-truth** — gates (G0–G5), not model self-certify  
 - **Safe Apply** — eng-goal contracts, path leases, Isolate worktrees, risk HITL  
 - **Continuity** — handoff capsules + thrift resume (no manual copy-paste handoffs)  
-- **Multi-host** — one brain, many eyes (Desktop control plane; Zed optional)
+- **Local control plane** — Desktop + CLI share one harness brain
 
 Deep dive: [docs/research/ADE-Master-Gameplan.md](docs/research/ADE-Master-Gameplan.md) · [Docs site](https://mrblockclock.github.io/agentic-development-environment/)
 
@@ -81,11 +81,11 @@ Full guide: [docs/guides/getting-started.md](docs/guides/getting-started.md) · 
 
 ```
 ade/
-├── crates/          # Harness OS — agents, workflow, spend, MCP, db, api, acp
+├── crates/          # Harness OS — agents, workflow, spend, MCP, db, api
 ├── apps/
-│   ├── cli/         # `ade` CLI (+ `ade acp` for Zed)
+│   ├── cli/         # `ade` CLI
 │   └── desktop/     # Tauri + React control plane
-├── hosts/           # Integration packs (Zed, …) — no vendored IDE forks
+├── hosts/           # Retired editor-host tombstones only (DEC-A-017)
 ├── docs/            # Architecture, platform plans, guides, ADRs
 ├── evals/           # Gold-set races (spend, slots, continuity, …)
 └── AGENTS.md        # Product DNA + agent contract
@@ -129,7 +129,7 @@ Details: [Docs · Safety and Spend](https://mrblockclock.github.io/agentic-devel
 | [Docs site](https://mrblockclock.github.io/agentic-development-environment/) | Full wiki — guides, **studies**, platform, ADRs |
 | [Research & studies](https://mrblockclock.github.io/agentic-development-environment/research/) | Market, tokenomics, compaction, master gameplan |
 | [Getting started](docs/guides/getting-started.md) | Build, Desktop, CLI |
-| [Architecture](docs/architecture/REPO_LAYOUT.md) | Multi-host layout |
+| [Architecture](docs/architecture/REPO_LAYOUT.md) | Repo layout |
 | [Master gameplan](docs/research/ADE-Master-Gameplan.md) | What shipped / why |
 | [Ideal masterplan](docs/platform/IDEAL_ADE_MASTERPLAN.md) | Product spine |
 | [ADRs](docs/decisions/) | Decisions (DEC-A-*) |
@@ -151,4 +151,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: `cargo fmt` · `cargo cli
 
 ## Status
 
-Active personal / research harness. Desktop + CLI are dogfooded daily. Mission Control and a full Zed fork remain **deferred** — see gameplans for the honest roadmap.
+Active personal / research harness. Desktop + CLI are dogfooded daily. Mission Control remains deferred; editor hosts (Zed, etc.) are **non-goals** (DEC-A-017).

@@ -5,7 +5,6 @@ Minimal image that builds and runs the `ade` CLI. **Not** a full ADE Desktop / T
 ```bash
 docker build -f docker/Dockerfile -t ade-cli .
 docker run --rm ade-cli --help
-docker run --rm ade-cli acp --probe
 ```
 
 Mount a workspace when you need local files:

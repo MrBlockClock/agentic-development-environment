@@ -97,7 +97,7 @@ Terminal / Browser dock beside work as shell tabs; never advertise them as left-
 | **Integrations** | Standing connectors (GitHub, GitLab, Stripe, Azure, MCP recipes) + host tools |
 | **Stack** | Pick a project recipe (under Setup) |
 | **Test project** | Run build/lint/test gates — not chat |
-| **Workspaces** | New / Open / Default / **Open in Zed** (non-Default) |
+| **Workspaces** | New / Open / Default |
 | **Insight › Trust** | Is this safe, and what did it do — drift, risk, envelopes, audit log |
 | **Insight › Analytics** | What it cost and whether it worked — trend, attribution, reserve Δ, outcome rates |
 | **Insight › Plan Map** | What is planned, in what order, gated by what (Debug) |
@@ -107,7 +107,7 @@ Terminal / Browser dock beside work as shell tabs; never advertise them as left-
 
 Setup group light: **amber** = recommended / incomplete · **green** = ready · **brighter amber** = failing tests / blockers.
 
-Header: **Change folder…** + refresh (+ **New chat** on Home). **No Zed in header** — Open in Zed lives under Workspaces.
+Header: **Change folder…** + refresh (+ **New chat** on Home).
 
 ## Single-owner rule (kills duplication)
 

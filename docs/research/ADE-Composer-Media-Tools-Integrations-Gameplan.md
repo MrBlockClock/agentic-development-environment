@@ -37,7 +37,7 @@ ADE already has harness DNA for (3) and pieces of (4). Media/connections were th
 | URLs / tickets | Blue links; file-like → chips | No unfurl / fetch-as-context |
 | Clipboard | File paste only | No rich HTML → markdown; no “paste path from explorer” |
 | Tools (turn) | Autonomy + MCP + shell + leases | No composer “@tool” picker |
-| Integrations | Keys, MCP servers, browser, Zed, terminal | No unified Connections hub |
+| Integrations | Keys, MCP servers, browser, terminal | No unified Connections hub |
 
 ---
 
@@ -177,7 +177,7 @@ Already in harness:
 | MCP servers | Shipped (Debug-heavy) | `@mcp` + status light |
 | Local API / Browser API token | Shipped | Browser view |
 | Git worktrees / Isolate | Shipped | Apply strip |
-| Zed / system terminal | Shipped | Debug |
+| System terminal | Shipped | Standard / Debug |
 | GitHub | Not first-class | PR/issue unfurl + optional Octokit MCP |
 | Linear / Jira / Slack | Not first-class | Via MCP recipes |
 | Browser profile / cookies | Partial (in-app browser) | “Use Browser” chip |

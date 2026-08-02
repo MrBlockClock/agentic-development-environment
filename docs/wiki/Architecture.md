@@ -5,26 +5,20 @@ title: Architecture
 
 # Architecture
 
-ADE is **one Rust agent OS** (harness). Editors and UIs are **hosts**, not forks inside this repo.
+ADE is a **local harness**: one brain in Rust crates, **Desktop + CLI** as the product surface. External editor hosts are non-goals ([DEC-A-017](../decisions/DEC-A-017-retire-zed-host.html)).
 
 ```
-                 ┌─────────────────────────┐
-                 │   ADE harness (crates)  │
-                 │  agents · workflow · $  │
-                 └───────────┬─────────────┘
-        ┌────────────────────┼────────────────────┐
-        ▼                    ▼                    ▼
- apps/cli + acp        apps/desktop         hosts/* (docs)
- `ade` / `ade acp`     Tauri control plane  Zed · …
+ crates/*              apps/desktop         apps/cli
+ harness brain         Tauri control plane  `ade` CLI
 ```
 
 ## Canonical docs
 
 | Doc | Role |
 |-----|------|
-| [REPO_LAYOUT](../architecture/REPO_LAYOUT.html) | Multi-host tree & non-goals |
+| [REPO_LAYOUT](../architecture/REPO_LAYOUT.html) | Tree & non-goals |
 | [ARCHITECTURE_SYNTHESIS](../platform/ARCHITECTURE_SYNTHESIS.html) | Full system design |
-| [ADRs](../decisions/) | DEC-A-010 … 016 |
+| [ADRs](../decisions/) | DEC-A-010 … 017 |
 | [Master Gameplan](../research/ADE-Master-Gameplan.html) | Research → build waves |
 
 ## Crates (brain)
@@ -37,19 +31,18 @@ ADE is **one Rust agent OS** (harness). Editors and UIs are **hosts**, not forks
 | `db` | Ledger + secrets vault adapters |
 | `api` | Thin HTTP API |
 | `desktop` | Tauri command backend |
-| `acp` | Agent Client Protocol adapter |
 
-## Apps (hosts)
+## Apps
 
 | App | Role |
 |-----|------|
 | `apps/desktop` | Control plane — composer, Trust, Analytics, Integrations |
-| `apps/cli` | `ade` CLI including `ade acp` for Zed |
+| `apps/cli` | `ade` CLI |
 
 ## Non-goals
 
-- Electron IDE forks  
-- Vendoring Zed / VS Code source  
+- Electron / Zed / VS Code editor forks or soft shells  
+- Vendoring IDE source  
 - Replacing MCP with a proprietary marketplace  
 
-See DEC-A-010 / DEC-A-014.
+See DEC-A-014 (harness-first) · DEC-A-017 (retire Zed/ACP hosts).

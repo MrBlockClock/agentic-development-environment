@@ -4,17 +4,16 @@ Canonical contract for the ADE project (dogfooding).
 
 ## Product DNA (do not blur)
 
-ADE is a **local harness / Agent Development Environment** and **multi-host agent OS** — not an IDE fork.
+ADE is a **local harness / Agent Development Environment** — Desktop + CLI control plane, not an IDE fork or editor soft shell.
 
 | Layer | Owns | Must not own |
 |-------|------|----------------|
 | **Model** | Reasoning + tool_use proposals | Filesystem, secrets, false “no tools” claims |
 | **Harness / loop** | Tool schemas, ToolEffect auth, budgets, compaction | Pixel UI |
-| **Hosts** | ADE Desktop (control plane); Zed via ACP (DEC-A-013: no VSCodium) | Being “the only editor” / day-one Zed fork |
+| **Hosts** | ADE Desktop + `ade` CLI | Zed / VSCodium / editor forks / ACP soft shell (**DEC-A-017**) |
 | **Eng-goal product** | Outcome + scope + verify-as-done | Endless chat theater |
 
-**Multi-host:** one ADE brain · many eyes — `docs/decisions/DEC-A-010-multi-host-agent-os.md`, `docs/architecture/REPO_LAYOUT.md`.  
-**Critical path:** harness / multi-agent Orchestrator (**DEC-A-014**). Zed ACP = optional path, not a blocker.
+**Critical path:** harness / multi-agent Orchestrator (**DEC-A-014**). External editor hosts are a **non-goal** (**DEC-A-017**).
 
 **Autonomy:** Suggest ≈ planner/inspect · Apply ≈ worker under leases · Automate ≈ Apply + required verify.
 
@@ -36,10 +35,6 @@ ADE is a **local harness / Agent Development Environment** and **multi-host agen
 
 **Compaction gold (C5):** g61–g65 measure mask/capsule savings + fidelity and format fertility (compact JSON beats prose; invented ciphers lose).
 
-**ACP soft shell (Z1):** `ade acp` JSON-RPC stdio for Zed; modes Suggest/Apply/Automate. Desktop **Zed** button opens coding eyes.
-
-**Fork ladder (Z2):** DEC-A-015 — stay L1 unless written chrome gaps force L3/L4.
-
 **Dogfood polish (W5):** Lease/spend/slot failures use feed CTAs (not alerts); Continuity strip stays visible while busy; Debug chips for Continuity/Isolate; gold dogfood on g52–g65.
 
 **Turn law:** every turn ends in the feed (`completed` | `failed` | `cancelled`).
@@ -48,7 +43,7 @@ ADE is a **local harness / Agent Development Environment** and **multi-host agen
 
 **SelfCompact (C4):** `ade__compact_context` requires a reason; stuck/debugging mid-derivation is rejected; T0 nudges when to fire.
 
-**Next:** Critical harness + Composer Media closed. Prefer dogfood/gold green; Mission Control / Zed fork deferred. See Master Gameplan · ADE-next-phase canvas.
+**Next:** Critical harness + Composer Media closed. Prefer dogfood/gold green; Mission Control deferred; editor hosts remain non-goals. See Master Gameplan · ADE-next-phase canvas.
 
 Roadmaps: `docs/research/ADE-Master-Gameplan.md`, `docs/platform/ORCHESTRATION_ENG_GOAL_PLAN.md`, `docs/platform/IDEAL_ADE_DEVELOPMENT_PLAN.md`.
 

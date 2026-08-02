@@ -37,7 +37,7 @@ This paper states **what ADE can become as a product**, ranked by leverage again
 
 ## 1. Who ADE is today (one paragraph)
 
-ADE is a **local harness / multi-host agent OS**: Desktop is the control plane; crates under `agents` / `workflow` / `core` are the brain; `.ade/` on disk is shared identity. Autonomy maps Suggest ≈ Propose, Apply ≈ Act under leases, Automate ≈ Act + required verify. Orch G0–G4 and Effort B0–B4 are done. VSCodium is retired. Zed ACP is scaffold (`ade acp --probe` only). Critical path is harness depth (DEC-A-014), not editor wrapping.
+ADE is a **local harness**: Desktop + CLI are the control plane; crates under `agents` / `workflow` / `core` are the brain; `.ade/` on disk is shared identity. Autonomy maps Suggest ≈ Propose, Apply ≈ Act under leases, Automate ≈ Act + required verify. Orch G0–G4 and Effort B0–B4 are done. External editor hosts (Zed, VSCodium, ACP soft shell) are **non-goals** (DEC-A-017). Critical path is harness depth (DEC-A-014).
 
 ---
 
@@ -294,7 +294,7 @@ When those six hold, ADE is not “an IDE with chat” — it is a **harness OS*
 | Guidance profiles | `crates/core/src/guidance.rs` · `.ade/profiles/` |
 | Rules / skills on disk | `.ade/rules/` · `.ade/skills/` |
 | Desktop control plane | `apps/desktop/` |
-| ACP scaffold | `crates/acp/` |
+| Editor hosts | Retired — DEC-A-017 |
 | Decisions | `docs/decisions/DEC-A-010` … `014` |
 | DNA | `AGENTS.md` |
 

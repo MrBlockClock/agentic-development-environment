@@ -207,12 +207,6 @@ enum Commands {
         #[arg(long)]
         allow_unpriced: bool,
     },
-    /// Speak Agent Client Protocol on stdio (Zed / multi-host BYO agent)
-    Acp {
-        /// Print scaffold JSON and exit (no stdio JSON-RPC loop yet)
-        #[arg(long)]
-        probe: bool,
-    },
     /// Continuity handoff capsules (thrift resume / last-write)
     Handoff {
         #[command(subcommand)]
@@ -2047,9 +2041,6 @@ async fn main() -> anyhow::Result<()> {
                     anyhow::bail!("live provider smoke failed");
                 }
             }
-        }
-        Commands::Acp { probe } => {
-            ade_acp::run_acp_agent(*probe).await?;
         }
         Commands::Handoff { action } => match action {
             HandoffAction::Resume {

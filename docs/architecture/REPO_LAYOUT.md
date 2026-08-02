@@ -3,26 +3,26 @@ layout: default
 title: Repository Layout
 ---
 
-# ADE repository layout (multi-host)
+# ADE repository layout
 
 **Schema:** `ade.repo-layout/v1`  
 **Status:** Active · evolutionary (no big-bang crate move)  
-**ADR:** [DEC-A-010](../decisions/DEC-A-010-multi-host-agent-os.md) · [DEC-A-011](../decisions/DEC-A-011-repo-layout.md)  
-**Canvas:** `ADE-master-gameplan.canvas.tsx` (live) · archive: `canvases/_archive/ADE-multihost-gameplan.canvas.tsx`
+**ADR:** [DEC-A-011](../decisions/DEC-A-011-repo-layout.md) · host policy [DEC-A-017](../decisions/DEC-A-017-retire-zed-host.md)  
+**Canvas:** `ADE-master-gameplan.canvas.tsx`
 
 ## Principle
 
-ADE is one **Rust agent OS** (harness). Editors are **hosts**, not forks inside this repo.
+ADE is one **Rust agent harness**. Product surface is **Desktop + CLI** only. External editor hosts (Zed, VSCodium, forks) are **non-goals**.
 
 ```
                     ┌─────────────────────────┐
                     │   ADE harness (crates)  │
                     │  agents · workflow · $  │
                     └───────────┬─────────────┘
-           ┌────────────────────┼────────────────────┐
-           ▼                    ▼                    ▼
-    apps/cli + acp        apps/desktop         hosts/* (docs)
-    `ade` / `ade acp`     Tauri control plane  Zed · VSCodium
+                 ┌──────────────┴──────────────┐
+                 ▼                             ▼
+           apps/desktop                   apps/cli
+           Tauri control plane            `ade` CLI
 ```
 
 ## Target tree
@@ -36,16 +36,12 @@ ade/
 │   ├── db/             # Ledger, vault adapters
 │   ├── api/            # HTTP API (thin)
 │   ├── service/        # Background workers
-│   ├── plugins/        # WASM plugin host (ADE plugins — not Zed/VS Code)
-│   ├── desktop/        # Tauri command crate (Desktop host backend)
-│   └── acp/            # NEW — Agent Client Protocol adapter (ADE as ACP agent)
+│   ├── plugins/        # WASM plugin host
+│   └── desktop/        # Tauri command crate (Desktop backend)
 ├── apps/
-│   ├── cli/            # `ade` binary (includes `ade acp` entry)
+│   ├── cli/            # `ade` binary
 │   └── desktop/        # Tauri + React harness UI
-├── hosts/              # NEW — host integration packs (no vendored IDEs)
-│   ├── zed/            # ACP settings examples, dogfood notes
-│   ├── vscodium/       # Open-in + Open VSX companion notes
-│   └── README.md
+├── hosts/              # Retired editor-host tombstones only (DEC-A-017)
 ├── docs/
 │   ├── architecture/   # REPO_LAYOUT.md (this file)
 │   ├── decisions/      # ADRs (DEC-A-*)
@@ -60,18 +56,14 @@ ade/
 
 ## What does **not** live here
 
-| Out of repo | Why |
-|-------------|-----|
-| Zed / VSCodium / Code-OSS source | External hosts; integrate via ACP / Open in… |
-| Open VSX registry | External catalog for VSCodium only |
-| Electron IDE fork | Explicit non-goal (DEC-A-010) |
+| Out of repo / non-goal | Why |
+|------------------------|-----|
+| Zed / VSCodium / Code-OSS source or soft shells | Product non-goal (DEC-A-017) |
+| Electron IDE fork | Explicit non-goal |
+| `crates/acp` / `ade acp` | Removed with DEC-A-017 |
 
 ## Migration rule
 
-1. **Add** new crates/dirs (`crates/acp`, `hosts/`) immediately.  
-2. **Do not** rename/move existing crates in one PR.  
-3. Optional later: `crates/desktop` → keep name; document as “Desktop host backend.”
-
-## Workspace members (Cargo)
-
-Current + `crates/acp`. CLI gains `ade acp` subcommand that runs the ACP stdio agent.
+1. **Do not** rename/move existing crates in one PR.  
+2. Keep `crates/desktop` as the Desktop host backend.  
+3. Do not re-add editor host packs without a superseding ADR.

@@ -2020,62 +2020,6 @@ pub fn open_system_terminal(state: State<'_, AppState>) -> Result<String, String
     Ok(cwd_display)
 }
 
-/// Z1/Z2: open the attached workspace in Zed (coding eyes). Soft shell stays `ade acp`.
-#[tauri::command]
-pub fn open_in_zed(state: State<'_, AppState>) -> Result<String, String> {
-    let cwd = state.workspace_root();
-    let cwd_display = cwd.display().to_string();
-
-    #[cfg(windows)]
-    {
-        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let candidates = [
-            format!("{local}\\Programs\\Zed\\Zed.exe"),
-            "zed".into(),
-            "Zed.exe".into(),
-        ];
-        for bin in candidates {
-            if bin.contains('\\') && !std::path::Path::new(&bin).is_file() {
-                continue;
-            }
-            if std::process::Command::new(&bin)
-                .arg(&cwd_display)
-                .spawn()
-                .is_ok()
-            {
-                return Ok(cwd_display);
-            }
-        }
-        return Err("Zed not found. Install Zed or add it to PATH, then retry Open in Zed.".into());
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .args(["-a", "Zed", cwd.as_os_str()])
-            .spawn()
-            .map_err(|error| format!("open Zed: {error}"))?;
-        return Ok(cwd_display);
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        for bin in ["zed", "zeditor"] {
-            if std::process::Command::new(bin)
-                .arg(&cwd_display)
-                .spawn()
-                .is_ok()
-            {
-                return Ok(cwd_display);
-            }
-        }
-        return Err("Zed not found on PATH (tried zed, zeditor)".into());
-    }
-
-    #[allow(unreachable_code)]
-    Err("open_in_zed unsupported on this platform".into())
-}
-
 #[tauri::command]
 pub fn chat_load(state: State<'_, AppState>) -> Result<ade_agents::chat::ChatThread, String> {
     ade_agents::chat::ChatStore::new(state.workspace_root())

@@ -59,7 +59,6 @@ pub fn run() {
             ade_desktop_crate::commands::pty_resize,
             ade_desktop_crate::commands::pty_kill,
             ade_desktop_crate::commands::open_system_terminal,
-            ade_desktop_crate::commands::open_in_zed,
             ade_desktop_crate::commands::handoff_resume,
             ade_desktop_crate::commands::chat_load,
             ade_desktop_crate::commands::chat_save,
