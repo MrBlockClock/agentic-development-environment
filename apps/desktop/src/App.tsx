@@ -77,7 +77,7 @@ import {
   toAttachmentMeta,
 } from "./components/fileKind";
 import {
-  extractPdfAttachment,
+  extractDocumentAttachment,
   fetchUrlAttachment,
   ingestFiles,
   ingestPathText,
@@ -5510,7 +5510,7 @@ function AgentView({
   const extractAttachment = async (item: ChatAttachment) => {
     setAttachBusy(true);
     try {
-      const result = await extractPdfAttachment(item);
+      const result = await extractDocumentAttachment(item);
       if (result.ok) {
         setAttachments((current) =>
           current.map((row) => (row.id === item.id ? result.attachment : row)),

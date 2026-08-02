@@ -247,6 +247,43 @@ export async function extractPdfAttachment(
   }
 }
 
+/** Extract `.docx` / `.xlsx` into `.ade/inbox/*.extract.md`. */
+export async function extractOfficeAttachment(
+  item: ChatAttachment,
+): Promise<
+  { ok: true; attachment: ChatAttachment } | { ok: false; error: string }
+> {
+  if (item.kind !== "office") {
+    return { ok: false, error: "Only Office chips (.docx/.xlsx) can be extracted" };
+  }
+  if (!isTauri()) return { ok: false, error: "Desktop only" };
+  try {
+    const staged = await invoke<StagedAttachment>("chat_extract_office", {
+      sourcePath: item.absolute ?? item.path,
+    });
+    return {
+      ok: true,
+      attachment: {
+        ...item,
+        extractedPath: staged.path,
+      },
+    };
+  } catch (reason) {
+    return { ok: false, error: String(reason) };
+  }
+}
+
+/** PDF or Office extract into inbox markdown. */
+export async function extractDocumentAttachment(
+  item: ChatAttachment,
+): Promise<
+  { ok: true; attachment: ChatAttachment } | { ok: false; error: string }
+> {
+  if (item.kind === "pdf") return extractPdfAttachment(item);
+  if (item.kind === "office") return extractOfficeAttachment(item);
+  return { ok: false, error: "Only PDF and Office chips can be extracted" };
+}
+
 async function stageSelectedPaths(paths: string[]): Promise<{
   attachments: ChatAttachment[];
   errors: string[];

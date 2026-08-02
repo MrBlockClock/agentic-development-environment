@@ -122,7 +122,7 @@ flowchart TB
 ### Phase M2 — Rich media understanding
 - [x] PDF: first-N-pages text extract → `.ade/inbox/*.extract.md` + path to both  
 - [x] Image: optional thumbnail strip in user bubble  
-- [ ] Office: `.docx`/`.xlsx` via extract-to-markdown (opt-in)  
+- [x] Office: `.docx`/`.xlsx` via extract-to-markdown (opt-in) — `chat_extract_office` · Extract chip · g77–g78  
 - [ ] Audio: whisper-class **local or API** transcribe → text attach (Debug/Advanced)
 
 ### Phase M3 — Multimodal providers

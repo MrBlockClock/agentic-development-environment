@@ -3,6 +3,7 @@
 export type AttachmentKind =
   | "image"
   | "pdf"
+  | "office"
   | "code"
   | "text"
   | "archive"
@@ -25,7 +26,7 @@ export type ChatAttachment = {
   previewUrl?: string;
   /** Optional fetched inbox path for URL chips after unfurl. */
   fetchedPath?: string;
-  /** Optional PDF extract markdown path after Extract. */
+  /** Optional PDF/Office extract markdown path after Extract. */
   extractedPath?: string;
 };
 
@@ -145,11 +146,17 @@ export function extensionOf(pathOrName: string): string {
 export function fileKindFromName(pathOrName: string): AttachmentKind {
   const ext = extensionOf(pathOrName);
   if (ext === "pdf") return "pdf";
+  if (ext === "docx" || ext === "xlsx") return "office";
   if (IMAGE_EXT.has(ext)) return "image";
   if (CODE_EXT.has(ext)) return "code";
   if (TEXT_EXT.has(ext)) return "text";
   if (ARCHIVE_EXT.has(ext)) return "archive";
   return "other";
+}
+
+/** Explicit Extract chip targets (PDF + Office). */
+export function isExtractableKind(kind: AttachmentKind): boolean {
+  return kind === "pdf" || kind === "office";
 }
 
 export function baseName(pathOrName: string): string {
@@ -238,6 +245,13 @@ export function packagePromptWithAttachments(
         : "; prefer Extract to inbox markdown if you need text";
       return `- ${item.path} (pdf${extracted})`;
     }
+    if (kind === "office") {
+      const extracted = item.extractedPath
+        ? `; extract → ${item.extractedPath}`
+        : "; prefer Extract to inbox markdown if you need text";
+      const ext = extensionOf(item.name) || "office";
+      return `- ${item.path} (${ext}${extracted})`;
+    }
     if (kind === "archive") {
       return `- ${item.path} (archive; do not unpack into context)`;
     }
@@ -323,7 +337,9 @@ export function isFileLikeHref(href: string): boolean {
     CODE_EXT.has(ext) ||
     TEXT_EXT.has(ext) ||
     ARCHIVE_EXT.has(ext) ||
-    ext === "pdf"
+    ext === "pdf" ||
+    ext === "docx" ||
+    ext === "xlsx"
   );
 }
 

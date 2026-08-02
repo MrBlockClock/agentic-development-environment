@@ -177,6 +177,10 @@ impl GoldRunner {
             "d_vision_refuse_text_only" => probe_d_vision_refuse_text_only(),
             "d_vision_image_reserve" => probe_d_vision_image_reserve(),
             "d_pdf_extract_rejects_non_pdf" => probe_d_pdf_extract_rejects_non_pdf(),
+            "m2_office_extract_rejects_non_office" => {
+                probe_m2_office_extract_rejects_non_office()
+            }
+            "m2_office_extract_docx" => probe_m2_office_extract_docx(),
             other => Err(format!("unknown gold task kind '{other}'")),
         };
         match outcome {
@@ -582,6 +586,18 @@ fn builtin_tasks() -> Vec<GoldTask> {
             "D PDF extract rejects non-PDF",
             "d_pdf_extract_rejects_non_pdf",
             false,
+        ),
+        task(
+            "g77",
+            "M2 Office extract rejects non-Office",
+            "m2_office_extract_rejects_non_office",
+            false,
+        ),
+        task(
+            "g78",
+            "M2 Office extract docx paragraph",
+            "m2_office_extract_docx",
+            true,
         ),
     ]
 }
@@ -1712,6 +1728,39 @@ fn probe_d_pdf_extract_rejects_non_pdf() -> Result<String, String> {
         return Err(format!("expected not a PDF, got {err}"));
     }
     Ok("pdf extract rejects non-PDF".into())
+}
+
+fn probe_m2_office_extract_rejects_non_office() -> Result<String, String> {
+    let root = std::env::temp_dir().join(format!("ade-gold-office-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let path = root.join("note.txt");
+    std::fs::write(&path, b"not office").map_err(|e| e.to_string())?;
+    let err = crate::office::extract_office(&path)
+        .err()
+        .ok_or_else(|| "non-Office unexpectedly extracted".to_string())?
+        .to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    if !err.contains("not an Office extract target") {
+        return Err(format!("expected Office reject, got {err}"));
+    }
+    Ok("office extract rejects non-Office".into())
+}
+
+fn probe_m2_office_extract_docx() -> Result<String, String> {
+    let root = std::env::temp_dir().join(format!("ade-gold-docx-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let path = root.join("brief.docx");
+    crate::office::write_minimal_docx(&path, "ADE office extract gold")
+        .map_err(|e| e.to_string())?;
+    let result = crate::office::extract_office(&path).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&root);
+    if result.kind != crate::office::OfficeKind::Docx {
+        return Err("expected docx kind".into());
+    }
+    if !result.text.contains("ADE office extract gold") {
+        return Err(format!("missing paragraph text: {}", result.text));
+    }
+    Ok("office extract docx paragraph".into())
 }
 
 fn probe_c5_mask() -> Result<String, String> {

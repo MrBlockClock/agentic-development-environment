@@ -1,5 +1,5 @@
 import type { ChatAttachment, AttachmentKind } from "./fileKind";
-import { baseName, fileKindFromName } from "./fileKind";
+import { baseName, fileKindFromName, isExtractableKind } from "./fileKind";
 
 function KindIcon({ kind }: { kind: AttachmentKind }) {
   const stroke = "currentColor";
@@ -29,6 +29,18 @@ function KindIcon({ kind }: { kind: AttachmentKind }) {
           />
           <path d="M9.5 2.5V5H12" stroke={stroke} strokeWidth="1.25" />
           <path d="M5.5 9h5M5.5 11.5h3.5" stroke={stroke} strokeWidth="1.25" />
+        </svg>
+      );
+    case "office":
+      return (
+        <svg {...common}>
+          <path
+            d="M3.5 2.5h6L12.5 5.5v8H3.5v-11Z"
+            stroke={stroke}
+            strokeWidth="1.25"
+          />
+          <path d="M9.5 2.5V5.5H12.5" stroke={stroke} strokeWidth="1.25" />
+          <path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke={stroke} strokeWidth="1.25" />
         </svg>
       );
     case "code":
@@ -96,6 +108,7 @@ function KindIcon({ kind }: { kind: AttachmentKind }) {
 const kindTone: Record<AttachmentKind, string> = {
   image: "text-cyan-300/90 border-cyan-400/25 bg-cyan-500/10",
   pdf: "text-rose-300/90 border-rose-400/25 bg-rose-500/10",
+  office: "text-blue-200/90 border-blue-400/25 bg-blue-500/10",
   code: "text-violet-300/90 border-violet-400/25 bg-violet-500/10",
   text: "text-slate-300 border-white/12 bg-white/5",
   archive: "text-amber-300/90 border-amber-400/25 bg-amber-500/10",
@@ -120,7 +133,7 @@ export function AttachmentChips({
   onOpen?: (item: ChatAttachment) => void;
   /** Optional unfurl for url/ticket chips (writes inbox markdown). */
   onFetch?: (item: ChatAttachment) => void;
-  /** Optional PDF text extract into inbox markdown. */
+  /** Optional PDF/Office text extract into inbox markdown. */
   onExtract?: (item: ChatAttachment) => void;
   compact?: boolean;
 }) {
@@ -165,13 +178,21 @@ export function AttachmentChips({
                 Fetch
               </button>
             )}
-          {onExtract && item.kind === "pdf" && !item.extractedPath && (
+          {onExtract && isExtractableKind(item.kind) && !item.extractedPath && (
             <button
               type="button"
               aria-label={`Extract ${item.name}`}
-              title="Extract first pages to .ade/inbox/*.extract.md"
+              title={
+                item.kind === "office"
+                  ? "Extract .docx/.xlsx text to .ade/inbox/*.extract.md"
+                  : "Extract first pages to .ade/inbox/*.extract.md"
+              }
               onClick={() => onExtract(item)}
-              className="shrink-0 rounded px-1 text-[10px] text-rose-200/80 hover:bg-white/10 hover:text-rose-100"
+              className={`shrink-0 rounded px-1 text-[10px] hover:bg-white/10 ${
+                item.kind === "office"
+                  ? "text-blue-200/80 hover:text-blue-100"
+                  : "text-rose-200/80 hover:text-rose-100"
+              }`}
             >
               Extract
             </button>

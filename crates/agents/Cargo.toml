@@ -23,3 +23,5 @@ chrono = { workspace = true }
 async-trait = "0.1.89"
 futures-util = "0.3.33"
 pdf-extract = "0.10"
+calamine = "0.26"
+zip = { version = "2", default-features = false, features = ["deflate"] }

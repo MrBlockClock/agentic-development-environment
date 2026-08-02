@@ -12,6 +12,8 @@ import {
 
 test("fileKindFromName maps common extensions", () => {
   assert.equal(fileKindFromName("a.PDF"), "pdf");
+  assert.equal(fileKindFromName("brief.DOCX"), "office");
+  assert.equal(fileKindFromName("sheet.xlsx"), "office");
   assert.equal(fileKindFromName("shot.png"), "image");
   assert.equal(fileKindFromName("main.rs"), "code");
   assert.equal(fileKindFromName("notes.md"), "text");

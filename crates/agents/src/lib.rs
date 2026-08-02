@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod mcp_server;
 pub mod model_profile;
 pub mod model_selector;
+pub mod office;
 pub mod pdf;
 pub mod provider;
 pub mod risk;

@@ -32,7 +32,7 @@ ADE is a **local harness / Agent Development Environment** and **multi-host agen
 
 **Lease conflict (H4):** Blocked Apply offers Wait · Isolate · Rotate lease · Suggest.
 
-**Gold races (H5):** `ade eval --gold` includes dual-writer, wrong-slot, spend honesty, occupancy compact, risk/publish, contract gate, Isolate worktree, model router (g52–g60). H2 depth: heartbeat / claim_gate / verifier (g66–g68). Invoice Δ: g69. Continuity thrift: g70–g71. E1 envelopes: g72. C4 SelfCompact rubric: g73. Sprint D vision/PDF: g74–g76.
+**Gold races (H5):** `ade eval --gold` includes dual-writer, wrong-slot, spend honesty, occupancy compact, risk/publish, contract gate, Isolate worktree, model router (g52–g60). H2 depth: heartbeat / claim_gate / verifier (g66–g68). Invoice Δ: g69. Continuity thrift: g70–g71. E1 envelopes: g72. C4 SelfCompact rubric: g73. Sprint D vision/PDF: g74–g76. M2 Office extract: g77–g78.
 
 **Compaction gold (C5):** g61–g65 measure mask/capsule savings + fidelity and format fertility (compact JSON beats prose; invented ciphers lose).
 
