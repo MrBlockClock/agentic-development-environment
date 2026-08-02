@@ -12,12 +12,32 @@ const MAX_TEXT_DELTA_CHARS: usize = 100_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ChatAttachmentMeta {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute: Option<String>,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatTurn {
     pub id: String,
     pub created_at: String,
     pub user: String,
     /// Agent stream events as received by Desktop (`type` tagged JSON).
     pub events: Vec<Value>,
+    /// Optional structured attachment chips (path-first; mirrors Attached: block).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<ChatAttachmentMeta>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -202,6 +222,7 @@ mod tests {
                     serde_json::json!({"type":"text_delta","text":"there"}),
                     serde_json::json!({"type":"completed","result":{"ok":true}}),
                 ],
+                attachments: None,
             }])
             .unwrap();
         assert_eq!(saved.turns.len(), 1);
@@ -232,6 +253,7 @@ mod tests {
                 created_at: "2026-07-22T00:00:00Z".into(),
                 user: format!("u{i}"),
                 events: vec![],
+                attachments: None,
             })
             .collect::<Vec<_>>();
         let saved = store.save(turns).unwrap();

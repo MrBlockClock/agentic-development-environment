@@ -24,6 +24,8 @@ test.describe("ADE UI tour (stubbed Desktop path)", () => {
     await expect(page.getByRole("tab", { name: "Agent" })).toBeVisible();
     await expect(page.getByTestId("ade-home-canvas")).toBeVisible();
     await expect(page.getByRole("heading", { name: "ADE", exact: true })).toBeVisible();
+    await expect(page.getByTestId("ade-getting-started")).toBeVisible();
+    await expect(page.getByText("Getting started")).toBeVisible();
     await page.screenshot({
       path: "e2e/artifacts/tour-home.png",
       fullPage: true,
@@ -39,10 +41,13 @@ test.describe("ADE UI tour (stubbed Desktop path)", () => {
 
     // Integrations
     await sidebar.getByRole("button", { name: /Integrations/ }).click();
-    await expect(page.getByText("Tools this turn")).toBeVisible();
+    await expect(page.getByTestId("ade-integrations")).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Integrations", exact: true }).nth(1),
     ).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Connectors" })).toBeVisible();
+    await page.getByRole("tab", { name: /Host tools/ }).click();
+    await expect(page.getByText("Tools this turn")).toBeVisible();
     await page.screenshot({
       path: "e2e/artifacts/tour-integrations.png",
       fullPage: true,

@@ -7,12 +7,14 @@ export type AttachmentKind =
   | "text"
   | "archive"
   | "folder"
+  | "url"
+  | "ticket"
   | "other";
 
 export type ChatAttachment = {
   id: string;
   name: string;
-  /** Path the agent should read (workspace-relative preferred). */
+  /** Path the agent should read (workspace-relative preferred), or URL for url/ticket. */
   path: string;
   /** Absolute path for Open / previews when available. */
   absolute?: string;
@@ -21,7 +23,34 @@ export type ChatAttachment = {
   size?: number;
   /** Optional preview for images (data URL or convertFileSrc). */
   previewUrl?: string;
+  /** Optional fetched inbox path for URL chips after unfurl. */
+  fetchedPath?: string;
 };
+
+/** Persistable attachment fields for `chat_save` (no preview blobs). */
+export type ChatAttachmentMeta = {
+  id: string;
+  name: string;
+  path: string;
+  absolute?: string;
+  kind: AttachmentKind;
+  mime?: string;
+  size?: number;
+  fetchedPath?: string;
+};
+
+export function toAttachmentMeta(item: ChatAttachment): ChatAttachmentMeta {
+  return {
+    id: item.id,
+    name: item.name,
+    path: item.path,
+    absolute: item.absolute,
+    kind: item.kind,
+    mime: item.mime,
+    size: item.size,
+    fetchedPath: item.fetchedPath,
+  };
+}
 
 export const ATTACH_MAX_COUNT = 8;
 export const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
@@ -143,6 +172,19 @@ export function newAttachmentId(): string {
   return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function fromAttachmentMeta(meta: ChatAttachmentMeta): ChatAttachment {
+  return {
+    id: meta.id || newAttachmentId(),
+    name: meta.name,
+    path: meta.path,
+    absolute: meta.absolute,
+    kind: meta.kind,
+    mime: meta.mime,
+    size: meta.size,
+    fetchedPath: meta.fetchedPath,
+  };
+}
+
 export function makeAttachment(input: {
   path: string;
   name?: string;
@@ -150,6 +192,8 @@ export function makeAttachment(input: {
   mime?: string;
   size?: number;
   previewUrl?: string;
+  kind?: AttachmentKind;
+  fetchedPath?: string;
 }): ChatAttachment {
   const name = input.name?.trim() || baseName(input.path);
   return {
@@ -157,10 +201,11 @@ export function makeAttachment(input: {
     name,
     path: input.path,
     absolute: input.absolute,
-    kind: fileKindFromName(name),
+    kind: input.kind ?? fileKindFromName(name),
     mime: input.mime,
     size: input.size,
     previewUrl: input.previewUrl,
+    fetchedPath: input.fetchedPath,
   };
 }
 
@@ -189,6 +234,18 @@ export function packagePromptWithAttachments(
     if (kind === "folder") {
       return `- ${item.path} (folder path; list/search inside — do not dump the whole tree)`;
     }
+    if (kind === "url") {
+      const fetched = item.fetchedPath
+        ? `; fetched → ${item.fetchedPath}`
+        : "; URL only — fetch to inbox if you need page text";
+      return `- ${item.path} (url${fetched})`;
+    }
+    if (kind === "ticket") {
+      const fetched = item.fetchedPath
+        ? `; fetched → ${item.fetchedPath}`
+        : "";
+      return `- ${item.path} (ticket ${item.name}${fetched})`;
+    }
     return `- ${item.path}`;
   });
   const block = ["", "Attached:", ...lines].join("\n");
@@ -209,6 +266,14 @@ function attachmentFromAttachedLine(line: string): ChatAttachment | null {
   if (!path) return null;
   const att = makeAttachment({ path });
   if (/\(folder path;/i.test(raw)) att.kind = "folder";
+  if (/\(url/i.test(raw)) att.kind = "url";
+  if (/\(ticket /i.test(raw)) {
+    att.kind = "ticket";
+    const ticketName = raw.match(/\(ticket ([^);]+)/i)?.[1]?.trim();
+    if (ticketName) att.name = ticketName;
+  }
+  const fetched = raw.match(/fetched → ([^\s)]+)/i)?.[1]?.trim();
+  if (fetched) att.fetchedPath = fetched;
   return att;
 }
 

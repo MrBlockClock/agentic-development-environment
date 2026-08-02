@@ -68,6 +68,7 @@ Roadmaps: `docs/research/ADE-Master-Gameplan.md`, `docs/platform/ORCHESTRATION_E
 - **ADE runtime:** `.ade/rules/*.mdc` + `.ade/skills/*/SKILL.md`
 - **Cursor IDE mirror:** `.cursor/rules` + `.cursor/skills` — keep in sync via `scripts/sync-cursor-guidance.ps1` (author in `.ade/`, then sync)
 - Phases: rule `golden-path` · Verify gates: skill `verify-ladder`
+- Stack/JD scrutiny: skill `scrutiny-council` · agents `.cursor/agents/*-scrutiny.md` · `docs/platform/SCRUTINY_AGENTS.md`
 - Profiles: `.ade/profiles/*.toml` + `active-profile.txt`
 
 ## Golden Path

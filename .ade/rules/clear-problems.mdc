@@ -1,0 +1,21 @@
+---
+description: Never leave IDE Problems / explorer red after a task — fix real and rust-analyzer false positives before finishing
+alwaysApply: true
+---
+
+# Clear Problems before finishing
+
+Treat a non-empty Problems panel (or red `apps`/`crates` explorer badges) as a **failed task**. Do not stop at “cargo/tsc is green” if the IDE still shows errors.
+
+## Required before ending a turn that touched code
+
+1. Run the project’s real gates (`cargo check` / `clippy -D warnings`, `tsc --noEmit`, cspell as applicable).
+2. Call **ReadLints** on the files/dirs you changed. If anything remains, fix it.
+3. Watch for rust-analyzer **false path remaps** (`apps/cli/crates/...`, `apps/desktop/src-tauri/crates/...`) that multiply one real issue into dozens — fix the underlying pattern, do not ignore.
+4. Known trap: do **not** pass `pub(crate)` associated fns with `impl Trait` as values (e.g. `.map_err(ApiError::internal)`). Prefer a free fn in the defining module (`internal_error`) or an explicit call in a local helper.
+5. After an IDE-only diagnostic fix, tell the user once: **Rust Analyzer: Restart Server** (or Reload Window) so stale Problems flush.
+
+## Do not
+
+- Claim “fixed the red” while Problems still lists E0xxx on those files.
+- Leave clippy “fixes” that reintroduce RA E0624 / privacy false positives.

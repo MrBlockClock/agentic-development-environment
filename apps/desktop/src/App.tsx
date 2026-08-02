@@ -57,6 +57,9 @@ import {
 import { ProviderSelect } from "./components/ModelPicker";
 import { ComposerModelSelect } from "./components/ComposerModelSelect";
 import { IntegrationsView } from "./components/IntegrationsView";
+import { GettingStartedChecklist } from "./components/GettingStartedChecklist";
+import { buildGettingStartedSteps } from "./components/gettingStarted";
+import { BrandWell } from "./components/IntegrationIcons";
 import {
   Chip,
   Disclosure,
@@ -65,19 +68,25 @@ import {
   SubTabs,
 } from "./components/ui";
 import { AttachmentChips } from "./components/AttachmentChips";
+import { MentionPalette, type MentionItem } from "./components/MentionPalette";
 import {
   type ChatAttachment,
+  type ChatAttachmentMeta,
   looksLikeFilesystemPath,
   packagePromptWithAttachments,
+  toAttachmentMeta,
 } from "./components/fileKind";
 import {
+  fetchUrlAttachment,
   ingestFiles,
   ingestPathText,
+  ingestUrlText,
   openChatPath,
   pickAttachmentFiles,
   pickAttachmentFolder,
   pickAttachmentFilesViaInput,
 } from "./components/attachIngest";
+import { looksLikeHttpUrl } from "./components/urlAttach";
 import { DESKTOP_REQUIRED_VIEWS } from "./capabilities";
 import { usd } from "./format";
 import {
@@ -1174,7 +1183,8 @@ function App() {
       : verifyResults.length > 0
         ? "ready"
         : "todo";
-    // Optional: green when any MCP is live; does not gate first-run overall.
+    // Honesty: Ready only when an MCP session is live (vault token alone ≠ connected).
+    // Does not gate first-run overall.
     const integrations: SetupLight =
       mcpServers.length > 0 ? "ready" : "todo";
     const blockers = (dashboard?.audit.blockers.length ?? 0) > 0;
@@ -2139,6 +2149,7 @@ function App() {
           {INSIGHT_IDS.has(activeView) && (
             <SubTabs
               className="mb-3 shrink-0 self-start"
+              ariaLabel="Insight sections"
               items={insightTabs}
               activeId={activeView}
               onSelect={openInsightSection}
@@ -2216,6 +2227,7 @@ function App() {
                             }
                             connectedTools={mcpTools.length}
                             mcpServerNames={mcpServers}
+                            mcpTools={mcpTools}
                             initialPrompt={
                               tab.id === HOME_AGENT_TAB ? homePrompt : ""
                             }
@@ -2233,6 +2245,15 @@ function App() {
                             devMode={debugChrome}
                             simpleMode={false}
                             workspaceRoot={dashboard.workspace_root}
+                            guidedWins={guidedWins}
+                            isDogfood={Boolean(dashboard.is_dogfood)}
+                            understandBusy={understandBusy}
+                            verifying={verifying}
+                            onUnderstand={() => void runUnderstandProject()}
+                            onVerifyHome={() =>
+                              void runVerify({ stayOnHome: true })
+                            }
+                            onImproveAde={startImproveAde}
                             onOpenWorkspaces={() => {
                               setWorkspacesStartNew(false);
                               openNavView("Workspaces");
@@ -2687,36 +2708,44 @@ function HomeView({
         ? "Try a small safe change"
         : null;
 
-  const starters = [
-    {
-      id: "understand" as const,
-      title: "Learn this project",
-      detail: "Write a short project snapshot you can reuse",
-      done: guidedWins.understand,
-      busy: understandBusy,
-      onClick: onUnderstand,
-    },
-    {
-      id: "verify" as const,
-      title: "Check that things still work",
-      detail: "Run ADE’s built-in checks on this workspace",
-      done: guidedWins.verify,
-      busy: verifying,
-      onClick: onVerifyHome,
-    },
-    ...(dashboard.is_dogfood
-      ? [
-          {
-            id: "improve" as const,
-            title: "Try a small safe change",
-            detail: "Open Agent with a careful, check-after change",
-            done: guidedWins.improve_ade,
-            busy: agentBusy,
-            onClick: onImproveAde,
-          },
-        ]
-      : []),
-  ];
+  const gettingStartedSteps = buildGettingStartedSteps({
+    understand: guidedWins.understand,
+    verify: guidedWins.verify,
+    improveAde: guidedWins.improve_ade,
+    isDogfood: Boolean(dashboard.is_dogfood),
+    understandBusy,
+    verifying,
+    improveBusy: agentBusy,
+    onUnderstand,
+    onVerify: onVerifyHome,
+    onImprove: onImproveAde,
+    keysTrailing: (
+      <button
+        type="button"
+        title="Keys"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenKeys();
+        }}
+        className="inline-flex rounded-md p-0.5 hover:bg-white/5"
+      >
+        <BrandWell id="keys" size="sm" status="info" />
+      </button>
+    ),
+    improveTrailing: (
+      <button
+        type="button"
+        title="Integrations"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenRecipes();
+        }}
+        className="inline-flex rounded-md p-0.5 hover:bg-white/5"
+      >
+        <BrandWell id="github" size="sm" status="info" title="Open stack / Integrations" />
+      </button>
+    ),
+  });
 
   const readinessSteps = [
     {
@@ -2939,48 +2968,14 @@ function HomeView({
           </div>
         )}
 
-        {simpleMode && (
-          <Disclosure
-            title="Guided path"
-            summary={`${winsDone}/${winsTotal}`}
-            subtitle={
-              dashboard.is_dogfood
-                ? "Optional — Learn, Check, then a small safe change"
-                : "Optional — Learn this project, then Check"
-            }
-            defaultOpen={!readinessComplete || winsDone < winsTotal}
-            storageKey="ade_home_guided_steps"
-            className="mt-4"
-          >
-            <div className="space-y-2">
-              {starters.map((starter) => (
-                <button
-                  key={starter.id}
-                  type="button"
-                  disabled={starter.busy}
-                  onClick={starter.onClick}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition disabled:opacity-60 ${
-                    starter.done
-                      ? "border-emerald-400/25 bg-emerald-500/8"
-                      : "border-white/8 bg-white/3 hover:border-blue-400/30"
-                  }`}
-                >
-                  <div>
-                    <div className="text-[12px] font-medium text-slate-200">{starter.title}</div>
-                    <div className="text-[10px] text-slate-500">{starter.detail}</div>
-                  </div>
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                    {starter.done ? "done" : starter.busy ? "…" : "run"}
-                  </span>
-                </button>
-              ))}
-              {guidedWins.understand && lastUnderstandPath && (
-                <p className="pt-1 font-mono text-[10px] text-emerald-200/70">
-                  {lastUnderstandPath}
-                </p>
-              )}
-            </div>
-          </Disclosure>
+        <GettingStartedChecklist
+          className="mt-4"
+          steps={gettingStartedSteps}
+        />
+        {guidedWins.understand && lastUnderstandPath && (
+          <p className="mt-2 font-mono text-[10px] text-emerald-200/70">
+            {lastUnderstandPath}
+          </p>
         )}
 
         {!dashboard.is_dogfood && dashboard.ade_source_root && (
@@ -4016,6 +4011,7 @@ function AgentView({
   busy,
   connectedTools,
   mcpServerNames = [],
+  mcpTools = [],
   onRun,
   initialPrompt = "",
   autoSubmit = false,
@@ -4045,11 +4041,19 @@ function AgentView({
   onSurfaceFailure,
   onCancel,
   onRenameTab,
+  guidedWins,
+  isDogfood = false,
+  understandBusy = false,
+  verifying = false,
+  onUnderstand,
+  onVerifyHome,
+  onImproveAde,
 }: {
   events: AgentEvent[];
   busy: boolean;
   connectedTools: number;
   mcpServerNames?: string[];
+  mcpTools?: McpToolInfo[];
   initialPrompt?: string;
   autoSubmit?: boolean;
   autoSubmitContext?: "normal" | "continuity";
@@ -4081,6 +4085,13 @@ function AgentView({
   onCancel?: () => void;
   /** Rename the shell tab from the first user prompt. */
   onRenameTab?: (title: string) => void;
+  guidedWins?: GuidedWinsState;
+  isDogfood?: boolean;
+  understandBusy?: boolean;
+  verifying?: boolean;
+  onUnderstand?: () => void;
+  onVerifyHome?: () => void;
+  onImproveAde?: () => void;
   onRun: (input: {
     prompt: string;
     provider: string;
@@ -4227,6 +4238,7 @@ function AgentView({
     createdAt: string;
     user: string;
     events: AgentEvent[];
+    attachments?: ChatAttachmentMeta[];
   };
   const [pastTurns, setPastTurns] = useState<TurnRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
@@ -4236,6 +4248,14 @@ function AgentView({
   const lastPromptRef = useRef<string | null>(null);
   /** Image paths for multimodal retry after vision_required gate / switch model. */
   const lastImagePathsRef = useRef<string[]>([]);
+  /** Attachment metas for the in-flight turn (cleared from UI on submit). */
+  const pendingTurnAttachmentsRef = useRef<ChatAttachmentMeta[]>([]);
+  const [feedDragOver, setFeedDragOver] = useState(false);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionPaths, setMentionPaths] = useState<string[]>([]);
+  const mentionRangeRef = useRef<{ start: number; end: number } | null>(null);
   const [chatReady, setChatReady] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [agentId, setAgentId] = useState(() => readOrCreateAgentId(workspaceRoot));
@@ -4693,6 +4713,7 @@ function AgentView({
         createdAt: string;
         user: string;
         events: AgentEvent[];
+        attachments?: ChatAttachmentMeta[];
       }[];
     }>("chat_load")
       .then((thread) => {
@@ -4702,6 +4723,7 @@ function AgentView({
           createdAt: turn.createdAt,
           user: turn.user,
           events: turn.events ?? [],
+          attachments: turn.attachments,
         }));
         setPastTurns(loaded);
         setHistoryOpen(false);
@@ -4741,6 +4763,7 @@ function AgentView({
       createdAt: turn.createdAt,
       user: turn.user,
       events: turn.events,
+      attachments: turn.attachments ?? null,
     }));
     void invoke("chat_save", { turns }).catch((reason) => {
       setChatError(String(reason));
@@ -5333,9 +5356,11 @@ function AgentView({
     const packed = packagePromptWithAttachments(text, attachments, {
       visionCapable: vision,
     });
+    pendingTurnAttachmentsRef.current = attachments.map(toAttachmentMeta);
     setPrompt("");
     setAttachments([]);
     setAttachNote(null);
+    setMentionOpen(false);
     if (imagePaths.length > 0 && !vision) {
       onSurfaceFailure?.(
         `vision_required: model \`${model}\` does not support images. Switch to a vision-capable model.`,
@@ -5402,11 +5427,52 @@ function AgentView({
     }
   }, [attachments.length]);
 
+  const ingestDroppedOrPastedText = useCallback(
+    (text: string) => {
+      if (looksLikeHttpUrl(text)) {
+        const { attachments: next, errors } = ingestUrlText(text, attachments.length);
+        if (next.length > 0) {
+          setAttachments((current) => [...current, ...next].slice(0, 8));
+        }
+        setAttachNote(errors.length > 0 ? errors.join(" · ") : null);
+        return true;
+      }
+      if (!looksLikeFilesystemPath(text)) return false;
+      void (async () => {
+        const { attachments: next, errors } = await ingestPathText(
+          text,
+          attachments.length,
+        );
+        if (next.length > 0) {
+          setAttachments((current) => [...current, ...next].slice(0, 8));
+        }
+        setAttachNote(
+          errors.length > 0
+            ? errors.join(" · ")
+            : next.length === 0
+              ? "Could not attach that path"
+              : null,
+        );
+      })();
+      return true;
+    },
+    [attachments.length],
+  );
+
   const onComposerDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setComposerDragOver(false);
-    if (!event.dataTransfer?.files?.length) return;
-    void addAttachments(event.dataTransfer.files);
+    setFeedDragOver(false);
+    const files = event.dataTransfer?.files;
+    if (files?.length) {
+      void addAttachments(files);
+      return;
+    }
+    const uri =
+      event.dataTransfer?.getData("text/uri-list") ||
+      event.dataTransfer?.getData("text/plain") ||
+      "";
+    if (uri.trim()) ingestDroppedOrPastedText(uri.trim().split("\n")[0] ?? uri);
   };
 
   const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -5417,25 +5483,115 @@ function AgentView({
       return;
     }
     const text = event.clipboardData?.getData("text/plain") ?? "";
-    // Path paste → attach chip instead of dumping a long path into the prompt.
-    if (!looksLikeFilesystemPath(text)) return;
-    event.preventDefault();
-    void (async () => {
-      const { attachments: next, errors } = await ingestPathText(
-        text,
-        attachments.length,
-      );
-      if (next.length > 0) {
-        setAttachments((current) => [...current, ...next].slice(0, 8));
+    if (looksLikeHttpUrl(text) || looksLikeFilesystemPath(text)) {
+      event.preventDefault();
+      ingestDroppedOrPastedText(text);
+    }
+  };
+
+  const fetchAttachment = async (item: ChatAttachment) => {
+    setAttachBusy(true);
+    try {
+      const result = await fetchUrlAttachment(item);
+      if (result.ok) {
+        setAttachments((current) =>
+          current.map((row) => (row.id === item.id ? result.attachment : row)),
+        );
+        setAttachNote(null);
+      } else {
+        setAttachNote(result.error);
       }
-      setAttachNote(
-        errors.length > 0
-          ? errors.join(" · ")
-          : next.length === 0
-            ? "Could not attach that path"
-            : null,
-      );
-    })();
+    } finally {
+      setAttachBusy(false);
+    }
+  };
+
+  const mentionItems = useMemo((): MentionItem[] => {
+    const q = mentionQuery.trim().toLowerCase();
+    const pathItems: MentionItem[] = mentionPaths
+      .filter((path) => !q || path.toLowerCase().includes(q))
+      .slice(0, 20)
+      .map((path) => ({
+        id: `path:${path}`,
+        kind: "path" as const,
+        insert: `@${path}`,
+        label: path,
+        detail: "Workspace path",
+      }));
+    const toolItems: MentionItem[] = mcpTools
+      .filter((tool) => {
+        if (!q) return true;
+        const hay = `${tool.server}/${tool.name} ${tool.description}`.toLowerCase();
+        return hay.includes(q);
+      })
+      .slice(0, 20)
+      .map((tool) => ({
+        id: `mcp:${tool.server}/${tool.name}`,
+        kind: "mcp" as const,
+        insert: `@mcp:${tool.server}/${tool.name}`,
+        label: `${tool.server}/${tool.name}`,
+        detail: tool.description?.slice(0, 80) || "MCP tool",
+      }));
+    return [...pathItems, ...toolItems].slice(0, 24);
+  }, [mentionPaths, mentionQuery, mcpTools]);
+
+  const closeMention = () => {
+    setMentionOpen(false);
+    setMentionQuery("");
+    setMentionIndex(0);
+    mentionRangeRef.current = null;
+  };
+
+  const applyMention = (item: MentionItem) => {
+    const range = mentionRangeRef.current;
+    const el = composerRef.current;
+    if (!range || !el) {
+      setPrompt((prev) => `${prev}${item.insert} `);
+      closeMention();
+      return;
+    }
+    const before = prompt.slice(0, range.start);
+    const after = prompt.slice(range.end);
+    const next = `${before}${item.insert} ${after}`;
+    setPrompt(next);
+    closeMention();
+    requestAnimationFrame(() => {
+      const pos = before.length + item.insert.length + 1;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
+  const syncMentionFromPrompt = (value: string, cursor: number) => {
+    const before = value.slice(0, cursor);
+    const at = before.lastIndexOf("@");
+    if (at < 0) {
+      closeMention();
+      return;
+    }
+    if (at > 0 && !/\s/.test(before[at - 1] ?? " ")) {
+      closeMention();
+      return;
+    }
+    const frag = before.slice(at + 1);
+    if (frag.includes("\n") || frag.length > 64) {
+      closeMention();
+      return;
+    }
+    mentionRangeRef.current = { start: at, end: cursor };
+    setMentionQuery(frag);
+    setMentionOpen(true);
+    setMentionIndex(0);
+    if (isTauri()) {
+      void invoke<string[]>("workspace_mention_candidates", {
+        query: frag.replace(/^mcp:/i, ""),
+        limit: 40,
+      })
+        .then((paths) => setMentionPaths(paths ?? []))
+        .catch(() => setMentionPaths(["AGENTS.md", "README.md"]));
+    } else {
+      setMentionPaths(["AGENTS.md", "README.md"]);
+    }
   };
 
   const pickAttachments = async (opts?: { folder?: boolean }) => {
@@ -5492,6 +5648,8 @@ function AgentView({
     );
     // G0: never leave an orphan YOU bubble after the host finishes.
     if (!terminal && events.length === 0) {
+      const turnAttachments = pendingTurnAttachmentsRef.current;
+      pendingTurnAttachmentsRef.current = [];
       setPastTurns((turns) => [
         ...turns,
         {
@@ -5502,6 +5660,7 @@ function AgentView({
           createdAt: new Date().toISOString(),
           user: currentUser,
           events: [{ type: "failed", error: "Turn ended without a result." }],
+          attachments: turnAttachments.length > 0 ? turnAttachments : undefined,
         },
       ]);
       setCurrentUser(null);
@@ -5522,6 +5681,8 @@ function AgentView({
       return;
     }
     if (!terminal) return;
+    const turnAttachments = pendingTurnAttachmentsRef.current;
+    pendingTurnAttachmentsRef.current = [];
     setPastTurns((turns) => [
       ...turns,
       {
@@ -5532,6 +5693,7 @@ function AgentView({
         createdAt: new Date().toISOString(),
         user: currentUser,
         events: [...events],
+        attachments: turnAttachments.length > 0 ? turnAttachments : undefined,
       },
     ]);
     setCurrentUser(null);
@@ -6054,7 +6216,22 @@ function AgentView({
       <div
         ref={feedScrollRef}
         onScroll={onFeedScroll}
-        className="thin-scrollbar min-h-0 flex-1 overflow-y-auto scroll-smooth"
+        className={`thin-scrollbar min-h-0 flex-1 overflow-y-auto scroll-smooth ${
+          feedDragOver ? "ring-1 ring-inset ring-accent/40" : ""
+        }`}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          setFeedDragOver(true);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setFeedDragOver(true);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+          setFeedDragOver(false);
+        }}
+        onDrop={onComposerDrop}
       >
         {showTranscript ? (
           <>
@@ -6141,21 +6318,69 @@ function AgentView({
             data-testid="ade-home-canvas"
           >
             <div className="w-full max-w-lg text-center">
-              <h2 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">
+              <h2 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
                 ADE
               </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
+              <p className="mt-2 text-sm leading-6 text-ink-dim">
                 {canvasSubtitle}
               </p>
+              {guidedWins && onUnderstand && onVerifyHome && (
+                <GettingStartedChecklist
+                  className="mt-6"
+                  steps={buildGettingStartedSteps({
+                    understand: guidedWins.understand,
+                    verify: guidedWins.verify,
+                    improveAde: guidedWins.improve_ade,
+                    isDogfood,
+                    understandBusy,
+                    verifying,
+                    improveBusy: busy,
+                    onUnderstand,
+                    onVerify: onVerifyHome,
+                    onImprove: onImproveAde,
+                    keysTrailing: onOpenKeys ? (
+                      <button
+                        type="button"
+                        title="Keys"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenKeys();
+                        }}
+                        className="inline-flex rounded-md p-0.5 hover:bg-white/5"
+                      >
+                        <BrandWell id="keys" size="sm" status="info" />
+                      </button>
+                    ) : undefined,
+                    improveTrailing: onOpenIntegrations ? (
+                      <button
+                        type="button"
+                        title="Integrations"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenIntegrations();
+                        }}
+                        className="inline-flex rounded-md p-0.5 hover:bg-white/5"
+                      >
+                        <BrandWell
+                          id="github"
+                          size="sm"
+                          status="info"
+                          title="Open Integrations"
+                        />
+                      </button>
+                    ) : undefined,
+                  })}
+                />
+              )}
               {pastTurns.length > 0 && lastTurnTitle && (
-                <div className="mt-6 rounded-xl border border-white/8 bg-[#0d121a] px-4 py-3 text-left">
+                <div className="mt-6 rounded-xl border border-line bg-surface-2 px-4 py-3 text-left">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
                         Last run
                       </div>
                       <div
-                        className="mt-1 truncate text-[13px] font-medium text-slate-200"
+                        className="mt-1 truncate text-[13px] font-medium text-ink"
                         title={lastTurn?.user}
                       >
                         {lastTurnTitle}
@@ -6164,19 +6389,19 @@ function AgentView({
                         <span
                           className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
                             lastTurnFailed
-                              ? "bg-red-500/15 text-red-200"
-                              : "bg-emerald-400/10 text-emerald-300"
+                              ? "bg-danger/15 text-red-200"
+                              : "bg-ready/10 text-emerald-300"
                           }`}
                         >
                           <span
                             className={`size-1.5 rounded-full ${
-                              lastTurnFailed ? "bg-red-400" : "bg-emerald-400"
+                              lastTurnFailed ? "bg-danger" : "bg-ready"
                             }`}
                             aria-hidden
                           />
                           {lastTurnFailed ? "Failed" : "Done"}
                         </span>
-                        <span className="text-[10px] text-slate-600">
+                        <span className="text-[10px] text-ink-faint">
                           {pastTurns.length} turn
                           {pastTurns.length === 1 ? "" : "s"} saved
                         </span>
@@ -6189,7 +6414,7 @@ function AgentView({
                           setHistoryOpen(true);
                           stickToBottomRef.current = true;
                         }}
-                        className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/8"
+                        className="rounded-md border border-line bg-surface-3 px-2.5 py-1.5 text-[11px] font-semibold text-ink hover:bg-white/8"
                       >
                         Show history
                       </button>
@@ -6201,7 +6426,7 @@ function AgentView({
                             setHistoryOpen(true);
                             onContinueHandoff();
                           }}
-                          className="rounded-md bg-blue-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-40"
+                          className="rounded-md bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-400 disabled:opacity-40"
                         >
                           {continuityBusy ? "Working…" : "Continue"}
                         </button>
@@ -6211,7 +6436,7 @@ function AgentView({
                         disabled={busy}
                         onClick={clearChat}
                         title="Clear saved turns and start empty"
-                        className="rounded-md px-2 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-white/5 hover:text-slate-300 disabled:opacity-40"
+                        className="rounded-md px-2 py-1.5 text-[11px] font-semibold text-ink-faint hover:bg-white/5 hover:text-ink-dim disabled:opacity-40"
                       >
                         New chat
                       </button>
@@ -6461,7 +6686,7 @@ function AgentView({
       </Disclosure>
 
       <div
-        className={`shrink-0 rounded-2xl border bg-[#141a22] ${
+        className={`relative shrink-0 rounded-2xl border bg-[#141a22] ${
           composerDragOver
             ? "border-cyan-400/40 bg-cyan-500/5"
             : "border-white/10"
@@ -6480,6 +6705,17 @@ function AgentView({
         }}
         onDrop={onComposerDrop}
       >
+        {mentionOpen && (
+          <div className="pointer-events-auto absolute inset-x-3 bottom-[calc(100%-0.25rem)] z-30">
+            <MentionPalette
+              items={mentionItems}
+              activeIndex={mentionIndex}
+              onActiveIndexChange={setMentionIndex}
+              onPick={applyMention}
+              onClose={closeMention}
+            />
+          </div>
+        )}
         {(attachments.length > 0 || attachNote) && (
           <div className="px-3 pt-3">
             <AttachmentChips
@@ -6492,6 +6728,7 @@ function AgentView({
                 setAttachNote(null);
               }}
               onOpen={(item) => void openChatPath(item.absolute ?? item.path)}
+              onFetch={(item) => void fetchAttachment(item)}
             />
             {attachNote && (
               <p className="mb-2 text-[10px] leading-4 text-amber-200/90">{attachNote}</p>
@@ -6542,9 +6779,51 @@ function AgentView({
         <textarea
           ref={composerRef}
           value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setPrompt(value);
+            syncMentionFromPrompt(
+              value,
+              event.target.selectionStart ?? value.length,
+            );
+          }}
+          onClick={(event) => {
+            const el = event.currentTarget;
+            syncMentionFromPrompt(el.value, el.selectionStart ?? el.value.length);
+          }}
           onPaste={onComposerPaste}
           onKeyDown={(event) => {
+            if (mentionOpen) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setMentionIndex((i) =>
+                  mentionItems.length === 0 ? 0 : (i + 1) % mentionItems.length,
+                );
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setMentionIndex((i) =>
+                  mentionItems.length === 0
+                    ? 0
+                    : (i - 1 + mentionItems.length) % mentionItems.length,
+                );
+                return;
+              }
+              if (event.key === "Enter" || event.key === "Tab") {
+                const item = mentionItems[mentionIndex];
+                if (item) {
+                  event.preventDefault();
+                  applyMention(item);
+                  return;
+                }
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeMention();
+                return;
+              }
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               if ((prompt.trim() || attachments.length > 0) && isTauri()) {
@@ -6561,7 +6840,7 @@ function AgentView({
           placeholder={
             busy
               ? "Add to queue… (Enter) · Esc to stop"
-              : "Ask ADE to plan or build… (drop or paste files)"
+              : "Ask ADE… @path or @mcp · drop/paste files or URLs"
           }
         />
         <div className="flex items-center gap-1.5 px-3 pb-3 pt-1">

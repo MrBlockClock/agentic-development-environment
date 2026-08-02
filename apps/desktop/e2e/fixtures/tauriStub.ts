@@ -105,14 +105,51 @@ export async function installTauriStub(page: Page): Promise<void> {
         spend_summary: summary,
         mcp_list_servers: [],
         mcp_list_tools: [],
+        mcp_connect: true,
+        mcp_disconnect: true,
+        key_status: { configured: false, source: null },
+        key_status_all: [],
+        key_env_candidates: [],
         list_recipes: [],
         list_rules: [],
         list_skills: [],
         list_guidance_profiles: [],
         get_active_guidance_profile: null,
+        guided_wins_status: {
+          understand: false,
+          verify: false,
+          improve_ade: false,
+          understand_artifact: null,
+        },
         chat_load: { id: "stub", updatedAt: new Date().toISOString(), turns: [] },
         chat_save: null,
         chat_clear: null,
+        chat_stage_path: {
+          name: "stub.txt",
+          path: ".ade/inbox/stub.txt",
+          absolute: "/tmp/stub.txt",
+          bytes: 4,
+          staged: true,
+          isDir: false,
+        },
+        chat_stage_bytes: {
+          name: "paste.bin",
+          path: ".ade/inbox/paste.bin",
+          absolute: "/tmp/paste.bin",
+          bytes: 0,
+          staged: true,
+          isDir: false,
+        },
+        chat_open_path: null,
+        chat_fetch_url: {
+          name: "fetch-stub.md",
+          path: ".ade/inbox/fetch-stub.md",
+          absolute: "/tmp/fetch-stub.md",
+          bytes: 12,
+          staged: true,
+          isDir: false,
+        },
+        workspace_mention_candidates: ["AGENTS.md", "README.md"],
         goal_active: null,
         list_workspaces: {
           current: (state as { workspace_root?: string }).workspace_root ?? "",
@@ -122,7 +159,7 @@ export async function installTauriStub(page: Page): Promise<void> {
       };
       Object.defineProperty(window, "__TAURI_INTERNALS__", {
         value: {
-          invoke: (command: string) =>
+          invoke: (command: string, _args?: unknown) =>
             command in answers
               ? Promise.resolve(answers[command])
               : Promise.reject(new Error(`stub: unhandled command "${command}"`)),

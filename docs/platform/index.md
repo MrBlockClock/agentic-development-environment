@@ -27,6 +27,7 @@ Living product and engineering plans for ADE Desktop, Ideal spine, orchestration
 | [ADE_SURFACE_GAMEPLAN](ADE_SURFACE_GAMEPLAN.html) | Desktop IA — Insight, Analytics, Atlas, spend cards |
 | [ADE_GUIDANCE_ATLAS_PLAN_MAP](ADE_GUIDANCE_ATLAS_PLAN_MAP.html) | Global vs workspace guidance; Atlas + Plan Map |
 | [ADE_STACK_FIT](ADE_STACK_FIT.html) | Recipe ranking / trust-contract bootstrap |
+| [SCRUTINY_AGENTS](SCRUTINY_AGENTS.html) | Field scrutiny bots + JD alignment (rational vs bleed) |
 
 ## Orchestration, effort, spend
 

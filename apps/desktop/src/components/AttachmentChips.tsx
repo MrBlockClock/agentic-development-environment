@@ -61,6 +61,24 @@ function KindIcon({ kind }: { kind: AttachmentKind }) {
           />
         </svg>
       );
+    case "url":
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="5.25" stroke={stroke} strokeWidth="1.25" />
+          <path d="M2.75 8h10.5M8 2.75c1.6 1.7 1.6 8.8 0 10.5M8 2.75c-1.6 1.7-1.6 8.8 0 10.5" stroke={stroke} strokeWidth="1.25" />
+        </svg>
+      );
+    case "ticket":
+      return (
+        <svg {...common}>
+          <path
+            d="M3 4.5h10v7H3v-7Z"
+            stroke={stroke}
+            strokeWidth="1.25"
+          />
+          <path d="M5.5 7h5M5.5 9.5h3.5" stroke={stroke} strokeWidth="1.25" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>
@@ -82,6 +100,8 @@ const kindTone: Record<AttachmentKind, string> = {
   text: "text-slate-300 border-white/12 bg-white/5",
   archive: "text-amber-300/90 border-amber-400/25 bg-amber-500/10",
   folder: "text-sky-300/90 border-sky-400/25 bg-sky-500/10",
+  url: "text-emerald-300/90 border-emerald-400/25 bg-emerald-500/10",
+  ticket: "text-orange-200/90 border-orange-400/25 bg-orange-500/10",
   other: "text-slate-400 border-white/10 bg-white/4",
 };
 
@@ -90,12 +110,15 @@ export function AttachmentChips({
   onRemove,
   onClearAll,
   onOpen,
+  onFetch,
   compact = false,
 }: {
   items: ChatAttachment[];
   onRemove?: (id: string) => void;
   onClearAll?: () => void;
   onOpen?: (item: ChatAttachment) => void;
+  /** Optional unfurl for url/ticket chips (writes inbox markdown). */
+  onFetch?: (item: ChatAttachment) => void;
   compact?: boolean;
 }) {
   if (items.length === 0) return null;
@@ -105,7 +128,7 @@ export function AttachmentChips({
         <div
           key={item.id}
           className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium ${kindTone[item.kind]}`}
-          title={item.path}
+          title={item.fetchedPath ? `${item.path}\n→ ${item.fetchedPath}` : item.path}
         >
           <KindIcon kind={item.kind} />
           {item.kind === "image" && item.previewUrl ? (
@@ -126,6 +149,24 @@ export function AttachmentChips({
           ) : (
             <span className="min-w-0 truncate">{item.name}</span>
           )}
+          {onFetch &&
+            (item.kind === "url" || item.kind === "ticket") &&
+            !item.fetchedPath && (
+              <button
+                type="button"
+                aria-label={`Fetch ${item.name}`}
+                title="Fetch page text into .ade/inbox"
+                onClick={() => onFetch(item)}
+                className="shrink-0 rounded px-1 text-[10px] text-emerald-200/80 hover:bg-white/10 hover:text-emerald-100"
+              >
+                Fetch
+              </button>
+            )}
+          {item.fetchedPath ? (
+            <span className="shrink-0 text-[9px] uppercase tracking-wide opacity-70">
+              fetched
+            </span>
+          ) : null}
           {onRemove && (
             <button
               type="button"

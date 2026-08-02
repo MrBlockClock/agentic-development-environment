@@ -27,6 +27,11 @@ export type McpRecipe = {
   envHint?: string;
   /** Vault secret is injected into each of these env keys on Connect MCP. */
   envKeys?: string[];
+  /**
+   * Process env the user must set outside the vault. When set, a live MCP
+   * spawn is "incomplete" (warn), not fully ready — ADE only injects envKeys.
+   */
+  externalEnvKeys?: string[];
   docsUrl?: string;
 };
 
@@ -137,7 +142,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       args: ["-y", "@modelcontextprotocol/server-gitlab"],
       envHint: "GITLAB_PERSONAL_ACCESS_TOKEN",
       envKeys: ["GITLAB_PERSONAL_ACCESS_TOKEN", "GITLAB_TOKEN"],
-      docsUrl: "https://gitlab.com/gitlab-org/modelops/applied-ml/code-suggestions/ai-assist/-/tree/main",
+      docsUrl: "https://gitlab.com/gitlab-org/modelops/applied-ml/code-suggestions/ai-assist",
     },
     fundamental: true,
   },
@@ -157,6 +162,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
       args: ["-y", "@azure/mcp@latest", "server", "start"],
       envHint: "AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET",
       envKeys: ["AZURE_CLIENT_SECRET"],
+      externalEnvKeys: ["AZURE_TENANT_ID", "AZURE_CLIENT_ID"],
       docsUrl: "https://learn.microsoft.com/azure/developer/azure-mcp-server/",
     },
     fundamental: true,
@@ -166,7 +172,8 @@ export const INTEGRATIONS: IntegrationDef[] = [
     label: "AWS",
     category: "cloud",
     kind: "token",
-    blurb: "Access key secret for CLI/SDK work the agent runs under shell leases.",
+    blurb:
+      "Store an access key secret in the vault. Not wired to the agent yet — needs shell env or an MCP recipe.",
     vaultId: "aws",
     getKeyUrl: "https://console.aws.amazon.com/iam/",
     envVars: ["AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID"],
@@ -177,7 +184,8 @@ export const INTEGRATIONS: IntegrationDef[] = [
     label: "Google Cloud",
     category: "cloud",
     kind: "token",
-    blurb: "Service account JSON key or access token for gcloud / APIs.",
+    blurb:
+      "Paste an access token (not a full JSON key path). Vault storage only — agent needs MCP/shell wiring.",
     vaultId: "google-cloud",
     getKeyUrl: "https://console.cloud.google.com/iam-admin/serviceaccounts",
     envVars: ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_SA_KEY"],
@@ -246,7 +254,8 @@ export const INTEGRATIONS: IntegrationDef[] = [
     label: "Jira",
     category: "collab",
     kind: "token",
-    blurb: "Atlassian API token for Jira Cloud issues and boards.",
+    blurb:
+      "Atlassian API token for Jira Cloud. Vault only until an MCP recipe or shell env is wired.",
     vaultId: "jira",
     getKeyUrl: "https://id.atlassian.com/manage-profile/security/api-tokens",
     envVars: ["JIRA_API_TOKEN", "ATLASSIAN_API_TOKEN"],
@@ -257,7 +266,8 @@ export const INTEGRATIONS: IntegrationDef[] = [
     label: "Notion",
     category: "collab",
     kind: "token",
-    blurb: "Internal integration token for pages and databases.",
+    blurb:
+      "Internal integration token. Vault storage only — not wired to the agent yet.",
     vaultId: "notion",
     getKeyUrl: "https://www.notion.so/my-integrations",
     envVars: ["NOTION_TOKEN", "NOTION_API_KEY"],
@@ -267,7 +277,8 @@ export const INTEGRATIONS: IntegrationDef[] = [
     label: "Discord",
     category: "collab",
     kind: "token",
-    blurb: "Bot token for guild automation the agent runs under Apply.",
+    blurb:
+      "Bot token for guild automation. Vault only until MCP/shell wiring exists.",
     vaultId: "discord",
     getKeyUrl: "https://discord.com/developers/applications",
     envVars: ["DISCORD_BOT_TOKEN", "DISCORD_TOKEN"],

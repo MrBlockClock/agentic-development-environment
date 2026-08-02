@@ -3173,6 +3173,148 @@ pub fn chat_open_path(state: State<'_, AppState>, path: String) -> Result<(), St
     Err("chat_open_path unsupported on this platform".into())
 }
 
+/// Fetch an http(s) URL into `.ade/inbox/fetch-*.md` (explicit unfurl; never auto).
+#[tauri::command]
+pub async fn chat_fetch_url(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<StagedAttachment, String> {
+    let trimmed = url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("url required".into());
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("only http(s) urls can be fetched".into());
+    }
+    let body = ade_agents::web::web_fetch(&trimmed)
+        .await
+        .map_err(|error| error.to_string())?;
+    let root = state.workspace_root();
+    let inbox = chat_inbox_dir(&root)?;
+    let host = trimmed
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or("page")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect::<String>();
+    let safe = sanitize_inbox_name(&format!("{host}.md"));
+    let dest_name = format!("fetch-{}-{}", chrono_lite_stamp(), safe);
+    let dest = inbox.join(&dest_name);
+    let markdown = format!("# Fetched\n\nSource: {trimmed}\n\n---\n\n{body}\n");
+    std::fs::write(&dest, markdown.as_bytes()).map_err(|error| format!("write inbox: {error}"))?;
+    let bytes = std::fs::metadata(&dest)
+        .map(|m| m.len())
+        .unwrap_or(markdown.len() as u64);
+    Ok(StagedAttachment {
+        name: dest_name.clone(),
+        path: format!(".ade/inbox/{dest_name}"),
+        absolute: dest.display().to_string(),
+        bytes,
+        staged: true,
+        is_dir: false,
+    })
+}
+
+const MENTION_SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    "coverage",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "ade-target",
+];
+
+/// Shallow workspace path list for composer `@` mentions (capped, skip heavy dirs).
+#[tauri::command]
+pub fn workspace_mention_candidates(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let root = state.workspace_root();
+    let max = limit.unwrap_or(40).clamp(1, 80);
+    let needle = query
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .replace('\\', "/");
+    let mut out = Vec::new();
+    fn walk(
+        dir: &Path,
+        root: &Path,
+        depth: usize,
+        needle: &str,
+        out: &mut Vec<String>,
+        max: usize,
+    ) {
+        if out.len() >= max || depth > 6 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut names: Vec<_> = entries.flatten().collect();
+        names.sort_by_key(|e| e.file_name());
+        for entry in names {
+            if out.len() >= max {
+                return;
+            }
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') && name != ".ade" && name != ".github" {
+                // Allow .ade / .github; skip other dotdirs at top levels.
+                if path.is_dir() {
+                    continue;
+                }
+            }
+            if path.is_dir() {
+                if MENTION_SKIP_DIRS.iter().any(|s| name.eq_ignore_ascii_case(s)) {
+                    continue;
+                }
+                walk(&path, root, depth + 1, needle, out, max);
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if ade_core::ignore::SensitivePathPolicy::path_is_blocked(&rel_str) {
+                continue;
+            }
+            if !needle.is_empty() && !rel_str.to_ascii_lowercase().contains(needle) {
+                continue;
+            }
+            out.push(rel_str);
+        }
+    }
+    // Prefer a few roots first so AGENTS.md / README surface early.
+    for seed in ["AGENTS.md", "README.md", "Cargo.toml", "package.json"] {
+        let p = root.join(seed);
+        if p.is_file() {
+            let rel = seed.to_string();
+            if needle.is_empty() || rel.to_ascii_lowercase().contains(&needle) {
+                out.push(rel);
+            }
+        }
+    }
+    walk(&root, &root, 0, &needle, &mut out, max);
+    out.sort();
+    out.dedup();
+    if out.len() > max {
+        out.truncate(max);
+    }
+    Ok(out)
+}
+
 fn current_branch(root: &std::path::Path) -> Option<String> {
     std::process::Command::new("git")
         .args(["branch", "--show-current"])

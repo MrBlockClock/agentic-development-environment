@@ -9,6 +9,11 @@ import {
   makeAttachment,
   refuseAttachmentReason,
 } from "./fileKind";
+import {
+  parseGitHubTicket,
+  parseHttpUrl,
+  urlChipLabel,
+} from "./urlAttach";
 
 type StagedAttachment = {
   name: string;
@@ -47,6 +52,25 @@ function attachmentFromStaged(staged: StagedAttachment): ChatAttachment {
     base.kind = "folder";
   }
   return base;
+}
+
+/** Build a url/ticket chip from pasted or dropped http(s) text (no network). */
+export function attachmentFromHttpUrl(text: string): ChatAttachment | null {
+  const ticket = parseGitHubTicket(text);
+  if (ticket) {
+    return makeAttachment({
+      path: ticket.url,
+      name: ticket.label,
+      kind: "ticket",
+    });
+  }
+  const parsed = parseHttpUrl(text);
+  if (!parsed) return null;
+  return makeAttachment({
+    path: parsed.url,
+    name: urlChipLabel(parsed.url),
+    kind: "url",
+  });
 }
 
 export async function stagePathAsAttachment(
@@ -151,6 +175,49 @@ export async function ingestPathText(
   const result = await stagePathAsAttachment(trimmed);
   if (result.ok) return { attachments: [result.attachment], errors: [] };
   return { attachments: [], errors: [result.error] };
+}
+
+/** Paste/drop a single http(s) URL → url or ticket chip (no fetch yet). */
+export function ingestUrlText(
+  text: string,
+  currentCount: number,
+): { attachments: ChatAttachment[]; errors: string[] } {
+  if (currentCount >= ATTACH_MAX_COUNT) {
+    return {
+      attachments: [],
+      errors: [`Max ${ATTACH_MAX_COUNT} attachments per message`],
+    };
+  }
+  const attachment = attachmentFromHttpUrl(text);
+  if (!attachment) return { attachments: [], errors: [] };
+  return { attachments: [attachment], errors: [] };
+}
+
+/** Fetch URL/ticket page text into `.ade/inbox/fetch-*.md` and annotate the chip. */
+export async function fetchUrlAttachment(
+  item: ChatAttachment,
+): Promise<
+  { ok: true; attachment: ChatAttachment } | { ok: false; error: string }
+> {
+  if (item.kind !== "url" && item.kind !== "ticket") {
+    return { ok: false, error: "Only URL/ticket chips can be fetched" };
+  }
+  if (!isTauri()) return { ok: false, error: "Desktop only" };
+  try {
+    const staged = await invoke<StagedAttachment>("chat_fetch_url", {
+      url: item.path,
+    });
+    return {
+      ok: true,
+      attachment: {
+        ...item,
+        fetchedPath: staged.path,
+        size: staged.bytes,
+      },
+    };
+  } catch (reason) {
+    return { ok: false, error: String(reason) };
+  }
 }
 
 async function stageSelectedPaths(paths: string[]): Promise<{

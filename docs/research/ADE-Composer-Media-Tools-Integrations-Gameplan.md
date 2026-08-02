@@ -111,11 +111,13 @@ flowchart TB
 ### Phase M1 — Composer completeness (next)
 - [x] **Folder attach** as single path chip (no recursive paste) — Alt+click paperclip or paste path  
 - [x] **Multi-select** already; add clear-all  
-- [ ] **Drag onto Home feed** (not only composer)  
+- [x] **Drag onto Home feed** (not only composer)  
 - [x] **Screenshot paste** reliability (Windows clipboard image → inbox `.png`) — via paste files + stage_bytes  
 - [x] **Path paste**: if clipboard text is an existing path, offer “Attach path” chip  
 - [x] **Open** always uses absolute; chip label stays basename  
-- [ ] Persist chips metadata in `chat_save` JSON (not only parsed `Attached:` text)
+- [x] Persist chips metadata in `chat_save` JSON (not only parsed `Attached:` text)  
+- [x] URL / GitHub ticket chips + optional Fetch → `.ade/inbox/fetch-*.md`  
+- [x] Composer `@` mention palette (workspace paths + connected MCP tools)
 
 ### Phase M2 — Rich media understanding
 - [ ] PDF: first-N-pages text extract → `.ade/inbox/*.extract.md` + path to both  
@@ -206,13 +208,15 @@ Already in harness:
 ### Sprint B — Composer parity
 1. Folder-as-path chip  
 2. Path-from-clipboard text  
-3. chat_save attachment metadata  
-4. `@` mention palette: files in workspace (ripgrep/path) + MCP tools  
+3. chat_save attachment metadata ✅  
+4. `@` mention palette: files in workspace (ripgrep/path) + MCP tools ✅  
+5. Drag onto Home feed ✅  
+6. URL / ticket chips + optional fetch-to-inbox ✅  
 
 ### Sprint C — Connections hub
 1. Setup → **Integrations** nav (MCP + GitHub / GitLab / Stripe / Azure + recipes) ✅  
-2. URL chip + optional fetch-to-inbox  
-3. Ticket URL parse (GitHub first)
+2. URL chip + optional fetch-to-inbox ✅  
+3. Ticket URL parse (GitHub first) ✅
 
 ### Sprint D — Extracts & vision
 1. PDF text extract command  
@@ -228,13 +232,13 @@ Already in harness:
 
 ## 8. Acceptance checklist (definition of done for “advanced composer”)
 
-- [ ] Pick, drop, paste image, paste path, attach folder — all produce chips with icons  
-- [ ] Failures always show a one-line note (never silent)  
-- [ ] Agent turn always receives resolvable workspace/inbox paths  
-- [ ] User can open chip in OS viewer  
-- [ ] Tools for the turn are visible (at least MCP count + shell scope)  
-- [ ] Connections page lists MCP + keys status without Debug hunting  
-- [ ] No vision bytes on free text-only models without an honest CTA  
+- [x] Pick, drop, paste image, paste path, attach folder — all produce chips with icons  
+- [x] Failures always show a one-line note (never silent)  
+- [x] Agent turn always receives resolvable workspace/inbox paths  
+- [x] User can open chip in OS viewer  
+- [x] Tools for the turn are visible (at least MCP count + shell scope)  
+- [x] Connections page lists MCP + keys status without Debug hunting  
+- [x] No vision bytes on free text-only models without an honest CTA  
 
 ---
 

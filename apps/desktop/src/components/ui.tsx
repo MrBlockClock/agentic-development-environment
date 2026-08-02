@@ -30,7 +30,6 @@ export const TONE_FILL: Record<Tone, string> = {
   authority: "#a78bfa",
 };
 
-
 /** Hover / focus / tap hint — works on desktop and touch. */
 export function Hint({
   text,
@@ -139,7 +138,9 @@ export function Disclosure({
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-slate-100">{title}</span>
+            <span className="text-sm font-semibold text-slate-100">
+              {title}
+            </span>
             {hint ? <Hint text={hint} /> : null}
             {!expanded && summary ? (
               <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">
@@ -148,7 +149,9 @@ export function Disclosure({
             ) : null}
           </span>
           {expanded && subtitle ? (
-            <span className="mt-1 block text-[11px] leading-4 text-slate-600">{subtitle}</span>
+            <span className="mt-1 block text-[11px] leading-4 text-slate-600">
+              {subtitle}
+            </span>
           ) : null}
           {!expanded && !summary && subtitle ? (
             <span className="mt-1 block truncate text-[11px] leading-4 text-slate-600">
@@ -324,7 +327,9 @@ export function MetricCard({
           </span>
         ) : null}
       </div>
-      {sub ? <div className="mt-0.5 text-[10px] text-slate-600">{sub}</div> : null}
+      {sub ? (
+        <div className="mt-0.5 text-[10px] text-slate-600">{sub}</div>
+      ) : null}
     </div>
   );
 }
@@ -342,16 +347,18 @@ export function SubTabs({
   activeId,
   onSelect,
   className = "",
+  ariaLabel = "Sections",
 }: {
   items: SubTabItem[];
   activeId: string;
   onSelect: (id: string) => void;
   className?: string;
+  ariaLabel?: string;
 }) {
   return (
     <div
       role="tablist"
-      aria-label="Insight sections"
+      aria-label={ariaLabel}
       className={`flex flex-wrap items-center gap-0.5 rounded-xl border border-line bg-surface-2/70 p-1 ${className}`}
     >
       {items.map((item) => {
@@ -374,7 +381,9 @@ export function SubTabs({
             {item.badge ? (
               <span
                 className={`rounded px-1 py-0.5 text-[9px] font-semibold ${
-                  active ? "bg-blue-400/20 text-blue-100" : "bg-white/6 text-slate-500"
+                  active
+                    ? "bg-blue-400/20 text-blue-100"
+                    : "bg-white/6 text-slate-500"
                 }`}
               >
                 {item.badge}
@@ -415,7 +424,9 @@ export function BarSeries({
 
   if (bars.length === 0 || dataPeak <= 0) {
     return (
-      <p className="py-6 text-center text-[11px] text-slate-600">{emptyLabel}</p>
+      <p className="py-6 text-center text-[11px] text-slate-600">
+        {emptyLabel}
+      </p>
     );
   }
 
@@ -437,8 +448,9 @@ export function BarSeries({
         <span>peak {scaleLabel}</span>
         {reference && !refFitsScale ? (
           <span className="text-amber-300/60">
-            {reference.label} {formatTotal ? formatTotal(reference.value) : reference.value}{" "}
-            — above this range
+            {reference.label}{" "}
+            {formatTotal ? formatTotal(reference.value) : reference.value} —
+            above this range
           </span>
         ) : null}
       </div>
@@ -475,9 +487,7 @@ export function BarSeries({
                     className={segmentIndex === 0 ? "rounded-t-sm" : ""}
                   />
                 ))}
-              {total === 0 ? (
-                <div className="h-px w-full bg-white/10" />
-              ) : null}
+              {total === 0 ? <div className="h-px w-full bg-white/10" /> : null}
             </div>
           );
         })}
@@ -520,7 +530,9 @@ export function StatBar({
       <div className="flex items-baseline gap-2 text-[11px]">
         <span className="min-w-0 flex-1 truncate text-slate-300">{label}</span>
         {right ? (
-          <span className={`shrink-0 font-medium ${TONE_TEXT[tone]}`}>{right}</span>
+          <span className={`shrink-0 font-medium ${TONE_TEXT[tone]}`}>
+            {right}
+          </span>
         ) : null}
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-white/6">
@@ -549,7 +561,9 @@ export function EmptyState({
   return (
     <div className="rounded-xl border border-dashed border-line-strong/60 px-4 py-6 text-center">
       <p className="text-xs font-semibold text-slate-300">{title}</p>
-      <p className="mx-auto mt-1 max-w-sm text-[11px] leading-4 text-slate-600">{body}</p>
+      <p className="mx-auto mt-1 max-w-sm text-[11px] leading-4 text-slate-600">
+        {body}
+      </p>
       {actionLabel && onAction ? (
         <button
           type="button"

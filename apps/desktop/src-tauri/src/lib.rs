@@ -96,6 +96,8 @@ pub fn run() {
             ade_desktop_crate::commands::chat_stage_path,
             ade_desktop_crate::commands::chat_stage_bytes,
             ade_desktop_crate::commands::chat_open_path,
+            ade_desktop_crate::commands::chat_fetch_url,
+            ade_desktop_crate::commands::workspace_mention_candidates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
