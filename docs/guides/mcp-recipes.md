@@ -60,6 +60,8 @@ Desktop path:
 3. Continuity strip → Continue / thrift resume.  
 4. Ask the agent to use extract markdown **and** MCP search (issues/PRs), write evidence only under `.ade/dogfood/`.
 
+CLI dogfood may record `mcp=skipped (not connected)` when no MCP session is live — that is an honest PASS for the Continuity + extract path. Connect MCP on Desktop for the full search path.
+
 See also: `scripts/dogfood-continuity.ps1` (thrift-only) and [Desktop wiki](../wiki/Desktop.html).
 
 ## Other catalog recipes

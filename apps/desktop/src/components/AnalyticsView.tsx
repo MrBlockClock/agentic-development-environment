@@ -179,8 +179,8 @@ export function AnalyticsView({
 
       {noData && !loading ? (
         <EmptyState
-          title="No priced turns yet"
-          body="Analytics aggregates the local usage ledger. Run an agent turn with a provider key and spend caps set, then come back — nothing is uploaded anywhere."
+          title="No usage yet"
+          body="Analytics shows token in/out first, then dollar actuals against your caps. Run an agent turn with a provider key (and spend caps if you meter $), then come back — nothing is uploaded anywhere."
           actionLabel={onOpenSettings ? "Set spend caps" : undefined}
           onAction={onOpenSettings}
         />

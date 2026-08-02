@@ -79,13 +79,32 @@ ADE Continuity PDF dogfood
 
 "@
 Set-Content -Path $extractPath -Value $extractBody -Encoding utf8
-Write-Host "Prepared inbox PDF + extract:"
+
+# Office extract shape (Desktop Extract chip writes the same *.extract.md pattern).
+$officeExtractPath = Join-Path $inbox "continuity-dogfood-office.extract.md"
+$officeExtractBody = @"
+# Office extract (docx)
+
+Source: continuity-dogfood.docx
+Path: .ade/inbox/continuity-dogfood.docx
+Scope: 1 paragraph
+
+---
+
+ADE Continuity Office dogfood
+
+"@
+Set-Content -Path $officeExtractPath -Value $officeExtractBody -Encoding utf8
+
+Write-Host "Prepared inbox PDF + extracts:"
 Write-Host "  $pdfPath"
 Write-Host "  $extractPath"
+Write-Host "  $officeExtractPath"
 Write-Host ""
-Write-Host "Desktop tip: Setup → Integrations → Add GitHub/Linear MCP (token in vault),"
+Write-Host "Desktop tip: Setup > Integrations > Add GitHub/Linear MCP (token in vault),"
 Write-Host "  then Continue on Continuity with this extract attached."
 Write-Host "  Docs: docs/guides/mcp-recipes.md"
+Write-Host "  CLI dogfood: mcp=skipped is an honest PASS when no MCP is connected."
 Write-Host ""
 
 $latestPath = Join-Path $root ".ade\handoff\latest.json"

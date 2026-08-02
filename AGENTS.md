@@ -48,7 +48,7 @@ ADE is a **local harness / Agent Development Environment** and **multi-host agen
 
 **SelfCompact (C4):** `ade__compact_context` requires a reason; stuck/debugging mid-derivation is rejected; T0 nudges when to fire.
 
-**Next:** Critical harness path closed (Mission Control / Zed fork deferred). See Master Gameplan.
+**Next:** Critical harness + Composer Media closed. Prefer dogfood/gold green; Mission Control / Zed fork deferred. See Master Gameplan · ADE-next-phase canvas.
 
 Roadmaps: `docs/research/ADE-Master-Gameplan.md`, `docs/platform/ORCHESTRATION_ENG_GOAL_PLAN.md`, `docs/platform/IDEAL_ADE_DEVELOPMENT_PLAN.md`.
 

@@ -227,7 +227,7 @@ Already in harness:
 ### Sprint E — Integration recipes
 1. Document MCP recipes for GitHub/Linear ✅ (`docs/guides/mcp-recipes.md`)  
 2. One-click “Add MCP from recipe” in Connections ✅ (Integrations strip + row Add)  
-3. Dogfood Continuity with attached PDF + MCP search ✅ (`scripts/dogfood-continuity-pdf-mcp.ps1`)  
+3. Dogfood Continuity with attached PDF + MCP search ✅ (`scripts/dogfood-continuity-pdf-mcp.ps1` · PASS 2026-08-02; CLI may `mcp=skipped`)  
 
 ---
 
