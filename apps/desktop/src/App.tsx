@@ -63,6 +63,7 @@ import { BrandWell } from "./components/IntegrationIcons";
 import {
   Chip,
   Disclosure,
+  EmptyState,
   MetricCard,
   Panel,
   SubTabs,
@@ -1847,15 +1848,16 @@ function App() {
                     storageKey="ade_nav_setup_fold"
                     defaultOpen={setupLights.overall !== "ready"}
                     forceOpen={
-                      setupLights.overall === "warn" &&
+                      setupLights.overall !== "ready" &&
                       (activeView === "Environment" ||
                         activeView === "Keys" ||
                         activeView === "Recipes" ||
-                        activeView === "Verify")
+                        activeView === "Verify" ||
+                        activeView === "Integrations")
                     }
                     light={setupLights.overall}
                   >
-                    {renderItems()}
+                    {renderItems({ showLights: true })}
                   </NavFold>
                 ) : group.title === "More" ? (
                   <NavFold
@@ -2173,17 +2175,12 @@ function App() {
             (loading && !dashboard ? (
               <LoadingState />
             ) : !dashboard ? (
-              activeView === "Home" || activeView === "Agent" ? (
-                <div className="mx-auto max-w-lg rounded-xl border border-white/8 bg-white/[0.02] px-5 py-8 text-center">
-                  <h2 className="text-xl font-semibold tracking-tight text-slate-50">
-                    ADE
-                  </h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
-                    Connect the local API above to load this workspace — or open
-                    the Desktop app for chat, keys, and MCP.
-                  </p>
-                </div>
-              ) : null
+              <div className="mx-auto max-w-lg px-5 py-8">
+                <EmptyState
+                  title="Workspace offline"
+                  body="Connect the local API above to load this workspace — or open the Desktop app for chat, keys, and MCP."
+                />
+              </div>
             ) : (
               <>
               {(activeView === "Home" || activeView === "Agent") &&
@@ -7838,6 +7835,10 @@ function SpendUsageStrip({
     session_cap_usd: number;
     period_key: string;
   } | null>(null);
+  const [spendStatus, setSpendStatus] = useState<"loading" | "ok" | "error">(
+    "loading",
+  );
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -7846,6 +7847,7 @@ function SpendUsageStrip({
     );
     const dailyCap = Number(window.localStorage.getItem("ade_daily_cap_usd") || "0");
     let cancelled = false;
+    setSpendStatus("loading");
     void invoke<{
       daily_usd: number;
       used_usd: number;
@@ -7859,22 +7861,45 @@ function SpendUsageStrip({
       dailyCapUsd: dailyCap,
     })
       .then((next) => {
-        if (!cancelled) setSpend(next);
+        if (!cancelled) {
+          setSpend(next);
+          setSpendStatus("ok");
+        }
       })
       .catch(() => {
-        if (!cancelled) setSpend(null);
+        if (!cancelled) {
+          setSpend(null);
+          setSpendStatus("error");
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
-  if (!spend) {
+  if (spendStatus === "loading" || (!spend && spendStatus !== "error")) {
     return compact ? null : (
       <div
         className={`rounded-xl border border-white/8 bg-white/2 px-3 py-2 text-[11px] text-slate-500 ${className}`}
       >
         Usage — loading…
+      </div>
+    );
+  }
+
+  if (spendStatus === "error" || !spend) {
+    return compact ? null : (
+      <div
+        className={`rounded-xl border border-white/8 bg-white/2 px-3 py-2 text-[11px] text-slate-500 ${className}`}
+      >
+        Usage unavailable
+        <button
+          type="button"
+          className="ml-2 text-blue-300 underline-offset-2 hover:underline"
+          onClick={() => setReloadToken((n) => n + 1)}
+        >
+          Retry
+        </button>
       </div>
     );
   }

@@ -8,18 +8,39 @@ Thanks for interest in ADE. This repo is a **local agent harness** (Rust + Tauri
 - Node **22+** (Desktop / e2e)
 - Windows: WebView2 for Tauri Desktop
 
-## Golden path
+## Golden path (mirrors `.github/workflows/ci.yml`)
 
-From the repo root:
+From the repo root. Prefer the same flags CI uses so local green ≈ merge green:
 
 ```bash
+# Guidance mirrors (.ade ↔ .cursor)
+pwsh -File ./scripts/sync-cursor-guidance.ps1 -Check
+
+# Rust job
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
-cargo build
+cargo clippy --workspace --exclude ade-desktop-app --all-targets -- -D warnings
+cargo test --workspace --exclude ade-desktop-app
+cargo run -p ade-cli --quiet -- eval --gold
 ```
 
-Desktop:
+Desktop job (`apps/desktop`):
+
+```bash
+cd apps/desktop
+npm ci
+npm run build
+npm run test:unit
+# CI also runs a Playwright subset (after npm run test:e2e:install):
+#   npx playwright test e2e/sidebar-ia.spec.ts e2e/insight-analytics.spec.ts
+```
+
+G4 (after rust + desktop jobs in CI):
+
+```bash
+pwsh -File ./scripts/verify-g4.ps1
+```
+
+Local Desktop iteration:
 
 ```bash
 cd apps/desktop
@@ -48,7 +69,7 @@ Include:
 1. **Summary** — why this change exists  
 2. **Test plan** — commands you ran / UI paths checked  
 
-CI must be green (`cargo` clippy/test + Desktop checks as configured).
+CI must be green (Rust job + Desktop unit/build + Playwright subset + G4 as configured).
 
 ## Code of collaboration
 

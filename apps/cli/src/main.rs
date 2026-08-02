@@ -108,6 +108,16 @@ enum Commands {
     },
     /// Show usage and analytics
     Analytics,
+    /// Inspect spend ledger headroom against hard caps
+    Spend {
+        #[command(subcommand)]
+        action: SpendAction,
+    },
+    /// Manage eng-goals (G1 contract objects under `.ade/goals`)
+    Goal {
+        #[command(subcommand)]
+        action: GoalAction,
+    },
     /// Manage git worktrees for parallel agents
     Worktree {
         #[command(subcommand)]
@@ -207,6 +217,64 @@ enum Commands {
     Handoff {
         #[command(subcommand)]
         action: HandoffAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpendAction {
+    /// Workspace daily spend vs session/daily caps (usage ledger)
+    Summary {
+        #[arg(long, default_value_t = 1.0)]
+        session_cap_usd: f64,
+        #[arg(long, default_value_t = 10.0)]
+        daily_cap_usd: f64,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GoalAction {
+    /// List goals in the current workspace
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the active eng-goal pointer
+    Active {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create an eng-goal (optionally activate)
+    Create {
+        /// Outcome statement
+        statement: String,
+        /// Success criterion (repeatable)
+        #[arg(long = "criterion")]
+        criteria: Vec<String>,
+        /// Out-of-scope item (repeatable)
+        #[arg(long = "out-of-scope")]
+        out_of_scope: Vec<String>,
+        #[arg(long)]
+        verify_gate: Option<String>,
+        #[arg(long = "owned-path")]
+        owned_paths: Vec<String>,
+        #[arg(long, default_value = "propose")]
+        autonomy: String,
+        #[arg(long, default_value = "workspace")]
+        shell_scope: String,
+        /// Do not write `.ade/goals/active.json`
+        #[arg(long)]
+        no_activate: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Waive the Apply contract gate for a goal
+    Waive {
+        id: String,
+        reason: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1160,6 +1228,130 @@ async fn main() -> anyhow::Result<()> {
                         event.event_type,
                         event.detail.unwrap_or_default()
                     );
+                }
+            }
+        }
+        Commands::Spend { action } => match action {
+            SpendAction::Summary {
+                session_cap_usd,
+                daily_cap_usd,
+                json,
+            } => {
+                let root = std::env::current_dir()?;
+                let workspace = root.display().to_string();
+                let caps = ade_agents::spend::SpendCaps {
+                    session: ade_core::money::Money::try_from_usd_f64(*session_cap_usd)?,
+                    daily: ade_core::money::Money::try_from_usd_f64(*daily_cap_usd)?,
+                };
+                let period_key = ade_agents::spend::SpendPeriod::Day.key(uuid::Uuid::nil());
+                let ledger =
+                    ade_db::usage_ledger::UsageLedgerStore::new(open_database(&config).await?);
+                let breakdown = ledger
+                    .active_spend_breakdown("workspace", &period_key, &workspace)
+                    .await?;
+                let remaining = caps.daily.saturating_sub(breakdown.active);
+                if *json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "periodKey": period_key,
+                            "usedUsd": breakdown.used.to_usd_f64(),
+                            "reservedUsd": breakdown.reserved.to_usd_f64(),
+                            "dailyUsd": breakdown.active.to_usd_f64(),
+                            "remainingUsd": remaining.to_usd_f64(),
+                            "dailyCapUsd": caps.daily.to_usd_f64(),
+                            "sessionCapUsd": caps.session.to_usd_f64(),
+                        })
+                    );
+                } else {
+                    println!(
+                        "Spend {} — used {} · reserved {} · remaining {} / daily {}",
+                        period_key,
+                        breakdown.used,
+                        breakdown.reserved,
+                        remaining,
+                        caps.daily
+                    );
+                }
+            }
+        },
+        Commands::Goal { action } => {
+            let root = std::env::current_dir()?;
+            let store = ade_agents::goal::GoalStore::new(&root);
+            match action {
+                GoalAction::List { json } => {
+                    let goals = store.list()?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&goals)?);
+                    } else if goals.is_empty() {
+                        println!("No eng-goals — create one with `ade goal create \"…\"`");
+                    } else {
+                        for goal in goals {
+                            println!(
+                                "{:<36}  {:<10}  {}",
+                                goal.id, goal.status, goal.statement
+                            );
+                        }
+                    }
+                }
+                GoalAction::Active { json } => match store.load_active()? {
+                    Some(goal) => {
+                        if *json {
+                            println!("{}", serde_json::to_string_pretty(&goal)?);
+                        } else {
+                            println!(
+                                "active {} ({}) — {}",
+                                goal.id, goal.status, goal.statement
+                            );
+                        }
+                    }
+                    None => {
+                        if *json {
+                            println!("null");
+                        } else {
+                            println!("No active eng-goal");
+                        }
+                    }
+                },
+                GoalAction::Create {
+                    statement,
+                    criteria,
+                    out_of_scope,
+                    verify_gate,
+                    owned_paths,
+                    autonomy,
+                    shell_scope,
+                    no_activate,
+                    json,
+                } => {
+                    let goal = store.create(ade_agents::goal::GoalCreateInput {
+                        statement: statement.clone(),
+                        success_criteria: criteria.clone(),
+                        out_of_scope: out_of_scope.clone(),
+                        shell_scope: shell_scope.clone(),
+                        autonomy: autonomy.clone(),
+                        verify_gate: verify_gate.clone(),
+                        owned_paths: owned_paths.clone(),
+                        activate: !*no_activate,
+                    })?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&goal)?);
+                    } else {
+                        println!(
+                            "Created goal {} ({}){}",
+                            goal.id,
+                            goal.status,
+                            if !*no_activate { " — activated" } else { "" }
+                        );
+                    }
+                }
+                GoalAction::Waive { id, reason, json } => {
+                    let goal = store.waive_contract(id, reason)?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&goal)?);
+                    } else {
+                        println!("Waived contract on goal {}", goal.id);
+                    }
                 }
             }
         }

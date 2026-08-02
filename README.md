@@ -43,9 +43,10 @@ Deep dive: [docs/research/ADE-Master-Gameplan.md](docs/research/ADE-Master-Gamep
 git clone https://github.com/MrBlockClock/agentic-development-environment.git
 cd agentic-development-environment
 cp .env.example .env          # fill only what you need; never commit secrets
-cargo build
-cargo clippy -- -D warnings
-cargo test
+cargo fmt --check
+cargo clippy --workspace --exclude ade-desktop-app --all-targets -- -D warnings
+cargo test --workspace --exclude ade-desktop-app
+# Full CI mirror: see CONTRIBUTING.md (gold eval, Desktop unit/e2e, G4)
 ```
 
 **Desktop (dev):**

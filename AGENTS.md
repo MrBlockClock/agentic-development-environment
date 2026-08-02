@@ -74,7 +74,7 @@ Roadmaps: `docs/research/ADE-Master-Gameplan.md`, `docs/platform/ORCHESTRATION_E
 ## Golden Path
 
 - **Root:** `C:\Dev\ade` · **Rust:** stable · **Node:** v22.14.0
-- Build `cargo build` · Lint `cargo clippy -- -D warnings` · Fmt `cargo fmt --check` · Test `cargo test`
+- Mirror CI (see `CONTRIBUTING.md`): `sync-cursor-guidance.ps1 -Check` · `cargo fmt --check` · `cargo clippy --workspace --exclude ade-desktop-app --all-targets -- -D warnings` · `cargo test --workspace --exclude ade-desktop-app` · `ade eval --gold` · Desktop `npm run build` + `test:unit`
 
 ## Security
 

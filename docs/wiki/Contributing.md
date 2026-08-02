@@ -5,15 +5,20 @@ title: Contributing
 
 # Contributing
 
-## Quality bar
+## Quality bar (mirrors CI)
 
 ```bash
+pwsh -File ./scripts/sync-cursor-guidance.ps1 -Check
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --exclude ade-desktop-app --all-targets -- -D warnings
+cargo test --workspace --exclude ade-desktop-app
+cargo run -p ade-cli --quiet -- eval --gold
 ```
 
-Desktop changes: exercise `npm run tauri dev` and note a short Test plan in the PR.
+Desktop (`apps/desktop`): `npm ci` · `npm run build` · `npm run test:unit` · Playwright IA/Analytics subset.  
+G4: `pwsh -File ./scripts/verify-g4.ps1`.
+
+Desktop changes: also exercise `npm run tauri dev` and note a short Test plan in the PR.
 
 ## Secrets
 

@@ -103,8 +103,8 @@ Write-Host "  $officeExtractPath"
 Write-Host ""
 Write-Host "Desktop tip: Setup > Integrations > Add GitHub/Linear MCP (token in vault),"
 Write-Host "  then Continue on Continuity with this extract attached."
-Write-Host "  Docs: docs/guides/mcp-recipes.md"
-Write-Host "  CLI dogfood: mcp=skipped is an honest PASS when no MCP is connected."
+  Write-Host "  Docs: docs/guides/mcp-recipes.md"
+Write-Host "  CLI dogfood: mcp=skipped means Continuity+extract only (not full MCP search)."
 Write-Host ""
 
 $latestPath = Join-Path $root ".ade\handoff\latest.json"
@@ -224,14 +224,16 @@ Write-Host ""
 Write-Host "-- evidence --"
 Get-Content $evidence | ForEach-Object { Write-Host $_ }
 
+if ($code -ne 0) {
+  Write-Host "FAIL agent exit=$code (evidence present but turn failed)"
+  exit $code
+}
+
 if ($evidenceText -notmatch "continuity-dogfood\.extract\.md|ADE Continuity PDF") {
-  Write-Host "WARN evidence does not clearly cite the PDF extract (continuing)"
+  Write-Host "FAIL evidence does not clearly cite the PDF extract"
+  exit 1
 }
 
 Write-Host ""
-Write-Host "PASS Continuity PDF + MCP dogfood — evidence under $OwnedPath/continuity-pdf-mcp-acceptance.md"
-if ($code -ne 0) {
-  Write-Host "NOTE agent exit=$code but evidence file present"
-  exit $code
-}
+Write-Host "PASS Continuity PDF dogfood — evidence under $OwnedPath/continuity-pdf-mcp-acceptance.md"
 exit 0

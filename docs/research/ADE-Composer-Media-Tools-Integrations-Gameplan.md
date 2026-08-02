@@ -215,9 +215,10 @@ Already in harness:
 6. URL / ticket chips + optional fetch-to-inbox ✅  
 
 ### Sprint C — Connections hub
-1. Setup → **Integrations** nav (MCP + GitHub / GitLab / Stripe / Azure + recipes) ✅  
+1. Setup → **Integrations** nav (catalog + MCP recipes for GitHub / Linear / …) ✅  
 2. URL chip + optional fetch-to-inbox ✅  
-3. Ticket URL parse (GitHub first) ✅
+3. Ticket URL parse (GitHub first) ✅  
+   - Note: Stripe/GitLab/Azure are catalog + Connect MCP rows, not CLI dogfood-proven live search.
 
 ### Sprint D — Extracts & vision
 1. PDF text extract command ✅ (`chat_extract_pdf` · Extract chip)  
@@ -227,7 +228,7 @@ Already in harness:
 ### Sprint E — Integration recipes
 1. Document MCP recipes for GitHub/Linear ✅ (`docs/guides/mcp-recipes.md`)  
 2. One-click “Add MCP from recipe” in Connections ✅ (Integrations strip + row Add)  
-3. Dogfood Continuity with attached PDF + MCP search ✅ (`scripts/dogfood-continuity-pdf-mcp.ps1` · PASS 2026-08-02; CLI may `mcp=skipped`)  
+3. Dogfood Continuity + PDF extract shape [~] (`scripts/dogfood-continuity-pdf-mcp.ps1`) — agent must exit 0 and cite extract; CLI may record `mcp=skipped` (Continuity+extract only, not full MCP search)  
 
 ---
 
