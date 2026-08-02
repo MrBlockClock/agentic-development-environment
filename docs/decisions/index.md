@@ -17,5 +17,8 @@ ADRs for ADE. Format: `DEC-A-NNN-slug.md`.
 | [DEC-A-013](DEC-A-013-zed-only-fork-ladder.html) | Zed-only hosts; gated fork ladder | Accepted |
 | [DEC-A-014](DEC-A-014-harness-first-zed-optional.html) | Harness-first; Zed host optional | Accepted |
 | [DEC-A-015](DEC-A-015-z2-fork-ladder-review.html) | Z2 fork ladder review | Accepted |
+| [DEC-A-016](DEC-A-016-security-baseline.html) | Security baseline (spend/MCP/path/CSP) | Accepted |
+
+**Note:** Older synthesis docs that cite `DEC-A-001…003` / `DEC-P-*` without files are **non-binding** until filed.
 
 Canonical layout: [REPO_LAYOUT](../architecture/REPO_LAYOUT.html).

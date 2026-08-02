@@ -32,6 +32,7 @@ import {
 import { DarkSelect, GearIcon } from "./components/DarkSelect";
 import { HeaderOverflowMenu } from "./components/HeaderPlusMenu";
 import { ShellTabBar } from "./components/ShellTabBar";
+import { pushToast, ToastHost } from "./components/ToastHost";
 import {
   defaultBrowserUrl,
   leafName,
@@ -2139,7 +2140,10 @@ function App() {
             </div>
           )}
           {error && (
-            <div className="mb-5 rounded-xl border border-red-400/20 bg-red-400/7 px-4 py-3 text-xs text-red-200">
+            <div
+              role="alert"
+              className="mb-5 rounded-xl border border-red-400/20 bg-red-400/7 px-4 py-3 text-xs text-red-200"
+            >
               {error}
             </div>
           )}
@@ -2585,6 +2589,7 @@ function App() {
             ))}
         </div>
       </main>
+      <ToastHost />
     </div>
   );
 }
@@ -4118,6 +4123,14 @@ function AgentView({
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachNote, setAttachNote] = useState<string | null>(null);
   const [attachBusy, setAttachBusy] = useState(false);
+
+  useEffect(() => {
+    if (!attachNote) return;
+    pushToast({
+      message: attachNote,
+      tone: /fail|error|refus|block|denied/i.test(attachNote) ? "error" : "info",
+    });
+  }, [attachNote]);
   const [composerDragOver, setComposerDragOver] = useState(false);
   type QueuedPrompt = { id: string; prompt: string; imagePaths: string[] };
   const [promptQueue, setPromptQueue] = useState<QueuedPrompt[]>([]);

@@ -154,6 +154,8 @@ export function SidebarRailLists({
                 <button
                   type="button"
                   title={tab.title}
+                  aria-selected={active}
+                  aria-current={active ? "true" : undefined}
                   onClick={() => onFocusSession(tab.id)}
                   className={`flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left text-[13px] transition ${
                     active

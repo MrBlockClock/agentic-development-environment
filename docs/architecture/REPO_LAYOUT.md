@@ -51,7 +51,9 @@ ade/
 │   ├── decisions/      # ADRs (DEC-A-*)
 │   ├── platform/       # Ideal, Orch, Effort, vision
 │   └── guides/
-├── evals/ · scripts/ · tests/ · docker/ · nix/
+├── evals/ · scripts/ · tests/
+├── docker/             # optional CLI-only Dockerfile (not full Desktop runtime)
+├── nix/                # planned / empty scaffold (no flake yet)
 ├── AGENTS.md
 └── Cargo.toml          # workspace members
 ```

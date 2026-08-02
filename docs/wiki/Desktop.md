@@ -26,6 +26,8 @@ Standing connectors (GitHub, GitLab, Stripe, Azure, Slack, …) plus host tools 
 
 Composer **Tools** disclosure shows what the turn may call (FS / shell / web / MCP count).
 
+**Media (Debug):** PDF/Office **Extract** and audio **Transcribe** write markdown under `.ade/inbox/` (Whisper API or `ADE_WHISPER_CMD`).
+
 ## Insight
 
 | Tab | Owns |

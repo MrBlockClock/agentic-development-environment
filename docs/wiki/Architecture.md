@@ -24,7 +24,7 @@ ADE is **one Rust agent OS** (harness). Editors and UIs are **hosts**, not forks
 |-----|------|
 | [REPO_LAYOUT](../architecture/REPO_LAYOUT.html) | Multi-host tree & non-goals |
 | [ARCHITECTURE_SYNTHESIS](../platform/ARCHITECTURE_SYNTHESIS.html) | Full system design |
-| [ADRs](../decisions/) | DEC-A-010 … 015 |
+| [ADRs](../decisions/) | DEC-A-010 … 016 |
 | [Master Gameplan](../research/ADE-Master-Gameplan.html) | Research → build waves |
 
 ## Crates (brain)

@@ -1,0 +1,10 @@
+{
+  "agent_servers": {
+    "ADE": {
+      "type": "custom",
+      "command": "ade",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
