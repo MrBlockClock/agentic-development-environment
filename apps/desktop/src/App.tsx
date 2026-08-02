@@ -7281,7 +7281,7 @@ function AuditView({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Budget headroom
+                Budget headroom ($)
               </div>
               <div className="mt-0.5 text-[12px] text-slate-400">
                 {spend
@@ -7295,6 +7295,10 @@ function AuditView({
                   <span>period {spend.period_key}</span>
                 </div>
               )}
+              <p className="mt-1.5 text-[10px] leading-4 text-slate-600">
+                Caps meter dollars via $/MTok. Token in/out totals live under
+                Analytics.
+              </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {onOpenAnalytics && (
@@ -7905,10 +7909,10 @@ function SpendUsageStrip({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Today&apos;s spend
+            Today&apos;s spend ($)
           </div>
           <div className="mt-0.5 text-[12px] text-slate-400">
-            Used, reserved, and what you have left today
+            Dollar caps via $/MTok — token totals live under Analytics
           </div>
         </div>
         <div

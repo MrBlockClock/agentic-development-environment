@@ -29,6 +29,10 @@ test.describe("Insight · Analytics", () => {
   test("separates committed actuals from open reserves", async ({ page }) => {
     const analytics = await openAnalytics(page);
 
+    // Tokens lead the hero row; dollars remain the SpendGuard meter.
+    await expect(analytics.getByTestId("ade-metric-tokens")).toBeVisible();
+    await expect(analytics.getByTestId("ade-metric-tokens")).toContainText("/");
+
     // 7 settled rows in the default 7-day window total $2.30.
     await expect(
       analytics.getByTestId("ade-metric-committed-spend"),

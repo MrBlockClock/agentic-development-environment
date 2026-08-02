@@ -186,18 +186,26 @@ export function AnalyticsView({
         />
       ) : (
         <>
-          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              testId="ade-metric-tokens"
+              label="Tokens in / out"
+              value={`${compactCount(stats.tokensIn)} / ${compactCount(stats.tokensOut)}`}
+              accent="sky"
+              sub={`${stats.turns} ledger row${stats.turns === 1 ? "" : "s"} · primary usage signal`}
+              hint="Provider-reported input/output tokens in this window. Dollar caps below stay authoritative for SpendGuard."
+            />
             <MetricCard
               testId="ade-metric-committed-spend"
-              label="Committed spend"
+              label="Committed $"
               value={usd(stats.actual)}
               accent="blue"
               sub={`${stats.committed.length} settled turn${stats.committed.length === 1 ? "" : "s"}`}
-              hint="Invoice-class actuals reported by the provider — not estimates."
+              hint="Invoice-class actuals reported by the provider — not estimates. Caps meter dollars via $/MTok."
             />
             <MetricCard
               testId="ade-metric-open-reserve"
-              label="Open reserve"
+              label="Open reserve $"
               value={usd(stats.openReserved)}
               accent="amber"
               estimated={stats.openReserved > 0}
@@ -206,7 +214,7 @@ export function AnalyticsView({
             />
             <MetricCard
               testId="ade-metric-remaining-today"
-              label="Remaining today"
+              label="Remaining $ today"
               value={summary ? usd(summary.remaining_usd) : "—"}
               accent={
                 summary && summary.remaining_usd <= 0
@@ -216,12 +224,12 @@ export function AnalyticsView({
                     : "green"
               }
               sub={summary ? `of ${usd(summary.daily_cap_usd)} daily cap` : "no cap set"}
-              hint="Daily cap minus used and reserved."
+              hint="Daily USD cap minus used and reserved — SpendGuard gate."
             />
           </div>
 
           <Disclosure
-            title="Efficiency"
+            title="Efficiency ($)"
             summary={
               costPerVerifiedTurn === null
                 ? `${compactCount(stats.tokensIn)} / ${compactCount(stats.tokensOut)} tokens`
@@ -231,13 +239,7 @@ export function AnalyticsView({
             storageKey="ade_analytics_efficiency"
             className="border-white/8 bg-black/15"
           >
-            <div className="grid gap-2.5 sm:grid-cols-3">
-              <MetricCard
-                label="Tokens in / out"
-                value={`${compactCount(stats.tokensIn)} / ${compactCount(stats.tokensOut)}`}
-                accent="sky"
-                sub={`${stats.turns} ledger row${stats.turns === 1 ? "" : "s"}`}
-              />
+            <div className="grid gap-2.5 sm:grid-cols-2">
               <MetricCard
                 label="Cost per verified turn"
                 value={costPerVerifiedTurn === null ? "—" : usd(costPerVerifiedTurn)}
@@ -258,7 +260,7 @@ export function AnalyticsView({
                     ? `${outcome.completedTasks} task${outcome.completedTasks === 1 ? "" : "s"} done`
                     : "no completed tasks in queue"
                 }
-                hint="Optimise this, not raw token spend."
+                hint="Optimise outcome cost, not raw token burn alone."
               />
             </div>
           </Disclosure>
