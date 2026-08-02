@@ -34,6 +34,7 @@ type IntegrationsViewProps = {
     command: string;
     args: string[];
     approved: boolean;
+    recipeId?: string | null;
     vaultProvider?: string | null;
     vaultEnvKeys?: string[];
   }) => Promise<void>;
@@ -324,6 +325,7 @@ export function IntegrationsView({
         command: mcpCommandForPlatform(recipe),
         args: recipe.args,
         approved: true,
+        recipeId: item.id,
         vaultProvider: item.vaultId ?? null,
         vaultEnvKeys: recipe.envKeys ?? [],
       });

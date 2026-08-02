@@ -9,12 +9,14 @@ ADE Desktop is the **control plane**: autonomy dial, Keys, Integrations, Trust, 
 
 ## Nav (Standard)
 
-1. **Home** — composer, Suggest / Apply / Automate, feed, Continuity  
+1. **Home** — composer, Suggest / Apply / Automate, feed, Continuity (rail: workplace + agent sessions)  
 2. **Setup** — Environment · Keys · **Integrations** · Stack · Test project  
 3. **Insight** — Trust · Analytics (Plan Map / Atlas under Debug)  
-4. **Context** — Workspaces · Terminal · Browser  
-5. **More** — Guidance (+ Debug: Editor · MCP)  
+4. **Header shell tabs** — Terminal · Browser (beside work; not left-rail peers)  
+5. **More** — Guidance (+ Debug: MCP)  
 6. **Footer** — Debug toggle · Settings  
+
+**Debug density:** thin Editor header control · MCP · Plan Map · Atlas · Home harness panels. Workspaces open from the rail compact control.
 
 ## Integrations
 

@@ -153,6 +153,8 @@ pub struct AgentTurnBuilder {
     waive_queue: bool,
     /// H2: force Verifier (or other) slot instead of autonomy mapping.
     slot_override: Option<crate::slots::SlotRole>,
+    /// Explicit per-turn waiver when caps are on but $/MTok are $0 (also ADE_ALLOW_UNPRICED).
+    allow_unpriced: bool,
 }
 
 impl AgentTurnBuilder {
@@ -180,6 +182,7 @@ impl AgentTurnBuilder {
             claimed_task_id: None,
             waive_queue: false,
             slot_override: None,
+            allow_unpriced: false,
         }
     }
 
@@ -190,6 +193,12 @@ impl AgentTurnBuilder {
 
     pub fn spend_caps(mut self, caps: SpendCaps) -> Self {
         self.spend_caps = Some(caps);
+        self
+    }
+
+    /// Allow this turn when session/daily caps are set but $/MTok rates are $0.
+    pub fn allow_unpriced(mut self, allow: bool) -> Self {
+        self.allow_unpriced = allow;
         self
     }
 
@@ -314,6 +323,18 @@ impl AgentTurnBuilder {
             cost_per_output_mtok: self.spec.output_cost_per_mtok,
         };
         model.validate_spend_limits()?;
+
+        // Central spend-honesty choke for Desktop, CLI, and worker.
+        let caps_for_honesty = self
+            .spend_caps
+            .clone()
+            .unwrap_or_else(SpendCaps::from_env);
+        crate::spend::require_priced_for_caps_with_override(
+            &caps_for_honesty,
+            self.spec.input_cost_per_mtok,
+            self.spec.output_cost_per_mtok,
+            self.allow_unpriced,
+        )?;
 
         let transport: Arc<dyn ChatProvider> = match self.provider_transport {
             Some(provider) => provider,
@@ -944,6 +965,7 @@ mod tests {
             image_paths: vec![],
         })
         .ledger(ledger.clone())
+        .spend_caps(SpendCaps::unlimited())
         .lease_agent(lease_agent)
         .key_vault(Arc::new(vault))
         .provider_transport(Arc::new(SmokeProvider))

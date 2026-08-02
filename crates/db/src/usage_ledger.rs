@@ -2,6 +2,8 @@ use ade_core::error::AdeError;
 use ade_core::money::Money;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use turso::transaction::{Transaction, TransactionBehavior};
 use turso::Connection;
 use uuid::Uuid;
 
@@ -69,11 +71,16 @@ pub struct UsageCommit {
 #[derive(Clone)]
 pub struct UsageLedgerStore {
     connection: Connection,
+    /// Serializes reserve/check on a shared Connection clone family.
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl UsageLedgerStore {
     pub fn new(connection: Connection) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 
     pub async fn active_spend(
@@ -96,9 +103,97 @@ impl UsageLedgerStore {
         workspace_root: &str,
     ) -> Result<SpendBreakdown, AdeError> {
         self.expire_stale().await?;
+        Self::active_spend_breakdown_on(&self.connection, scope, period_key, workspace_root).await
+    }
+
+    pub async fn reserve(&self, request: ReserveRequest) -> Result<Reservation, AdeError> {
+        let _guard = self.write_lock.lock().await;
+        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+
+        if let Err(error) = Self::expire_stale_on(&tx).await {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
+        let active = match Self::active_spend_breakdown_on(
+            &tx,
+            &request.scope,
+            &request.period_key,
+            &request.workspace_root,
+        )
+        .await
+        {
+            Ok(breakdown) => breakdown.active,
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return Err(error);
+            }
+        };
+        let next = active.saturating_add(request.estimate);
+        if next > request.hard_cap {
+            // unchecked_transaction does not auto-clear dangling txns — roll back now.
+            tx.rollback()
+                .await
+                .map_err(|error| AdeError::Database(error.to_string()))?;
+            return Err(AdeError::Spend(format!(
+                "hard spend cap exceeded for {}/{}: {} + {} > {}",
+                request.scope, request.period_key, active, request.estimate, request.hard_cap
+            )));
+        }
+
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        let expires_at = created_at + Duration::seconds(request.ttl_secs.max(1) as i64);
+        if let Err(error) = tx
+            .execute(
+                "INSERT INTO usage_ledger_entries (
+                    id, session_id, workspace_root, actor, scope, period_key,
+                    provider, model, status, reserved_micros, actual_micros,
+                    input_tokens, output_tokens, created_at, expires_at, reconciled_at
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6,
+                    ?7, ?8, ?9, ?10, 0,
+                    0, 0, ?11, ?12, NULL
+                 )",
+                (
+                    id.to_string(),
+                    request.session_id.to_string(),
+                    request.workspace_root.clone(),
+                    optional_text(request.actor.as_deref()),
+                    request.scope.clone(),
+                    request.period_key.clone(),
+                    optional_text(request.provider.as_deref()),
+                    optional_text(request.model.as_deref()),
+                    LedgerStatus::Reserved.as_str().to_string(),
+                    request.estimate.micros(),
+                    created_at.to_rfc3339(),
+                    expires_at.to_rfc3339(),
+                ),
+            )
+            .await
+        {
+            let _ = tx.rollback().await;
+            return Err(AdeError::Database(error.to_string()));
+        }
+        tx.commit()
+            .await
+            .map_err(|error| AdeError::Database(error.to_string()))?;
+        Ok(Reservation {
+            id,
+            reserved: request.estimate,
+            expires_at,
+        })
+    }
+
+    async fn active_spend_breakdown_on(
+        connection: &Connection,
+        scope: &str,
+        period_key: &str,
+        workspace_root: &str,
+    ) -> Result<SpendBreakdown, AdeError> {
         let now = Utc::now().to_rfc3339();
-        let mut rows = self
-            .connection
+        let mut rows = connection
             .query(
                 "SELECT
                     COALESCE(SUM(CASE WHEN status = 'committed' THEN actual_micros ELSE 0 END), 0),
@@ -143,55 +238,20 @@ impl UsageLedgerStore {
         })
     }
 
-    pub async fn reserve(&self, request: ReserveRequest) -> Result<Reservation, AdeError> {
-        self.expire_stale().await?;
-        let active = self
-            .active_spend(&request.scope, &request.period_key, &request.workspace_root)
-            .await?;
-        let next = active.saturating_add(request.estimate);
-        if next > request.hard_cap {
-            return Err(AdeError::Spend(format!(
-                "hard spend cap exceeded for {}/{}: {} + {} > {}",
-                request.scope, request.period_key, active, request.estimate, request.hard_cap
-            )));
-        }
-
-        let id = Uuid::new_v4();
-        let created_at = Utc::now();
-        let expires_at = created_at + Duration::seconds(request.ttl_secs.max(1) as i64);
-        self.connection
+    async fn expire_stale_on(connection: &Connection) -> Result<u64, AdeError> {
+        let now = Utc::now().to_rfc3339();
+        let updated = connection
             .execute(
-                "INSERT INTO usage_ledger_entries (
-                    id, session_id, workspace_root, actor, scope, period_key,
-                    provider, model, status, reserved_micros, actual_micros,
-                    input_tokens, output_tokens, created_at, expires_at, reconciled_at
-                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6,
-                    ?7, ?8, ?9, ?10, 0,
-                    0, 0, ?11, ?12, NULL
-                 )",
-                (
-                    id.to_string(),
-                    request.session_id.to_string(),
-                    request.workspace_root,
-                    optional_text(request.actor.as_deref()),
-                    request.scope,
-                    request.period_key,
-                    optional_text(request.provider.as_deref()),
-                    optional_text(request.model.as_deref()),
-                    LedgerStatus::Reserved.as_str().to_string(),
-                    request.estimate.micros(),
-                    created_at.to_rfc3339(),
-                    expires_at.to_rfc3339(),
-                ),
+                "UPDATE usage_ledger_entries
+                 SET status = ?1, reconciled_at = ?2
+                 WHERE status = 'reserved'
+                   AND expires_at IS NOT NULL
+                   AND expires_at <= ?2",
+                (LedgerStatus::Failed.as_str().to_string(), now),
             )
             .await
             .map_err(|error| AdeError::Database(error.to_string()))?;
-        Ok(Reservation {
-            id,
-            reserved: request.estimate,
-            expires_at,
-        })
+        Ok(updated as u64)
     }
 
     pub async fn commit(&self, commit: UsageCommit) -> Result<(), AdeError> {
@@ -244,20 +304,7 @@ impl UsageLedgerStore {
     }
 
     pub async fn expire_stale(&self) -> Result<u64, AdeError> {
-        let now = Utc::now().to_rfc3339();
-        let updated = self
-            .connection
-            .execute(
-                "UPDATE usage_ledger_entries
-                 SET status = ?1, reconciled_at = ?2
-                 WHERE status = 'reserved'
-                   AND expires_at IS NOT NULL
-                   AND expires_at <= ?2",
-                (LedgerStatus::Failed.as_str().to_string(), now),
-            )
-            .await
-            .map_err(|error| AdeError::Database(error.to_string()))?;
-        Ok(updated as u64)
+        Self::expire_stale_on(&self.connection).await
     }
 
     pub async fn entry_status(&self, id: Uuid) -> Result<LedgerStatus, AdeError> {
@@ -525,5 +572,30 @@ mod tests {
             .has_committed_entry(session_id, "missing", &workspace)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn concurrent_reserves_respect_hard_cap() {
+        let db_path = std::env::temp_dir().join(format!(
+            "ade-ledger-race-{}.db",
+            Uuid::new_v4()
+        ));
+        let database = AdeDatabase::open_path(&db_path).await.unwrap();
+        let store_a = UsageLedgerStore::new(database.connect().unwrap());
+        let store_b = UsageLedgerStore::new(database.connect().unwrap());
+        let estimate = Money::from_usd_str("0.60").unwrap();
+        let hard_cap = Money::from_usd_str("1.00").unwrap();
+        let (first, second) = tokio::join!(
+            store_a.reserve(request(estimate, hard_cap)),
+            store_b.reserve(request(estimate, hard_cap)),
+        );
+        let ok = first.is_ok() as u8 + second.is_ok() as u8;
+        let _ = std::fs::remove_file(&db_path);
+        assert_eq!(ok, 1, "exactly one of two racing reserves should succeed");
+        let active = store_a
+            .active_spend("workspace", "day:2026-07-18", "/tmp/workspace")
+            .await
+            .unwrap();
+        assert_eq!(active, estimate);
     }
 }

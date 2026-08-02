@@ -20,7 +20,7 @@ function Test-Turn([string]$Provider, [string]$BaseUrl, [string]$Model, [string]
   Write-Host "-- $Provider / $Model"
   # Observe-only smoke: $0 rates OK (no verify-on-complete / cargo test).
   $out = & $ade agent --provider $Provider --base-url $BaseUrl --model $Model `
-    --autonomy observe --max-steps 1 --input-cost-per-mtok 0 --output-cost-per-mtok 0 `
+    --autonomy observe --max-steps 1 --input-cost-per-mtok 0 --output-cost-per-mtok 0 --allow-unpriced `
     "Reply with exactly: $Expect" 2>&1 | Out-String
   $code = $LASTEXITCODE
   if ($code -eq 0 -and $out -match [regex]::Escape($Expect)) {

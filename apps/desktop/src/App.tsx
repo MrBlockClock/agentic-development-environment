@@ -1366,6 +1366,7 @@ function App() {
     command: string;
     args: string[];
     approved: boolean;
+    recipeId?: string | null;
     vaultProvider?: string | null;
     vaultEnvKeys?: string[];
   }) => {
@@ -1377,6 +1378,7 @@ function App() {
         command: input.command,
         args: input.args,
         approved: input.approved,
+        recipeId: input.recipeId ?? null,
         vaultProvider: input.vaultProvider ?? null,
         vaultEnvKeys: input.vaultEnvKeys ?? [],
       });
@@ -1491,18 +1493,9 @@ function App() {
     const acquiredIds: string[] = [];
     let heartbeat: ReturnType<typeof setInterval> | null = null;
     const leaseTtlSecs = 300;
-    const ratesZero =
-      (Number(input.inputCostPerMtok) || 0) <= 0 &&
-      (Number(input.outputCostPerMtok) || 0) <= 0;
-    const capsOn =
-      (Number(input.sessionCapUsd) || 0) > 0 || (Number(input.dailyCapUsd) || 0) > 0;
-    // $0 rates + caps: always continue unmetered. Caps cannot reserve dollars
-    // without rates; blocking free models behind invoice jargon is a false wall.
-    let allowUnpriced = Boolean(input.allowUnpriced);
-    if (ratesZero && capsOn) {
-      allowUnpriced = true;
-      window.localStorage.setItem("ade_allow_unpriced", "1");
-    }
+    // Explicit only — never auto-unmeter when rates are $0 and caps are on.
+    // Recovery CTA `confirm_unmetered` sets allowUnpriced for a single retry.
+    const allowUnpriced = Boolean(input.allowUnpriced);
 
     let waiveQueue = Boolean(input.waiveQueue);
     if (mutating && !isVerifier && !input.claimedTaskId && !waiveQueue) {
@@ -2058,29 +2051,31 @@ function App() {
                     type="button"
                     onClick={() => openBrowserTab()}
                     aria-label="New Browser"
-                    title="New Browser"
+                    title="Browser — shell tab over the work surface"
                     className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
                   >
                     ⬚
                   </button>
                   <button
                     type="button"
-                    onClick={() => void openEditorTab()}
-                    aria-label="Open File"
-                    title="Open File"
-                    className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
-                  >
-                    ✎
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => openTerminalTab()}
                     aria-label="Terminal"
-                    title="Terminal"
+                    title="Terminal — shell tab over the work surface"
                     className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
                   >
                     ▸
                   </button>
+                  {debugChrome ? (
+                    <button
+                      type="button"
+                      onClick={() => void openEditorTab()}
+                      aria-label="Open File"
+                      title="Editor (Debug) — thin file buffer"
+                      className="grid size-7 place-items-center rounded-md text-[12px] text-slate-400 transition hover:bg-white/8 hover:text-slate-100"
+                    >
+                      ✎
+                    </button>
+                  ) : null}
                 </>
               ) : null}
               <HeaderOverflowMenu
@@ -7548,7 +7543,7 @@ function McpView({
     <div className="space-y-5">
       <Panel
         title="Connect MCP server"
-        subtitle="Spawns a reviewed command over stdio — approval required before launch"
+        subtitle="Spawns a reviewed command over stdio — catalog recipes use server allowlist; custom needs ADE_ALLOW_CUSTOM_MCP=1 in release builds"
       >
         <div className="grid grid-cols-2 gap-4">
           <label className="block text-xs text-slate-400">

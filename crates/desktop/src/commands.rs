@@ -1127,9 +1127,19 @@ pub async fn mcp_connect(
     command: String,
     args: Vec<String>,
     approved: bool,
+    recipe_id: Option<String>,
     vault_provider: Option<String>,
     vault_env_keys: Option<Vec<String>>,
 ) -> Result<(), String> {
+    ade_agents::mcp::authorize_mcp_connect(
+        recipe_id.as_deref(),
+        &name,
+        &command,
+        &args,
+        approved,
+    )
+    .map_err(|error| error.to_string())?;
+
     let mut env = std::collections::BTreeMap::new();
     if let Some(provider) = vault_provider
         .as_deref()
@@ -1154,6 +1164,7 @@ pub async fn mcp_connect(
             }
         }
     }
+    // Authorization above is the trust root; never pass through client bool alone.
     state
         .mcp
         .connect_server(McpServerConfig {
@@ -1161,7 +1172,7 @@ pub async fn mcp_connect(
             command,
             args,
             env,
-            approved,
+            approved: true,
         })
         .await
         .map_err(|error| error.to_string())
@@ -1454,7 +1465,8 @@ pub async fn run_agent_turn(
     .approved_risk_tiers(approved_risk_tiers.unwrap_or_default())
     .claimed_task_id(claimed_task_id)
     .waive_queue(waive_queue.unwrap_or(false))
-    .slot_override(slot_override);
+    .slot_override(slot_override)
+    .allow_unpriced(allow_unpriced.unwrap_or(false));
     if execution_root != primary_root {
         builder = builder.coordination_root(primary_root);
     }
@@ -2945,6 +2957,46 @@ fn path_under_root(root: &Path, candidate: &Path) -> bool {
     cand.starts_with(&root)
 }
 
+/// Resolve extract/transcribe sources under the workspace (canonicalize + containment).
+/// Outside-workspace files must be staged into `.ade/inbox/` first.
+fn resolve_chat_media_source(root: &Path, source_path: &str) -> Result<(PathBuf, String), String> {
+    let trimmed = source_path.trim();
+    if trimmed.is_empty() {
+        return Err("sourcePath required".into());
+    }
+    if trimmed.contains('\0') {
+        return Err("sourcePath contains NUL".into());
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("canonicalize workspace: {error}"))?;
+    let raw = PathBuf::from(trimmed);
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        root.join(&raw)
+    };
+    if !absolute.is_file() {
+        return Err(format!("file not found: {trimmed}"));
+    }
+    let canonical = absolute
+        .canonicalize()
+        .map_err(|error| format!("resolve path: {error}"))?;
+    if !canonical.starts_with(&root) {
+        return Err(
+            "path escapes workspace — Attach/stage the file into .ade/inbox first".into(),
+        );
+    }
+    let rel = canonical
+        .strip_prefix(&root)
+        .map_err(|_| "path escapes workspace root".to_string())?;
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    if ade_core::ignore::SensitivePathPolicy::path_is_blocked(&rel_str) {
+        return Err(format!("path blocked by SensitivePathPolicy: {rel_str}"));
+    }
+    Ok((canonical, rel_str))
+}
+
 /// Stage a file for chat: keep workspace paths; copy outsiders into `.ade/inbox/`.
 #[tauri::command]
 pub fn chat_stage_path(
@@ -3180,27 +3232,15 @@ pub fn chat_extract_pdf(
     source_path: String,
     max_pages: Option<usize>,
 ) -> Result<StagedAttachment, String> {
-    let trimmed = source_path.trim();
-    if trimmed.is_empty() {
-        return Err("sourcePath required".into());
-    }
     let root = state.workspace_root();
-    let raw = PathBuf::from(trimmed);
-    let absolute = if raw.is_absolute() {
-        raw
-    } else {
-        root.join(&raw)
-    };
-    if !absolute.is_file() {
-        return Err(format!("pdf not found: {trimmed}"));
-    }
+    let (absolute, rel_str) = resolve_chat_media_source(&root, &source_path)?;
     let ext = absolute
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
     if ext != "pdf" {
-        return Err(format!("not a .pdf file: {trimmed}"));
+        return Err(format!("not a .pdf file: {source_path}"));
     }
     let pages = max_pages.unwrap_or(ade_agents::pdf::DEFAULT_PDF_EXTRACT_PAGES);
     let result = ade_agents::pdf::extract_pdf_text(&absolute, pages).map_err(|e| e.to_string())?;
@@ -3208,13 +3248,7 @@ pub fn chat_extract_pdf(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("document.pdf");
-    let rel_or_abs = if let Ok(rel) = absolute.strip_prefix(&root) {
-        rel.to_string_lossy().replace('\\', "/")
-    } else {
-        absolute.display().to_string()
-    };
-    let markdown =
-        ade_agents::pdf::format_extract_markdown(name, &rel_or_abs, &result);
+    let markdown = ade_agents::pdf::format_extract_markdown(name, &rel_str, &result);
     let inbox = chat_inbox_dir(&root)?;
     let safe = sanitize_inbox_name(&format!(
         "{}.extract.md",
@@ -3249,20 +3283,8 @@ pub async fn chat_transcribe_audio(
     base_url: Option<String>,
     model: Option<String>,
 ) -> Result<StagedAttachment, String> {
-    let trimmed = source_path.trim();
-    if trimmed.is_empty() {
-        return Err("sourcePath required".into());
-    }
     let root = state.workspace_root();
-    let raw = PathBuf::from(trimmed);
-    let absolute = if raw.is_absolute() {
-        raw
-    } else {
-        root.join(&raw)
-    };
-    if !absolute.is_file() {
-        return Err(format!("audio file not found: {trimmed}"));
-    }
+    let (absolute, rel_str) = resolve_chat_media_source(&root, &source_path)?;
     ade_agents::audio::validate_audio_file(&absolute).map_err(|e| e.to_string())?;
 
     let result = if ade_agents::audio::local_whisper_cmd_configured() {
@@ -3320,13 +3342,8 @@ pub async fn chat_transcribe_audio(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("audio.bin");
-    let rel_or_abs = if let Ok(rel) = absolute.strip_prefix(&root) {
-        rel.to_string_lossy().replace('\\', "/")
-    } else {
-        absolute.display().to_string()
-    };
     let markdown =
-        ade_agents::audio::format_transcript_markdown(name, &rel_or_abs, &result);
+        ade_agents::audio::format_transcript_markdown(name, &rel_str, &result);
     let inbox = chat_inbox_dir(&root)?;
     let safe = sanitize_inbox_name(&format!(
         "{}.transcript.md",
@@ -3382,22 +3399,10 @@ pub fn chat_extract_office(
     state: State<'_, AppState>,
     source_path: String,
 ) -> Result<StagedAttachment, String> {
-    let trimmed = source_path.trim();
-    if trimmed.is_empty() {
-        return Err("sourcePath required".into());
-    }
     let root = state.workspace_root();
-    let raw = PathBuf::from(trimmed);
-    let absolute = if raw.is_absolute() {
-        raw
-    } else {
-        root.join(&raw)
-    };
-    if !absolute.is_file() {
-        return Err(format!("office file not found: {trimmed}"));
-    }
+    let (absolute, rel_str) = resolve_chat_media_source(&root, &source_path)?;
     let kind = ade_agents::office::OfficeKind::from_path(&absolute).ok_or_else(|| {
-        format!("not a .docx/.xlsx file: {trimmed}")
+        format!("not a .docx/.xlsx file: {source_path}")
     })?;
     let result =
         ade_agents::office::extract_office(&absolute).map_err(|e| e.to_string())?;
@@ -3408,13 +3413,8 @@ pub fn chat_extract_office(
             ade_agents::office::OfficeKind::Docx => "document.docx",
             ade_agents::office::OfficeKind::Xlsx => "workbook.xlsx",
         });
-    let rel_or_abs = if let Ok(rel) = absolute.strip_prefix(&root) {
-        rel.to_string_lossy().replace('\\', "/")
-    } else {
-        absolute.display().to_string()
-    };
     let markdown =
-        ade_agents::office::format_office_extract_markdown(name, &rel_or_abs, &result);
+        ade_agents::office::format_office_extract_markdown(name, &rel_str, &result);
     let inbox = chat_inbox_dir(&root)?;
     let safe = sanitize_inbox_name(&format!(
         "{}.extract.md",

@@ -66,8 +66,8 @@ Surfaces:
 
 | Surface | Default |
 |---------|---------|
-| Standard (`power`) | **Product default.** Home · Setup · Workspaces · **Insight** (Trust · Analytics) · **Terminal** · **Browser** |
-| Debug (`dev`) | Standard + Insight gains **Plan Map · Atlas** + Editor / MCP nav + Home Harness panels |
+| Standard (`power`) | **Product default.** Home · Setup · **Insight** (Trust · Analytics) · shell tabs **Terminal** / **Browser** |
+| Debug (`dev`) | Standard + Insight gains **Plan Map · Atlas** + Editor / MCP + Home Harness panels |
 | Simple (`guided`) | **Parked** — migrate to Standard; do not expose in UI |
 
 **One surface control:** sidebar **footer** compact **Debug** toggle. `devMode` UI ≡ `surfaceMode === "dev"`.
@@ -77,14 +77,15 @@ Standard rather than bouncing to Home — reveal on demand, never a dead end.
 
 ## Nav IA (usage order)
 
-1. **Work:** Home (composer + agent)
-2. **Setup:** Environment · Keys · **Integrations** · Stack · Test project — amber/green lights
-3. **Context:** Workspaces · **Insight** · **Terminal** · **Browser**
-4. **More:** Guidance (+ Debug: Editor · MCP)
-5. **Footer:** Debug toggle · Settings gear
+1. **Work:** Home (composer + agent) — left rail: compact workplace + agent sessions  
+2. **Setup:** Environment · Keys · **Integrations** · Stack · Test project — amber/green lights  
+3. **Insight:** Trust · Analytics (Debug: Plan Map · Atlas)  
+4. **Shell tabs (header, not rail peers):** Terminal · Browser · (Debug: thin Editor)  
+5. **More:** Guidance (+ Debug: MCP)  
+6. **Footer:** Debug toggle · Settings gear  
 
-Eight Standard destinations. Adding a ninth requires deleting one or nesting it
-as a sub-tab — the research pack refuses nine-way equal nav.
+Workspaces open from the rail compact control — not a peer nav destination equal to Home.
+Terminal / Browser dock beside work as shell tabs; never advertise them as left-rail equals.
 
 ### Concept split (do not collapse)
 
@@ -125,10 +126,11 @@ Each fact has exactly one analytical home:
 |------|-----|-----------------|
 | 0 Work | Home | Composer/Go; Suggest/Apply; Auto model; feed |
 | 1 Setup | Environment, Keys, Integrations, Stack, Test project | Status lights; gaps / one CTA |
-| 1 Context | Workspaces, Insight, Terminal, Browser | Insight opens on the remembered sub-tab (Trust first run) |
+| 1 Insight | Insight | Opens on the remembered sub-tab (Trust first run) |
 | 2 More | Guidance | Browse collapsed |
 | Footer | Debug toggle · Settings | Compact; Debug off by default |
-| Debug More | + Editor, MCP; Insight + Plan Map, Atlas | Maps / harness density |
+| Header tools | Terminal, Browser shell tabs | Beside work — not left-rail peers |
+| Debug | + Editor header · MCP · Plan Map · Atlas · Home Harness | Maps / lease / harness density |
 | Home Debug | Harness Disclosure (Verify, dogfood, rates) | Collapsed by default |
 
 ## Min/max rules
@@ -136,6 +138,7 @@ Each fact has exactly one analytical home:
 - **Min:** one control path per preference (surface, caps, autonomy, shell scope).
 - **Max:** Debug adds density; Standard never requires Debug to finish a turn.
 - Never hide Suggest/Apply, Workspace|Home scope, spend caps, Keys, Terminal, Browser, Trust, or Analytics behind Debug.
+- Hide Editor, MCP, Plan Map, Atlas, and lease/harness theater behind Debug (deep links may reveal on demand).
 - Atlas is **not** the Default start screen, and **not** the default Insight tab.
 - Recipes: Stack Fit Tier 0; **Browse all recipes** closed by default.
 - Settings: Tier 0 = Suggest/Apply + caps + Keys link; Tier 1 = effort/provider presets.

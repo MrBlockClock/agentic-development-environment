@@ -36,6 +36,9 @@ pub struct WorkerConfig {
     pub cleanup_worktree: bool,
     /// When true, claim+execute at most one task then return (dogfood / CI).
     pub once: bool,
+    /// Allow turns when caps are on but $/MTok rates are $0.
+    #[serde(default)]
+    pub allow_unpriced: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,6 +189,7 @@ impl AgentTurnWorker {
         })
         .ledger(ledger)
         .spend_caps(SpendCaps::from_env())
+        .allow_unpriced(self.config.allow_unpriced)
         .lease_agent(self.config.agent_id)
         .actor(format!("worker:{}", self.config.agent_id))
         .autonomy(ade_agents::autonomy::AutonomyLevel::Act);
@@ -264,6 +268,7 @@ mod tests {
             provision_worktree: false,
             cleanup_worktree: false,
             once: false,
+            allow_unpriced: false,
         });
         let tick = worker.run_once().await.unwrap();
         assert!(!tick.claimed);

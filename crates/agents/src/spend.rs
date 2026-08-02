@@ -366,6 +366,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn require_priced_blocks_zero_rates_when_caps_on() {
+        let prev = std::env::var("ADE_ALLOW_UNPRICED").ok();
+        std::env::remove_var("ADE_ALLOW_UNPRICED");
+        let caps = SpendCaps {
+            session: Money::from_usd_str("1.0").unwrap(),
+            daily: Money::from_usd_str("10.0").unwrap(),
+        };
+        let err = require_priced_for_caps(&caps, Money::ZERO, Money::ZERO).unwrap_err();
+        assert!(err.to_string().contains("spend_honesty"));
+        assert!(require_priced_for_caps_with_override(
+            &caps,
+            Money::ZERO,
+            Money::ZERO,
+            true
+        )
+        .is_ok());
+        match prev {
+            Some(value) => std::env::set_var("ADE_ALLOW_UNPRICED", value),
+            None => std::env::remove_var("ADE_ALLOW_UNPRICED"),
+        }
+    }
+
     #[tokio::test]
     async fn reconciles_under_estimate() {
         let (guard, root) = make_guard(SpendCaps {

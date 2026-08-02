@@ -227,6 +227,138 @@ impl McpHost {
     }
 }
 
+/// Catalog recipe allowlisted for Desktop Integrations one-click connect.
+/// Keep in sync with `apps/desktop/src/integrationsCatalog.ts` mcpRecipe entries.
+#[derive(Debug, Clone, Copy)]
+pub struct McpRecipeAllow {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub commands: &'static [&'static str],
+    pub args: &'static [&'static str],
+}
+
+pub const MCP_RECIPE_ALLOWLIST: &[McpRecipeAllow] = &[
+    McpRecipeAllow {
+        id: "github",
+        name: "github",
+        commands: &["npx", "npx.cmd"],
+        args: &["-y", "@modelcontextprotocol/server-github"],
+    },
+    McpRecipeAllow {
+        id: "gitlab",
+        name: "gitlab",
+        commands: &["npx", "npx.cmd"],
+        args: &["-y", "@modelcontextprotocol/server-gitlab"],
+    },
+    McpRecipeAllow {
+        id: "azure",
+        name: "azure",
+        commands: &["npx", "npx.cmd"],
+        args: &["-y", "@azure/mcp@latest", "server", "start"],
+    },
+    McpRecipeAllow {
+        id: "stripe",
+        name: "stripe",
+        commands: &["npx", "npx.cmd"],
+        args: &["-y", "@stripe/mcp", "--tools=all"],
+    },
+    McpRecipeAllow {
+        id: "slack",
+        name: "slack",
+        commands: &["npx", "npx.cmd"],
+        args: &["-y", "@modelcontextprotocol/server-slack"],
+    },
+    McpRecipeAllow {
+        id: "linear",
+        name: "linear",
+        commands: &["npx", "npx.cmd"],
+        args: &["-y", "mcp-linear"],
+    },
+];
+
+fn recipe_matches(recipe: &McpRecipeAllow, name: &str, command: &str, args: &[String]) -> bool {
+    if name != recipe.name {
+        return false;
+    }
+    let cmd = command.trim();
+    if !recipe
+        .commands
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(cmd))
+    {
+        return false;
+    }
+    if args.len() != recipe.args.len() {
+        return false;
+    }
+    args.iter()
+        .zip(recipe.args.iter())
+        .all(|(got, want)| got == *want)
+}
+
+fn find_matching_recipe(name: &str, command: &str, args: &[String]) -> Option<&'static McpRecipeAllow> {
+    MCP_RECIPE_ALLOWLIST
+        .iter()
+        .find(|recipe| recipe_matches(recipe, name, command, args))
+}
+
+fn custom_mcp_allowed() -> bool {
+    match std::env::var("ADE_ALLOW_CUSTOM_MCP") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => cfg!(debug_assertions),
+    }
+}
+
+/// Server-side MCP spawn gate. Does not trust a bare client `approved` bool alone.
+///
+/// - `recipe_id` present: command/args must match the catalog allowlist (client
+///   `approved` ignored; allowlist is the approval).
+/// - No `recipe_id`: exact allowlist match still authorizes; otherwise custom
+///   servers need the UI review checkbox **and** `ADE_ALLOW_CUSTOM_MCP` (or a
+///   debug build).
+pub fn authorize_mcp_connect(
+    recipe_id: Option<&str>,
+    name: &str,
+    command: &str,
+    args: &[String],
+    client_approved: bool,
+) -> Result<(), AdeError> {
+    if let Some(id) = recipe_id.map(str::trim).filter(|value| !value.is_empty()) {
+        let recipe = MCP_RECIPE_ALLOWLIST
+            .iter()
+            .find(|recipe| recipe.id == id)
+            .ok_or_else(|| {
+                AdeError::Authorization(format!("unknown MCP recipe '{id}'"))
+            })?;
+        if !recipe_matches(recipe, name, command, args) {
+            return Err(AdeError::Authorization(format!(
+                "MCP spawn rejected: command/args do not match recipe '{id}'"
+            )));
+        }
+        return Ok(());
+    }
+
+    if find_matching_recipe(name, command, args).is_some() {
+        return Ok(());
+    }
+
+    if !client_approved {
+        return Err(AdeError::Authorization(format!(
+            "MCP server '{name}' requires explicit approval of its command and arguments"
+        )));
+    }
+    if !custom_mcp_allowed() {
+        return Err(AdeError::Authorization(
+            "Custom MCP servers require a catalog recipe_id, or ADE_ALLOW_CUSTOM_MCP=1"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_config(config: &McpServerConfig) -> Result<(), AdeError> {
     if !config.approved {
         return Err(AdeError::Authorization(format!(
@@ -365,5 +497,49 @@ mod tests {
         config.name = "server".into();
         config.args = vec!["bad\0arg".into()];
         assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn recipe_id_authorizes_without_client_approved_bool() {
+        let args = vec![
+            "-y".into(),
+            "@modelcontextprotocol/server-github".into(),
+        ];
+        assert!(authorize_mcp_connect(
+            Some("github"),
+            "github",
+            "npx.cmd",
+            &args,
+            false,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_mismatched_recipe_payload() {
+        let args = vec!["-y".into(), "evil-package".into()];
+        let err = authorize_mcp_connect(Some("github"), "github", "npx", &args, true)
+            .unwrap_err();
+        assert!(err.to_string().contains("do not match recipe"));
+    }
+
+    #[test]
+    fn rejects_unknown_recipe_id() {
+        let args = vec![
+            "-y".into(),
+            "@modelcontextprotocol/server-github".into(),
+        ];
+        let err = authorize_mcp_connect(Some("not-a-recipe"), "github", "npx", &args, true)
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown MCP recipe"));
+    }
+
+    #[test]
+    fn custom_spawn_rejected_without_allow_env_outside_debug() {
+        // In debug test builds custom_mcp_allowed() is true; assert the
+        // allowlist-miss path still requires client approval.
+        let args = vec!["-y".into(), "totally-custom-mcp".into()];
+        let err = authorize_mcp_connect(None, "custom", "npx", &args, false).unwrap_err();
+        assert!(err.to_string().contains("approval"));
     }
 }

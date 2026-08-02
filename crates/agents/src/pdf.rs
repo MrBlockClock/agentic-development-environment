@@ -7,6 +7,8 @@ use std::path::Path;
 pub const DEFAULT_PDF_EXTRACT_PAGES: usize = 8;
 /// Cap extract body so inbox markdown stays harness-friendly.
 pub const MAX_PDF_EXTRACT_CHARS: usize = 48_000;
+/// Reject oversized PDFs before full parse (OOM / zip-bomb class inputs).
+pub const MAX_PDF_BYTES: u64 = 40 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct PdfExtractResult {
@@ -22,6 +24,16 @@ pub fn extract_pdf_text(
     max_pages: usize,
 ) -> Result<PdfExtractResult, AdeError> {
     let max_pages = max_pages.clamp(1, 40);
+    let meta = std::fs::metadata(path).map_err(|error| {
+        AdeError::Config(format!("stat pdf {}: {error}", path.display()))
+    })?;
+    let len = meta.len();
+    if len > MAX_PDF_BYTES {
+        return Err(AdeError::Config(format!(
+            "pdf too large ({len} bytes; max {MAX_PDF_BYTES}): {}",
+            path.display()
+        )));
+    }
     let bytes = std::fs::read(path).map_err(|error| {
         AdeError::Config(format!("read pdf {}: {error}", path.display()))
     })?;
@@ -99,6 +111,19 @@ mod tests {
         std::fs::write(&path, b"hello").unwrap();
         let err = extract_pdf_text(&path, 2).unwrap_err().to_string();
         assert!(err.contains("not a PDF"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_oversized_pdf() {
+        let root = std::env::temp_dir().join(format!("ade-pdf-big-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("huge.pdf");
+        let mut bytes = b"%PDF-1.4".to_vec();
+        bytes.resize((MAX_PDF_BYTES as usize) + 8, b'0');
+        std::fs::write(&path, &bytes).unwrap();
+        let err = extract_pdf_text(&path, 2).unwrap_err().to_string();
+        assert!(err.contains("too large"), "{err}");
         let _ = std::fs::remove_dir_all(root);
     }
 }

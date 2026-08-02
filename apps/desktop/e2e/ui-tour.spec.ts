@@ -73,15 +73,16 @@ test.describe("ADE UI tour (stubbed Desktop path)", () => {
       fullPage: true,
     });
 
-    // Editor (Debug on)
-    const editorNav = sidebar.getByRole("button", { name: /Editor/ });
-    if ((await editorNav.count()) > 0) {
-      await editorNav.click();
-      await expect(page.getByText(/Monaco|Editor/)).toBeVisible();
-      await page.screenshot({
-        path: "e2e/artifacts/tour-editor.png",
-        fullPage: true,
-      });
-    }
+    // Shell tools dock in the header (not left-rail peers). Debug → Editor control.
+    await expect(page.getByRole("button", { name: "Terminal" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Browser" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open File" })).toBeVisible();
+    // Sidebar must not list Terminal/Browser as equal Home peers.
+    await expect(sidebar.getByRole("button", { name: "Terminal" })).toHaveCount(0);
+    await expect(sidebar.getByRole("button", { name: "Browser" })).toHaveCount(0);
+    await page.screenshot({
+      path: "e2e/artifacts/tour-shell-tools.png",
+      fullPage: true,
+    });
   });
 });

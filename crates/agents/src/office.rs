@@ -8,6 +8,10 @@ use zip::ZipArchive;
 
 /// Cap extract body so inbox markdown stays harness-friendly.
 pub const MAX_OFFICE_EXTRACT_CHARS: usize = 48_000;
+/// Reject oversized Office packages before full parse.
+pub const MAX_OFFICE_BYTES: u64 = 40 * 1024 * 1024;
+/// Cap uncompressed `word/document.xml` size (docx zip-bomb guard).
+pub const MAX_DOCX_XML_BYTES: u64 = 16 * 1024 * 1024;
 /// Max worksheet rows per sheet (xlsx).
 pub const MAX_XLSX_ROWS: usize = 200;
 /// Max worksheets (xlsx).
@@ -58,6 +62,16 @@ pub fn extract_office(path: &Path) -> Result<OfficeExtractResult, AdeError> {
             path.display()
         ))
     })?;
+    let meta = std::fs::metadata(path).map_err(|error| {
+        AdeError::Config(format!("stat office {}: {error}", path.display()))
+    })?;
+    let len = meta.len();
+    if len > MAX_OFFICE_BYTES {
+        return Err(AdeError::Config(format!(
+            "office file too large ({len} bytes; max {MAX_OFFICE_BYTES}): {}",
+            path.display()
+        )));
+    }
     let bytes = std::fs::read(path).map_err(|error| {
         AdeError::Config(format!("read office {}: {error}", path.display()))
     })?;
@@ -84,6 +98,13 @@ fn extract_docx_bytes(bytes: &[u8], path: &Path) -> Result<OfficeExtractResult, 
             path.display()
         ))
     })?;
+    let uncompressed = entry.size();
+    if uncompressed > MAX_DOCX_XML_BYTES {
+        return Err(AdeError::Config(format!(
+            "docx document.xml too large ({uncompressed} bytes; max {MAX_DOCX_XML_BYTES}): {}",
+            path.display()
+        )));
+    }
     let mut xml = String::new();
     entry.read_to_string(&mut xml).map_err(|error| {
         AdeError::Config(format!("docx read document.xml {}: {error}", path.display()))

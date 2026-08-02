@@ -193,6 +193,9 @@ enum Commands {
         /// Verify gate when --verify-on-complete / automate (default G3)
         #[arg(long, default_value = "G3")]
         verify_gate: String,
+        /// Allow this turn when session/daily caps are set but $/MTok rates are $0
+        #[arg(long)]
+        allow_unpriced: bool,
     },
     /// Speak Agent Client Protocol on stdio (Zed / multi-host BYO agent)
     Acp {
@@ -458,6 +461,9 @@ enum WorkerAction {
         /// Confirm this process may automatically claim and mutate ownership
         #[arg(long)]
         approve: bool,
+        /// Allow turns when session/daily caps are set but $/MTok rates are $0
+        #[arg(long)]
+        allow_unpriced: bool,
     },
 }
 
@@ -1424,6 +1430,7 @@ async fn main() -> anyhow::Result<()> {
                 cleanup_worktree,
                 once,
                 approve,
+                allow_unpriced,
             } => {
                 require_approval(*approve, "worker run")?;
                 let root = std::env::current_dir()?;
@@ -1451,6 +1458,7 @@ async fn main() -> anyhow::Result<()> {
                         provision_worktree: *worktree,
                         cleanup_worktree: *cleanup_worktree,
                         once: *once,
+                        allow_unpriced: *allow_unpriced,
                     });
                 println!(
                     "ADE worker running as {} (worktree={} cleanup={} once={})",
@@ -1940,6 +1948,7 @@ async fn main() -> anyhow::Result<()> {
             max_steps,
             verify_on_complete,
             verify_gate,
+            allow_unpriced,
         } => {
             use std::io::Write;
 
@@ -1994,7 +2003,8 @@ async fn main() -> anyhow::Result<()> {
                 .ledger(ledger)
                 .autonomy(autonomy_level)
                 .max_tool_rounds((*max_steps).max(1) as usize)
-                .verify_on_complete(verify_gate_opt);
+                .verify_on_complete(verify_gate_opt)
+                .allow_unpriced(*allow_unpriced);
             if let Some(agent) = lease_agent {
                 let agent_id = uuid::Uuid::parse_str(agent)
                     .map_err(|error| anyhow::anyhow!("invalid --lease-agent uuid: {error}"))?;
