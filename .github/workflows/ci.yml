@@ -84,8 +84,8 @@ jobs:
         run: npm run test:unit
       - name: Install Playwright Chromium
         run: npm run test:e2e:install
-      - name: Desktop Playwright (IA + Analytics stub)
-        run: npx playwright test e2e/sidebar-ia.spec.ts e2e/insight-analytics.spec.ts
+      - name: Desktop Playwright (IA + Analytics + Agent composer)
+        run: npx playwright test e2e/sidebar-ia.spec.ts e2e/insight-analytics.spec.ts e2e/agent-composer.spec.ts
         env:
           CI: "true"
 

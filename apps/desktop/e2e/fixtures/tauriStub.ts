@@ -124,6 +124,9 @@ export async function installTauriStub(page: Page): Promise<void> {
         chat_load: { id: "stub", updatedAt: new Date().toISOString(), turns: [] },
         chat_save: null,
         chat_clear: null,
+        run_plan: null,
+        cancel_agent_turn: true,
+        run_agent_turn: null,
         chat_stage_path: {
           name: "stub.txt",
           path: ".ade/inbox/stub.txt",

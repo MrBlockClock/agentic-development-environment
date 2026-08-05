@@ -6825,6 +6825,7 @@ function AgentView({
         )}
         <textarea
           ref={composerRef}
+          data-testid="ade-composer"
           value={prompt}
           onChange={(event) => {
             const value = event.target.value;
@@ -7045,6 +7046,7 @@ function AgentView({
           )}
           <button
             type="button"
+            data-testid="ade-send"
             onClick={() => {
               if (busy) {
                 onCancel?.();
